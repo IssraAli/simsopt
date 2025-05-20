@@ -32,6 +32,7 @@ import numpy as np
 import os
 from scipy.optimize import minimize
 from simsopt.objectives import SquaredFlux
+from simsopt.objectives import Weight
 from simsopt.objectives import QuadraticPenalty
 
 from simsopt.geo import SurfaceRZFourier
@@ -443,7 +444,7 @@ if __name__ == "__main__":
     if opt_method == 'aug':
 
         # Main optimization function
-        f = Jf
+        f = Weight(0.0) * Jf
 
         # Constraint list
         # c_list = [Jl, Jcsdist, QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), sum(Jcs)]
