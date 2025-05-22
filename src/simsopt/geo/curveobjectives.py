@@ -3,7 +3,7 @@ from deprecated import deprecated
 import numpy as np
 from jax import grad
 import jax.numpy as jnp
-
+from jax.lax import scan
 from .jit import jit
 from .._core.optimizable import Optimizable
 from .._core.derivative import derivative_dec, Derivative
@@ -11,7 +11,8 @@ import simsoptpp as sopp
 
 __all__ = ['CurveLength', 'LpCurveCurvature', 'LpCurveTorsion',
            'CurveCurveDistance', 'CurveSurfaceDistance', 'ArclengthVariation',
-           'MeanSquaredCurvature', 'LinkingNumber']
+           'MeanSquaredCurvature', 'LinkingNumber', 'CurveSurfaceMinimumDistance',
+           'CurveCurveMinimumDistance', 'TotalCurveLengths']
 
 
 @jit
@@ -53,6 +54,42 @@ class CurveLength(Optimizable):
 
     return_fn_map = {'J': J, 'dJ': dJ}
 
+@jit
+def curve_lengths_pure(ls):
+    """
+    This function is used in a Python+Jax implementation of the curve length formula.
+    """
+    return jnp.sum(jnp.mean(ls, axis=-1))
+
+class TotalCurveLengths(Optimizable):
+    r"""
+    TotalCurveLengths is a class that computes the total length of a set of curves, i.e.
+
+    .. math::
+        J = \sum_{i=1}^N \int_{\text{curve}_i}~dl.
+    """
+
+    def __init__(self, curves):
+        self.curves = curves
+        super().__init__(depends_on=curves)
+        self.J_jax = jit(lambda ls: curve_lengths_pure(ls))
+        self.thisgrad = jit(lambda ls: grad(self.J_jax)(ls))
+
+    def J(self):
+        """
+        This returns the value of the quantity.
+        """
+        return self.J_jax(jnp.array([c.incremental_arclength() for c in self.curves]))
+    
+    @derivative_dec
+    def dJ(self):
+        """
+        This returns the derivative of the quantity with respect to the curve dofs.
+        """
+        dls = self.thisgrad(jnp.array([c.incremental_arclength() for c in self.curves]))
+        return sum([self.curves[i].dincremental_arclength_by_dcoeff_vjp(dls[i]) for i in range(len(self.curves))])
+
+    return_fn_map = {'J': J, 'dJ': dJ}
 
 @jit
 def Lp_curvature_pure(kappa, gammadash, p, desired_kappa):
@@ -146,6 +183,77 @@ class LpCurveTorsion(Optimizable):
 
     return_fn_map = {'J': J, 'dJ': dJ}
 
+def cc_minimum_distance_pure(gammas, candidates, downsample, minimum_distance):
+    """
+    This function is used in a Python+Jax implementation of the 
+    curve-curve minimum distance formula, explicitly skipping all i==j (same curve) cases.
+    """
+    gammas = jnp.asarray(gammas)[:, ::downsample, :]
+    idxs = jnp.array([(i, j) for i, j in candidates])
+
+    def min_dist_for_pair(carry, ij):
+        dists = jnp.sqrt(jnp.sum((gammas[ij[0], :, None, :] - gammas[ij[1], None, :, :])**2, axis=-1))
+        return jnp.minimum(carry, jnp.min(dists)), None
+
+    final_min, _ = scan(min_dist_for_pair, jnp.inf, idxs)
+    return final_min - minimum_distance
+
+
+class CurveCurveMinimumDistance(Optimizable):
+    r"""
+    CurveCurveMinimumDistance is a class that computes
+
+    .. math::
+        J = \max(d_\min - \min_{i,j}(\| \mathbf{r}_i - \mathbf{r}_j \|_2), 0)
+
+    where :math:`\mathbf{r}_i`, :math:`\mathbf{r}_j` are points on coils :math:`i` and :math:`j`, respectively.
+    :math:`d_\min` is a desired threshold minimum intercoil distance.  This penalty term is zero when the points on coil :math:`i` and 
+    coil :math:`j` lie more than :math:`d_\min` away from one another, for :math:`i, j \in \{1, \cdots, \text{num_coils}\}`
+
+    and :math:`\mathbf{r}_i`, :math:`\mathbf{r}_j` are points on coils :math:`i` and :math:`j`, respectively.
+    """
+
+    def __init__(self, curves, downsample=1, minimum_distance=1e10):
+        self.curves = curves
+        self.minimum_distance = minimum_distance
+        self.downsample = downsample
+        self.J_jax = jit(lambda gammas, candidates: cc_minimum_distance_pure(gammas, candidates, self.downsample, self.minimum_distance))
+        self.thisgrad0 = jit(lambda gammas, candidates: grad(self.J_jax, argnums=0)(gammas, candidates))
+        self.candidates = None
+        super().__init__(depends_on=curves)
+
+    def recompute_bell(self, parent=None):
+        self.candidates = None
+
+    def compute_candidates(self):
+        if self.candidates is None:
+            candidates = sopp.get_pointclouds_closer_than_threshold_within_collection(
+                [c.gamma()[::self.downsample, :] for c in self.curves], self.minimum_distance, len(self.curves))
+            self.candidates = candidates
+    
+    def J(self):
+        """
+        This returns the value of the quantity.
+        """
+        self.compute_candidates()
+        if len(self.candidates) == 0:
+            return 0.0
+        else:
+            return self.J_jax(np.array([c.gamma() for c in self.curves]), self.candidates)
+
+    @derivative_dec
+    def dJ(self):
+        """
+        This returns the derivative of the quantity with respect to the curve dofs.
+        """
+        self.compute_candidates()
+        if len(self.candidates) == 0:
+            dgamma_by_dcoeff_vjp_vecs = [np.zeros_like(c.gamma()) for c in self.curves]
+        else:
+            dgamma_by_dcoeff_vjp_vecs = self.thisgrad0(np.array([c.gamma() for c in self.curves]), self.candidates)
+        return sum([self.curves[i].dgamma_by_dcoeff_vjp(dgamma_by_dcoeff_vjp_vecs[i]) for i in range(len(self.curves))])
+
+    return_fn_map = {'J': J, 'dJ': dJ}
 
 def cc_distance_pure(gamma1, l1, gamma2, l2, minimum_distance):
     """
@@ -251,6 +359,47 @@ class CurveCurveDistance(Optimizable):
 
     return_fn_map = {'J': J, 'dJ': dJ}
 
+def cs_minimum_distance_pure(gammacs, gammas, downsample):
+    """
+    This function is used in a Python+Jax implementation of the curve-surface distance
+    formula.
+    """
+    return jnp.min(jnp.sqrt(jnp.sum(
+        (gammacs[:, ::downsample, None, :] - gammas[None, None, :, :])**2, axis=-1)))
+
+
+class CurveSurfaceMinimumDistance(Optimizable):
+    r"""
+    CurveSurfaceMinimumDistance is a class that computes
+
+    .. math::
+        J = \int_{\text{curve}} \int_{\text{surface}} \max(0, d_{\min} - \| \mathbf{r}_i - \mathbf{s} \|_2)^2 ~dl_i ~ds
+    """
+    def __init__(self, curves, surface, downsample=1):
+        self.curves = curves
+        self.downsample = downsample
+        gammas = surface.gamma().reshape((-1, 3))
+
+        self.J_jax = jit(lambda gammacs: cs_minimum_distance_pure(gammacs, gammas, self.downsample))
+        self.thisgrad0 = jit(lambda gammacs: grad(self.J_jax, argnums=0)(gammacs))
+        super().__init__(depends_on=curves)  # Bharat's comment: Shouldn't we add surface here
+
+    def J(self):
+        """
+        This returns the value of the quantity.
+        """
+        gammacs = np.array([self.curves[i].gamma() for i in range(len(self.curves))])
+        return self.J_jax(gammacs)
+
+    @derivative_dec
+    def dJ(self):
+        """
+        This returns the derivative of the quantity with respect to the curve dofs.
+        """
+        dgamma_by_dcoeff_vjp_vecs = self.thisgrad0(np.array([self.curves[i].gamma() for i in range(len(self.curves))]))
+        return sum([self.curves[i].dgamma_by_dcoeff_vjp(dgamma_by_dcoeff_vjp_vecs[i]) for i in range(len(self.curves))])
+
+    return_fn_map = {'J': J, 'dJ': dJ}
 
 def cs_distance_pure(gammac, lc, gammas, ns, minimum_distance):
     """

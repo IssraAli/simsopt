@@ -101,7 +101,7 @@ pointData = {"B_N": np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), a
 s.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
 
 # Define the individual terms objective function:
-Jf = SquaredFlux(s, bs)
+Jf = SquaredFlux(s, bs, definition='normalized')
 Jls = [CurveLength(c) for c in base_curves]
 Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
 Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
@@ -118,9 +118,9 @@ JF = Jf \
     + LENGTH_WEIGHT * QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max") \
     + CC_WEIGHT * Jccdist \
     + CS_WEIGHT * Jcsdist \
-    + CURVATURE_WEIGHT * sum(Jcs) \
-    + MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs) \
-    + FORCE_WEIGHT * sum(Jforce)
+    + CURVATURE_WEIGHT * sum(Jcs) # \
+    # + MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs) \
+    # + FORCE_WEIGHT * sum(Jforce)
 
 # We don't have a general interface in SIMSOPT for optimisation problems that
 # are not in least-squares form, so we write a little wrapper function that we
@@ -134,22 +134,22 @@ def fun(dofs):
     return J, grad
 
 
-# print("""
-# ###############################################################################
-# # Perform a Taylor test
-# ###############################################################################
-# """)
-# print("(It make take jax several minutes to compile the objective for the first evaluation.)")
-# f = fun
-# dofs = JF.x
-# np.random.seed(1)
-# h = np.random.uniform(size=dofs.shape)
-# J0, dJ0 = f(dofs)
-# dJh = sum(dJ0 * h)
-# for eps in [1e-3, 1e-4, 1e-5, 1e-6, 1e-7]:
-#     J1, _ = f(dofs + eps*h)
-#     J2, _ = f(dofs - eps*h)
-#     print("err", (J1-J2)/(2*eps) - dJh)
+print("""
+###############################################################################
+# Perform a Taylor test
+###############################################################################
+""")
+print("(It make take jax several minutes to compile the objective for the first evaluation.)")
+f = fun
+dofs = JF.x
+np.random.seed(1)
+h = np.random.uniform(size=dofs.shape)
+J0, dJ0 = f(dofs)
+dJh = sum(dJ0 * h)
+for eps in [1e-3, 1e-4, 1e-5, 1e-6, 1e-7]:
+    J1, _ = f(dofs + eps*h)
+    J2, _ = f(dofs - eps*h)
+    print("err", (J1-J2)/(2*eps) - dJh)
 
 ###############################################################################
 # RUN THE OPTIMIZATION
@@ -169,39 +169,56 @@ def pointData_forces(coils):
 dofs = JF.x
 print(f"Optimization with FORCE_WEIGHT={FORCE_WEIGHT.value} and LENGTH_WEIGHT={LENGTH_WEIGHT.value}")
 # print("INITIAL OPTIMIZATION")
-res = minimize(fun, dofs, jac=True, method='L-BFGS-B', options={'maxiter': MAXITER, 'maxcor': 300}, tol=1e-15)
+options = {'maxiter': MAXITER, 'maxcor': 300, 'gtol': 1e-20}
+res = minimize(fun, dofs, jac=True, method='L-BFGS-B', options=options, tol=1e-10)
 curves_to_vtk(curves, OUT_DIR + "curves_opt_short", close=True, extra_data=pointData_forces(coils))
 pointData_surf = {"B_N": np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)[:, :, None]}
 s.to_vtk(OUT_DIR + "surf_opt_short", extra_data=pointData_surf)
-
-# We now use the result from the optimization as the initial guess for a
-# subsequent optimization with reduced penalty for the coil length. This will
-# result in slightly longer coils but smaller `B·n` on the surface.
-dofs = res.x
-LENGTH_WEIGHT *= 0.1
-# print("OPTIMIZATION WITH REDUCED LENGTH PENALTY\n")
-res = minimize(fun, dofs, jac=True, method='L-BFGS-B', options={'maxiter': MAXITER, 'maxcor': 300}, tol=1e-15)
-curves_to_vtk(curves, OUT_DIR + f"curves_opt_force_FWEIGHT={FORCE_WEIGHT.value:e}_LWEIGHT={LENGTH_WEIGHT.value*10:e}", close=True, extra_data=pointData_forces(coils))
-pointData_surf = {"B_N": np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)[:, :, None]}
-s.to_vtk(OUT_DIR + f"surf_opt_force_WEIGHT={FORCE_WEIGHT.value:e}_LWEIGHT={LENGTH_WEIGHT.value*10:e}", extra_data=pointData_surf)
-
-# Save the optimized coil shapes and currents so they can be loaded into other scripts for analysis:
-bs.save(OUT_DIR + "biot_savart_opt.json")
-
-#Print out final important info:
-JF.x = dofs
 J = JF.J()
 grad = JF.dJ()
 jf = Jf.J()
 BdotN = np.mean(np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
 force = [np.max(np.linalg.norm(coil_force(c, coils, regularization_circ(0.05)), axis=1)) for c in base_coils]
-outstr = f"J={J:.1e}, Jf={jf:.1e}, ⟨B·n⟩={BdotN:.1e}"
-cl_string = ", ".join([f"{J.J():.1f}" for J in Jls])
-kap_string = ", ".join(f"{np.max(c.kappa()):.1f}" for c in base_curves)
-msc_string = ", ".join(f"{J.J():.1f}" for J in Jmscs)
-jforce_string = ", ".join(f"{J.J():.2e}" for J in Jforce)
-force_string = ", ".join(f"{f:.2e}" for f in force)
-outstr += f", Len=sum([{cl_string}])={sum(J.J() for J in Jls):.1f}, ϰ=[{kap_string}], ∫ϰ²/L=[{msc_string}], Jforce=[{jforce_string}], force=[{force_string}]"
-outstr += f", C-C-Sep={Jccdist.shortest_distance():.2f}, C-S-Sep={Jcsdist.shortest_distance():.2f}"
-outstr += f", ║∇J║={np.linalg.norm(grad):.1e}"
+outstr = f"J={J:.3e}, Jf={jf:.3e}, ⟨B·n⟩={BdotN:.3e}"
+cl_string = ", ".join([f"{J.J():.3e}" for J in Jls])
+kap_string = ", ".join(f"{np.max(c.kappa()):.3e}" for c in base_curves)
+msc_string = ", ".join(f"{J.J():.3e}" for J in Jmscs)
+jforce_string = ", ".join(f"{J.J():.3e}" for J in Jforce)
+force_string = ", ".join(f"{f:.3e}" for f in force)
+outstr += f", Len=sum([{cl_string}])={sum(J.J() for J in Jls):.3e}, ϰ=[{kap_string}], ∫ϰ²/L=[{msc_string}], Jforce=[{jforce_string}], force=[{force_string}]"
+outstr += f", C-C-Sep={Jccdist.shortest_distance():.3e}, C-S-Sep={Jcsdist.shortest_distance():.3e}"
+print(SquaredFlux(s, bs, definition='normalized').J())
 print(outstr)
+
+# We now use the result from the optimization as the initial guess for a
+# subsequent optimization with reduced penalty for the coil length. This will
+# result in slightly longer coils but smaller `B·n` on the surface.
+# dofs = res.x
+# LENGTH_WEIGHT *= 0.1
+# # print("OPTIMIZATION WITH REDUCED LENGTH PENALTY\n")
+# res = minimize(fun, dofs, jac=True, method='L-BFGS-B', options={'maxiter': MAXITER, 'maxcor': 300}, tol=1e-15)
+# curves_to_vtk(curves, OUT_DIR + f"curves_opt_force_FWEIGHT={FORCE_WEIGHT.value:e}_LWEIGHT={LENGTH_WEIGHT.value*10:e}", close=True, extra_data=pointData_forces(coils))
+# pointData_surf = {"B_N": np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)[:, :, None]}
+# s.to_vtk(OUT_DIR + f"surf_opt_force_WEIGHT={FORCE_WEIGHT.value:e}_LWEIGHT={LENGTH_WEIGHT.value*10:e}", extra_data=pointData_surf)
+
+# # Save the optimized coil shapes and currents so they can be loaded into other scripts for analysis:
+# bs.save(OUT_DIR + "biot_savart_opt.json")
+
+# #Print out final important info:
+# JF.x = dofs
+# J = JF.J()
+# grad = JF.dJ()
+# jf = Jf.J()
+# BdotN = np.mean(np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
+# force = [np.max(np.linalg.norm(coil_force(c, coils, regularization_circ(0.05)), axis=1)) for c in base_coils]
+# outstr = f"J={J:.3e}, Jf={jf:.3e}, ⟨B·n⟩={BdotN:.3e}"
+# cl_string = ", ".join([f"{J.J():.3e}" for J in Jls])
+# kap_string = ", ".join(f"{np.max(c.kappa()):.3e}" for c in base_curves)
+# msc_string = ", ".join(f"{J.J():.3e}" for J in Jmscs)
+# jforce_string = ", ".join(f"{J.J():.3e}" for J in Jforce)
+# force_string = ", ".join(f"{f:.3e}" for f in force)
+# outstr += f", Len=sum([{cl_string}])={sum(J.J() for J in Jls):.3e}, ϰ=[{kap_string}], ∫ϰ²/L=[{msc_string}], Jforce=[{jforce_string}], force=[{force_string}]"
+# outstr += f", C-C-Sep={Jccdist.shortest_distance():.3e}, C-S-Sep={Jcsdist.shortest_distance():.3e}"
+# outstr += f", ║∇J║={np.linalg.norm(grad):.1e}"
+# print(SquaredFlux(s, bs, definition='normalized').J())
+# print(outstr)

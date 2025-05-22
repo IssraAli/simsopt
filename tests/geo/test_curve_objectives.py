@@ -7,9 +7,11 @@ from simsopt.geo import parameters
 from simsopt.geo.curve import RotatedCurve, create_equally_spaced_curves
 from simsopt.geo.curvexyzfourier import CurveXYZFourier, JaxCurveXYZFourier
 from simsopt.geo.curverzfourier import CurveRZFourier
+from simsopt.geo.curveplanarfourier import CurvePlanarFourier
 from simsopt.geo.curveobjectives import CurveLength, LpCurveCurvature, \
     LpCurveTorsion, CurveCurveDistance, ArclengthVariation, \
-    MeanSquaredCurvature, CurveSurfaceDistance, LinkingNumber
+    MeanSquaredCurvature, CurveSurfaceDistance, LinkingNumber, \
+    CurveCurveMinimumDistance, TotalCurveLengths
 from simsopt.geo.surfacerzfourier import SurfaceRZFourier
 from simsopt.field.coil import coils_via_symmetries
 from simsopt.configs.zoo import get_ncsx_data
@@ -27,7 +29,7 @@ class Testing(unittest.TestCase):
         np.random.seed(1)
         rand_scale = 0.01
         order = 4
-        nquadpoints = 200
+        nquadpoints = 500
 
         if curvetype == "CurveXYZFourier":
             coil = CurveXYZFourier(nquadpoints, order)
@@ -357,6 +359,65 @@ class Testing(unittest.TestCase):
             assert err_new < 0.3 * err
             err = err_new
 
+    def test_curve_surface_minimum_distance(self):
+        """Test CurveSurfaceMinimumDistance computes candidates and value correctly."""
+        np.random.seed(0)
+        base_curves, base_currents, _ = get_ncsx_data(Nt_coils=10)
+        curves = [c.curve for c in coils_via_symmetries(base_curves, base_currents, 3, True)]
+        ntor = 0
+        surface = SurfaceRZFourier.from_nphi_ntheta(nfp=3, nphi=32, ntheta=32, ntor=ntor)
+        surface.set(f'rc(0,{ntor})', 1.6)
+        surface.set(f'rc(1,{ntor})', 0.2)
+        surface.set(f'zs(1,{ntor})', 0.2)
+
+        from simsopt.geo.curveobjectives import CurveSurfaceMinimumDistance, CurveSurfaceDistance
+        threshold = 1.0
+        J = CurveSurfaceMinimumDistance(curves, surface)
+        Jcs = CurveSurfaceDistance(curves, surface, threshold)
+        # Just check that J.J() runs and is non-negative
+        val = J.J()
+        assert val >= 0
+
+        # Check that shortest_distance returns a reasonable value
+        d = J.J()
+        dd = Jcs.shortest_distance()
+        assert d >= 0
+        print(d, dd)
+        assert np.isclose(d, dd)
+
+    def test_curve_surface_minimum_distance_taylor(self):
+        """Taylor test for CurveSurfaceMinimumDistance objective."""
+        np.random.seed(0)
+        base_curves, base_currents, _ = get_ncsx_data(Nt_coils=10)
+        curves = [c.curve for c in coils_via_symmetries(base_curves, base_currents, 3, True)]
+        ntor = 0
+        surface = SurfaceRZFourier.from_nphi_ntheta(nfp=3, nphi=32, ntheta=32, ntor=ntor)
+        surface.set(f'rc(0,{ntor})', 1.6)
+        surface.set(f'rc(1,{ntor})', 0.2)
+        surface.set(f'zs(1,{ntor})', 0.2)
+
+        from simsopt.geo.curveobjectives import CurveSurfaceMinimumDistance
+        for downsample in [1, 2]:
+            J = CurveSurfaceMinimumDistance(curves, surface)
+            curve_dofs = J.x
+            h = 1e-1 * np.random.rand(len(curve_dofs)).reshape(curve_dofs.shape)
+            dJ = J.dJ()
+            deriv = np.sum(dJ * h)
+            assert np.abs(deriv) > 1e-10
+            err = 1e6
+            for i in range(5, 12):
+                eps = 0.5**i
+                J.x = curve_dofs + eps * h
+                Jp = J.J()
+                J.x = curve_dofs - eps * h
+                Jm = J.J()
+                deriv_est = (Jp-Jm)/(2*eps)
+                err_new = np.linalg.norm(deriv_est-deriv)
+                print("CurveSurfaceMinimumDistance Taylor err_new %s" % (err_new))
+                print(err_new/err)
+                assert err_new < 0.7 * err
+                err = err_new
+
     def test_linking_number(self):
         for downsample in [1, 2, 5]:
             curves1 = create_equally_spaced_curves(2, 1, stellsym=True, R0=1, R1=0.5, order=5, numquadpoints=120)
@@ -385,6 +446,116 @@ class Testing(unittest.TestCase):
             np.testing.assert_allclose(objective1.J(), 0, atol=1e-14, rtol=1e-14)
             np.testing.assert_allclose(objective2.J(), 1, atol=1e-14, rtol=1e-14)
             np.testing.assert_allclose(objective3.J(), 1, atol=1e-14, rtol=1e-14)
+
+    def test_curve_curve_minimum_distance(self):
+        """Test CurveCurveMinimumDistance computes the minimum distance between different curves (not within the same curve)."""
+        np.random.seed(0)
+        # Create two curves far apart and one close to the first
+        c1 = CurvePlanarFourier(200, 0, 1, False)
+        c1.x[0] = 1.0
+        c2 = CurvePlanarFourier(200, 0, 1, False)
+        c2.x[0] = 1.0
+        c3 = CurvePlanarFourier(200, 0, 1, False)
+        c3.x[0] = 1.0
+        c2.x += 10.0  # Move c2 far away
+        c3.x += -20  
+        print(c1.x, c2.x, c3.x)
+        curves = [c1, c2, c3]
+        J = CurveCurveMinimumDistance(curves)
+        J.compute_candidates()
+        print(J.candidates)
+        J2 = CurveCurveMinimumDistance(curves, downsample=2)
+        val = J.J() + 1e10  
+        val2 = J2.J() + 1e10
+        # The minimum distance should be between c1 and c3, not within c1 or c3
+        from scipy.spatial.distance import cdist
+        d13 = np.min(cdist(c1.gamma(), c3.gamma()))
+        d12 = np.min(cdist(c1.gamma(), c2.gamma()))
+        d23 = np.min(cdist(c2.gamma(), c3.gamma()))
+        print(val, d13, d12, d23,  val2)
+        assert np.isclose(val, min(d13, d12, d23))
+        assert np.isclose(val, val2, rtol=1e-2)
+        # Should not be zero (not within the same curve)
+        assert val > 0
+
+    def test_curve_curve_minimum_distance_taylor(self):
+        """Taylor test for CurveCurveMinimumDistance objective."""
+        from simsopt.geo.curveobjectives import CurveCurveMinimumDistance
+        np.random.seed(0)
+        curves = [self.create_curve('CurveXYZFourier', False) for _ in range(2)]
+        for c in curves:
+            c.x += np.random.randn(len(c.x)) * 10
+        for downsample in [1, 2]:
+            for minimum_distance in [0.8]:
+                J = CurveCurveMinimumDistance(curves, downsample, minimum_distance)
+                J.compute_candidates()
+                print(J.candidates)
+                Jtest = CurveCurveDistance(curves, 0.0)
+                all_dofs = np.concatenate([c.x for c in curves])
+                h = 1e-2 * np.random.rand(len(all_dofs))
+                dJ = J.dJ()
+                # np.testing.assert_allclose(J.J(), Jtest.shortest_distance())
+                deriv = np.sum(dJ * h)
+                assert not np.isnan(dJ).any(), 'Gradient contains nan values.'
+                assert np.abs(deriv) > 1e-10
+                err = 1e6
+                for i in range(3, 8):
+                    eps = 0.5**i
+                    J.x = all_dofs + eps * h
+                    Jtest.x = all_dofs + eps * h
+                    Jp = J.J()
+                    # assert np.isclose(Jp, Jtest.shortest_distance())
+                    J.x = all_dofs - eps * h
+                    Jm = J.J()
+                    Jtest.x = all_dofs - eps * h
+                    # assert np.isclose(Jm, Jtest.shortest_distance())
+                    deriv_est = (Jp-Jm) / (2*eps)
+                    err_new = np.abs(deriv - deriv_est)
+                    print("CurveCurveMinimumDistance Taylor err_new %s" % (err_new))
+                    print(err_new/err)
+                    assert err_new < 0.6 * err
+                    err = err_new
+
+    def test_total_curve_lengths(self):
+        """Test that TotalCurveLengths returns the sum of the lengths of multiple curves."""
+        np.random.seed(0)
+        curves = [self.create_curve('CurveXYZFourier', False) for _ in range(3)]
+        for c in curves:
+            c.x += np.random.randn(len(c.x)) * 0.01
+        J = TotalCurveLengths(curves)
+        individual_lengths = [CurveLength(c).J() for c in curves]
+        total_length = J.J()
+        assert np.isclose(total_length, sum(individual_lengths), rtol=1e-10)
+        # Check gradient shape
+        grad = J.dJ()
+        assert grad.shape == (sum(len(c.x) for c in curves),)
+
+    def test_total_curve_lengths_taylor(self):
+        """Taylor test for TotalCurveLengths objective."""
+        np.random.seed(0)
+        curves = [self.create_curve('CurveXYZFourier', False) for _ in range(3)]
+        for c in curves:
+            c.x += np.random.randn(len(c.x)) * 0.01
+        J = TotalCurveLengths(curves)
+        all_dofs = np.concatenate([c.x for c in curves])
+        h = 1e-2 * np.random.rand(len(all_dofs))
+        dJ = J.dJ()
+        deriv = np.sum(dJ * h)
+        assert np.abs(deriv) > 1e-10
+        err = 1e6
+        for i in range(5, 12):
+            eps = 0.5**i
+            J.x = all_dofs + eps * h
+            Jp = J.J()
+            J.x = all_dofs - eps * h
+            Jm = J.J()
+            J.x = all_dofs  # restore
+            deriv_est = (Jp-Jm)/(2*eps)
+            err_new = np.linalg.norm(deriv_est-deriv)
+            print("TotalCurveLengths Taylor err_new %s" % (err_new))
+            print(err_new/err)
+            assert err_new < 0.3 * err
+            err = err_new
 
 
 if __name__ == "__main__":
