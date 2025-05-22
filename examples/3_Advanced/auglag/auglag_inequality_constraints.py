@@ -94,7 +94,7 @@ R1 = 0.6 * s.x[0]
 order = 5
 curves = create_equally_spaced_curves(
     ncoils, s.nfp, stellsym=s.stellsym, R0=R0, R1=R1, order=order, numquadpoints=128)
-base_currents = [Current(1e5) for i in range(ncoils)]
+base_currents = [Current(1.0) * 1e5 for i in range(ncoils)]
 # Since the target field is zero, one possible solution is just to set all
 # currents to 0. To avoid the minimizer finding that solution, we fix one
 # of the currents:
@@ -155,6 +155,7 @@ MAXITER_lag = 100
 start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(
     inequality_constraints=inequality_constraints,
+    # verbose=True,
     MAXITER=MAXITER, MAXITER_lag=MAXITER_lag,
     )
 end_time = time.time()
@@ -179,11 +180,6 @@ pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
 s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag", extra_data=pointData)
 bs.set_points(s.gamma().reshape((-1, 3)))
 print("--------------------------------------------------------------------------------------------------------------------------------------------")
-print(
-    "INITIAL LAGRANGE MULTIPLIERS:",
-    np.zeros(
-        len(inequality_constraints),
-        dtype=float))
 print("FINAL LAGRANGE MULTIPLIERS:", lag_mul)
 print("--------------------------------------------------------------------------------------------------------------------------------------------")
 print("Final NORMALIZED SQUARED FLUX:", coil_flux_constraint.J())
