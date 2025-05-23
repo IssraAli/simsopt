@@ -47,6 +47,7 @@ from simsopt.geo import CurveSurfaceMinimumDistance, CurveCurveMinimumDistance
 from simsopt.geo import CurveLength
 from pathlib import Path
 import time
+np.random.seed(1)
 
 # Define the output directory   
 OUT_DIR = "./auglag_inequality_constraints/"
