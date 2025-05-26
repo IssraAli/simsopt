@@ -3,6 +3,8 @@ from scipy.optimize import minimize
 from simsopt.geo import curves_to_vtk
 from simsopt.objectives import SquaredFlux
 import time
+import threading # Import the threading module
+from threadpoolctl import threadpool_limits
 
 __all__ = ['augmented_lagrangian_objective', 
            'grad_augmented_lagrangian', 'augmented_lagrangian_method',
@@ -41,70 +43,72 @@ def construct_equality_constraints(objs, types, thresholds):
     return equality_constraints
 
 class wrapper_lower_bound:
-    """
-    Convert a lower bound inequality constraint g(x) >= L to an equality constraint,
-    by adding a slack variable s, and define a new objective h(x, s) = g(x) - s - L.
-    ..math::
-        g(x) - s = L \quad \text{and} \quad s \geq 0
-
-    so that
-    ..math::
-        h(x, s) = 0
-
-    Args:
-        g (Optimizable): The original constraint function.
-        lower_bound (float): The lower bound on the constraint.
-        num_slack_vars (int): The number of slack variables.
-        index (int): The index of the particular slack variable associated with this constraint.
-    """
     def __init__(self, g, lower_bound, num_slack_vars, index):
         self.num_slack_vars = num_slack_vars
-        self.x = np.concatenate([g.x, np.zeros(num_slack_vars)])
+        self.x = np.ascontiguousarray(np.concatenate([g.x, np.zeros(num_slack_vars)]), dtype=np.float64)
         self.Jobj = g
-        self.Jobj.x = self.x[:-self.num_slack_vars]
         self.lower_bound = lower_bound
         self.index = index
+        
+        # Python-level lock (still good practice if Jobj instances might be shared and called from different Python threads)
+        if not hasattr(g, '_optimizer_py_lock'): # Use a different name to avoid conflict if previous lock was there
+            g._optimizer_py_lock = threading.Lock()
+        self.Jobj_py_lock = g._optimizer_py_lock
+        
     def J(self):
         self.Jobj.x = self.x[:-self.num_slack_vars]
-        return self.Jobj.J() - self.x[-self.num_slack_vars + self.index] - self.lower_bound
+        
+        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
+            # Python-level lock for atomicity of Jobj.x setting and call
+            # Control OpenMP/BLAS threads for the call to self.Jobj.J()
+            # Try with user_api='openmp' first as OMP_NUM_THREADS is the key indicator
+            g_val = self.Jobj.J()            
+        result = g_val - self.x[-self.num_slack_vars + self.index] - self.lower_bound
+        return result
+
     def dJ(self):
         self.Jobj.x = self.x[:-self.num_slack_vars]
+
+        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
+            # Python-level lock for atomicity of Jobj.x setting and call
+            # Control OpenMP/BLAS threads for the call to self.Jobj.J()
+            # Try with user_api='openmp' first as OMP_NUM_THREADS is the key indicator     
+            dJ_orig = np.array(self.Jobj.dJ(), copy=True)
+
         dJ_slack = np.zeros(self.num_slack_vars)
         dJ_slack[self.index] = -1.0
-        return np.concatenate([self.Jobj.dJ(), dJ_slack])
-    
+        return np.ascontiguousarray(np.concatenate([dJ_orig, dJ_slack]), dtype=np.float64)
+
+# Apply similar changes to wrapper_upper_bound
 class wrapper_upper_bound:
-    """
-    Convert an upper bound inequality constraint g(x) <= U to an equality constraint,
-    by adding a slack variable s, and define a new objective h(x, s) = g(x) + s - U.
-    ..math::
-        g(x) + s = U \quad \text{and} \quad s \geq 0
-
-    so that
-    ..math::
-        h(x, s) = 0
-
-    Args:
-        g (Optimizable): The original constraint function.
-        upper_bound (float): The upper bound on the constraint.
-        num_slack_vars (int): The number of slack variables.
-        index (int): The index of the particular slack variable associated with this constraint.
-    """
     def __init__(self, g, upper_bound, num_slack_vars, index):
         self.num_slack_vars = num_slack_vars
-        self.x = np.concatenate([g.x, np.zeros(num_slack_vars)])
+        self.x = np.ascontiguousarray(np.concatenate([g.x, np.zeros(num_slack_vars)]), dtype=np.float64)
         self.Jobj = g
-        self.Jobj.x = self.x[:-self.num_slack_vars]
         self.upper_bound = upper_bound
         self.index = index
+
+        if not hasattr(g, '_optimizer_py_lock'):
+            g._optimizer_py_lock = threading.Lock()
+        self.Jobj_py_lock = g._optimizer_py_lock
+        
     def J(self):
         self.Jobj.x = self.x[:-self.num_slack_vars]
-        return self.Jobj.J() + self.x[-self.num_slack_vars + self.index] - self.upper_bound
+
+        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
+                g_val = self.Jobj.J()
+                
+        result = g_val + self.x[-self.num_slack_vars + self.index] - self.upper_bound
+        return result
+        
     def dJ(self):
         self.Jobj.x = self.x[:-self.num_slack_vars]
+
+        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
+            dJ_orig = np.array(self.Jobj.dJ(), copy=True)              
         dJ_slack = np.zeros(self.num_slack_vars)
         dJ_slack[self.index] = 1.0
-        return np.concatenate([self.Jobj.dJ(), dJ_slack])
+        return np.ascontiguousarray(np.concatenate([dJ_orig, dJ_slack]), dtype=np.float64)
 
 def jac_constraint(constraint_list, dofs):
     """
@@ -379,6 +383,7 @@ def augmented_lagrangian_method(
         # pr = cProfile.Profile()
         # pr.enable()
         if k == 1:
+            print("------------------------------------------------------------------------------------------------")
             print("Taylor test:")
             h = np.random.uniform(size=x.shape)
             J0, dJ0 = fun(x)
@@ -393,6 +398,8 @@ def augmented_lagrangian_method(
                     print("Taylor test failed, err_new = {:.2e}, err = {:.2e}".format(err_new, err))
                     raise ValueError("Taylor test failed, check your objective and constraint functions")
                 err = err_new
+            print("Taylor test passed")
+            print("------------------------------------------------------------------------------------------------")
         x = dofs_before.copy()
         if m_ineq > 0:
             res = minimize(fun, x, method=minimize_method, options=options, 
@@ -451,6 +458,7 @@ def augmented_lagrangian_method(
 
         if m_ineq > 0:
             try:
+                print(f"Iteration {k}")
                 print('Deviation from target: NSF = {:.2e}, CS-Sep = {:.2e}, CC-Sep = {:.2e}, Len = {:.2e}, Curv = {:.2e}, Link = {:.2e}'.format(
                     abs(c_vals[0]), abs(c_vals[1]), abs(c_vals[2]), abs(c_vals[3]), abs(c_vals[4]), abs(c_vals[5])))
                 if verbose:
@@ -467,16 +475,16 @@ def augmented_lagrangian_method(
             if verbose:
                 print("*Constraints are satisfied*")
             lag_mul += -mu_k * c_vals
-            omega_k = omega_k / mu_k
-            eta_k = eta_k / mu_k
+            omega_k = max(omega_k / mu_k, grad_tol)
+            eta_k = max(eta_k / mu_k, c_tol)
 
         # Need to improve constraint satisfaction, increase penalty term
         else:
             if verbose:
                 print("*Constraints are not satisfied*")
             mu_k = 10.0 * mu_k
-            omega_k = 1.0 / mu_k
-            eta_k = 1.0 / mu_k
+            omega_k = max(1.0 / mu_k, grad_tol)
+            eta_k = max(1.0 / mu_k, c_tol)
         if verbose:
             print("LAGRANGE MULTIPLIERS:", lag_mul)
             print("--------------------------------------------------------------------------------------------------------------------------------------------")
