@@ -198,7 +198,6 @@ def cc_minimum_distance_pure(gammas, candidates, downsample, minimum_distance):
     final_min, _ = scan(min_dist_for_pair, jnp.inf, idxs)
     return final_min - minimum_distance
 
-
 class CurveCurveMinimumDistance(Optimizable):
     r"""
     CurveCurveMinimumDistance is a class that computes

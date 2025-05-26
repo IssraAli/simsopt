@@ -295,8 +295,14 @@ def augmented_lagrangian_method(
     # Picks the most dofs from the objective function or the first inequality constraint
     try:
         x = f.x 
-        if len(x) < len(inequality_constraints[0].x):
-            x = inequality_constraints[0].x
+        try:
+            if len(x) < len(inequality_constraints[0].Jobj.x):
+                x = inequality_constraints[0].x
+        except:
+            pass
+        # except:
+        #     if len(x) < len(equality_constraints[0].Jobj.x):
+        #         x = equality_constraints[0].x
     except:
         # If f is None or f.x fails for any other reason, use the first inequality constraint
         # which should always have more dofs than the equality constraints.
@@ -321,7 +327,7 @@ def augmented_lagrangian_method(
         # Add inequality constraints to the list of equality constraints
         equality_constraints.extend(inequality_constraints)
 
-    m = len(equality_constraints)
+    m_eq = len(equality_constraints)
 
     if verbose:
         print('----------------------------------------------------------------')
@@ -341,7 +347,7 @@ def augmented_lagrangian_method(
     # will be set to exactly zero, turning off the corresponding constraint for 
     # all remaining iterations. However, need to make sure lag_mul matches c_vals sign
     c_vals = np.array([J.J() for J in equality_constraints])
-    lag_mul = -np.random.rand(m) * np.sign(c_vals)
+    lag_mul = -np.random.rand(m_eq) * np.sign(c_vals)
 
     # Evaluate initial lagrangian
     c_norm = np.linalg.norm(c_vals)
@@ -439,7 +445,7 @@ def augmented_lagrangian_method(
         c_vals = np.array([J.J() for J in equality_constraints])
 
         # Check convergence
-        c_norm = np.linalg.norm(c_vals, ord=np.inf) if m > 0 else 0
+        c_norm = np.linalg.norm(c_vals, ord=np.inf) if m_eq > 0 else 0
 
         # Print detailed progress
         if verbose:
@@ -456,7 +462,7 @@ def augmented_lagrangian_method(
             print(f"  Change in x = {np.linalg.norm(x - dofs_before)}")
             print("--------------------------------------------------")
 
-        if m_ineq > 0:
+        if m_eq > 0:
             try:
                 print(f"Iteration {k}")
                 print('Deviation from target: NSF = {:.2e}, CS-Sep = {:.2e}, CC-Sep = {:.2e}, Len = {:.2e}, Curv = {:.2e}, Link = {:.2e}'.format(
@@ -464,7 +470,10 @@ def augmented_lagrangian_method(
                 if verbose:
                     print('Contributions to the objective:', lag_mul * c_vals, mu_k / 2 * np.linalg.norm(c_vals)**2)
             except:
-                print('Deviation from target: cval[0] = {:.2e}'.format(abs(c_vals[0])))
+                c_str = 'Jf = {:.2e}'.format(f.J()) + ', '
+                for i, c in enumerate(c_vals):
+                    c_str += 'cval[{:d}] = {:.2e}, '.format(i, abs(c))
+                print(c_str)
         if verbose:
             try:
                 print('Max curvatures:', [np.max(c.kappa()) for c in equality_constraints[1].Jobj.curves])

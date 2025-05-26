@@ -82,9 +82,9 @@ s_plot = SurfaceRZFourier.from_vmec_input(
 
 ncoils = 4
 # Define the target length, coil-to-coil distance, coil-to-surface distance, and curvature
-LENGTH_TARGET = 17.4
+LENGTH_TARGET = 17.4  # 17.4
 CC_THRESHOLD = 0.1
-CS_THRESHOLD = 0.3
+CS_THRESHOLD = 0.5
 CURVATURE_THRESHOLD = 5.0
 MSC_THRESHOLD = 0
 FLUX_THRESHOLD = 1e-7
