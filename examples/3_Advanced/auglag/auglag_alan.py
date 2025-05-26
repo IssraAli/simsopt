@@ -78,12 +78,12 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_phi=quadpoints_phi,
     quadpoints_theta=quadpoints_theta)
 
-# Define the target length, coil-to-coil distance, coil-to-surface distance, and curvature
-LENGTH_TARGET = 17.4
+# Define the upper and lower bounds for the constraints
+LENGTH_TARGET = 300.0  # comically large length upper bound
+FLUX_THRESHOLD = 1e-6
 CC_THRESHOLD = 0.1
 CS_THRESHOLD = 0.3
-CURVATURE_THRESHOLD = 5e4
-MSC_THRESHOLD = 0
+CURVATURE_THRESHOLD = 5.0
 
 # Define the number of coils, rotation order, and non-planar base curves
 R0 = s.x[0]
@@ -93,9 +93,6 @@ ncoils = 4
 curves = create_equally_spaced_curves(
     ncoils, s.nfp, stellsym=s.stellsym, R0=R0, R1=R1, order=order, numquadpoints=128)
 base_currents = [Current(1e5) for i in range(ncoils)]
-# Since the target field is zero, one possible solution is just to set all
-# currents to 0. To avoid the minimizer finding that solution, we fix one
-# of the currents:
 base_currents[0].fix_all()
 base_curves = curves[:ncoils]
 coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
@@ -116,47 +113,33 @@ s_plot.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
 
 # Define the individual terms objective function:
 bs.set_points(s.gamma().reshape((-1, 3)))
-Jf = SquaredFlux(s, bs, definition="normalized")
+Jf = SquaredFlux(s, bs, definition="normalized", threshold=FLUX_THRESHOLD)
 Jls = [CurveLength(c) for c in base_curves]
 Jl = sum(QuadraticPenalty(jj, LENGTH_TARGET, "max") for jj in Jls)
 Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
 Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
 Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
-Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
 Jlink = LinkingNumber(curves, downsample=2)
 Jforce = [LpCurveForce(c, coils, regularization_circ(0.05), p=2.0, threshold=1e3) for c in base_coils]
-outstr_dict = {'Jls': Jls, 'Jl': Jl, 'Jccdist': Jccdist, 
-               'Jcsdist': Jcsdist, 'Jcs': Jcs, 'Jmscs': Jmscs, 'Jlink': Jlink,
-               'Jf': Jf,
-               'bs': bs,
-               's': s,
-               }
 
 # Main optimization function
-f = Jf  # Weight(0.0) * Jf
+# f = Weight(0.0) * Jf
 
 # Constraint list
-# c_list = [Jl, Jcsdist, QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), sum(Jcs)]
-c_list = [Jcsdist, QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), sum(Jcs), sum(Jforce)]
-
-MINIMIZE_METHODS_NEW_CB = [
-    'nelder-mead',
-    'powell',
-    'cg',
-    'bfgs',
-    'newton-cg',
-    'l-bfgs-b',
-    'trust-constr',
-    'dogleg',
-    'trust-ncg',
-    'trust-exact',
-    'trust-krylov']
+c_list = [Jf, 
+          Jccdist, 
+          Jcsdist, 
+          QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
+          sum(Jcs), 
+          Jlink
+]
 
 start_time = time.time()
-x, fnc, lag_mul = augmented_lagrangian_method(f, equality_constraints=c_list, mu_init=10, grad_tol=1e-10, c_tol=1e-10,
-                                                MAXITER=200, argmin_tol=1e-16, minimize_method=MINIMIZE_METHODS_NEW_CB[5], 
-                                                MAXITER_lag=10,
-                                                lagrangian_form=None)
+x, fnc, lag_mul = augmented_lagrangian_method(
+    equality_constraints=c_list,
+    MAXITER=200,
+    MAXITER_lag=10
+)
 
 end_time = time.time()
 print(f"Time taken: {end_time - start_time} seconds")

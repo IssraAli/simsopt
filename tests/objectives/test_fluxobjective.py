@@ -77,7 +77,8 @@ class FluxObjectiveTests(unittest.TestCase):
             J.x = dofs - eps * h
             J2 = J.J()
             err = np.abs((J1 - J2) / (2 * eps) - dJh)
-            # print(f"i: {i}  err: {err}  err_old: {err_old}  err/err_old: {err/err_old}")
+            print(f"J: {J.J()}")
+            print(f"i: {i}  err: {err}  err_old: {err_old}  err/err_old: {err/err_old}")
             assert err < 0.6 ** 2 * err_old
             err_old = err
 
@@ -112,3 +113,24 @@ class FluxObjectiveTests(unittest.TestCase):
                 ALPHA = 1e-5
                 JF_scaled_summed = Jf + ALPHA * sum(Jls)
                 self.check_taylor_test(JF_scaled_summed)
+
+                # try with threshold
+                Jf = SquaredFlux(s, bs, definition=definition, threshold=1e-3)
+                self.check_taylor_test(Jf)
+
+                target = np.zeros(s.gamma().shape[0:2])
+                Jf2 = SquaredFlux(s, bs, target, definition=definition, threshold=1e-3)
+                self.check_taylor_test(Jf2)
+                target = np.ones(s.gamma().shape[0:2])
+                Jf3 = SquaredFlux(s, bs, target, definition=definition, threshold=1e-3)
+                self.check_taylor_test(Jf3)
+
+                Jls = [CurveLength(c) for c in base_curves]
+
+                ALPHA = 1e-5
+                JF_scaled_summed = Jf + ALPHA * sum(Jls)
+                self.check_taylor_test(JF_scaled_summed)
+
+
+if __name__ == "__main__":
+    unittest.main()
