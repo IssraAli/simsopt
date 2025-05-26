@@ -797,7 +797,7 @@ def squared_mean_force_pure(gammas, gammas2, gammadashs, gammadashs2, currents,
     mean_forces = vmap(mean_force_group1, in_axes=(0, 0, 0, 0, 0))(
         jnp.arange(n1), gammas, tangents, gammadash_norms, currents
     )
-    summ = jnp.sum(jnp.linalg.norm(mean_forces, axis=-1) ** 2)
+    summ = jnp.sum(jnp.linalg.norm(mean_forces * 1e-6, axis=-1) ** 2)
     return summ * 1e-14
 
 
@@ -1070,7 +1070,7 @@ def lp_force_pure(
         jnp.arange(n1), gammas, tangents, B_self, currents
     )
 
-    return (jnp.sum(jnp.sum(jnp.maximum(obj1 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1) * (1. / p)
+    return (jnp.sum(jnp.sum(jnp.maximum(obj1 * 1e-6 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1) * (1. / p)
 
 
 class LpCurveForce(Optimizable):
@@ -1353,7 +1353,7 @@ def lp_torque_pure(gammas, gammas2, gammadashs, gammadashs2, gammadashdashs,
         jnp.arange(n1), gammas, centers, tangents, B_self, currents
     )
 
-    return jnp.sum(jnp.sum(jnp.maximum(obj1 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1 * (1. / p)
+    return jnp.sum(jnp.sum(jnp.maximum(obj1 * 1e-6 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1 * (1. / p)
 
 
 class LpCurveTorque(Optimizable):
@@ -1622,7 +1622,7 @@ def squared_mean_torque(gammas, gammas2, gammadashs, gammadashs2, currents, curr
     mean_torques = vmap(mean_torque_group1, in_axes=(0, 0, 0, 0, 0))(
         jnp.arange(n1), gammas, gammadashs, centers, currents
     )
-    summ = jnp.sum(jnp.linalg.norm(mean_torques, axis=-1) ** 2)
+    summ = jnp.sum(jnp.linalg.norm(mean_torques * 1e-6, axis=-1) ** 2)
     return summ * 1e-14
 
 

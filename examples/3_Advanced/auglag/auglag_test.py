@@ -3,34 +3,22 @@
 
 import numpy as np
 from simsopt.util import MpiPartition
-import booz_xform as bx
 import os
-import  time
 from scipy.optimize import minimize
-from simsopt.objectives import Weight
 from simsopt.objectives import SquaredFlux
 from simsopt.objectives import QuadraticPenalty
 
-from simsopt.geo.surfaceobjectives import ToroidalFlux, QfmResidual
-from simsopt.geo.qfmsurface import QfmSurface
-from simsopt.geo import SurfaceRZFourier, RotatedCurve
-from simsopt.geo import curves_to_vtk, create_equally_spaced_curves, create_equally_spaced_planar_curves
-from simsopt.geo import (CurveXYZFourier, curves_to_vtk,
-                         FrameRotation, FramedCurveCentroid, CurveFilament,
-                         GaussianSampler, CurvePerturbed, PerturbationSample, LinkingNumber)
+from simsopt.geo import SurfaceRZFourier
+from simsopt.geo import curves_to_vtk, create_equally_spaced_curves
+from simsopt.geo import (FrameRotation, FramedCurveCentroid, CurveFilament,
+                         LinkingNumber)
 from simsopt.geo import CurveLength, CurveCurveDistance, \
     MeanSquaredCurvature, LpCurveCurvature, CurveSurfaceDistance , \
-        LPTorsionalStrainPenalty, LPBinormalCurvatureStrainPenalty, CoilStrain
+        LPTorsionalStrainPenalty, LPBinormalCurvatureStrainPenalty
 from simsopt.field import BiotSavart
 from simsopt.field import Current, coils_via_symmetries
-from simsopt.field.coil import ScaledCurrent
 from simsopt.mhd import Vmec
-from randomgen import PCG64
 import matplotlib.pyplot as plt
-import os
-from simsopt import save, load
-import jax.numpy as jnp
-from jax import jit
 
 mpi = MpiPartition()
 mpi.write()

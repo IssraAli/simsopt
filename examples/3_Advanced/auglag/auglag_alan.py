@@ -30,25 +30,23 @@ Dependencies:
 
 import numpy as np
 import os
-from scipy.optimize import minimize
 from simsopt.objectives import SquaredFlux
-from simsopt.objectives import Weight
 from simsopt.objectives import QuadraticPenalty
 
 from simsopt.geo import SurfaceRZFourier
-from simsopt.geo import curves_to_vtk, create_equally_spaced_curves
+from simsopt.geo import create_equally_spaced_curves
 from simsopt.geo import LinkingNumber
 from simsopt.geo import CurveLength, CurveCurveDistance, \
-    MeanSquaredCurvature, LpCurveCurvature, CurveSurfaceDistance
+    LpCurveCurvature, CurveSurfaceDistance
 from simsopt.solve import augmented_lagrangian_method
-from simsopt.field import BiotSavart
+from simsopt.field import BiotSavart, coils_to_vtk
 from simsopt.field.force import LpCurveForce, regularization_circ
 from simsopt.field import Current, coils_via_symmetries
 from pathlib import Path
 import time
 
 # Define the output directory   
-OUT_DIR = "./output/"
+OUT_DIR = "./auglag/"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # Define the test directory
@@ -79,11 +77,12 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta)
 
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 300.0  # comically large length upper bound
+LENGTH_TARGET = 17.4  # comically large length upper bound
 FLUX_THRESHOLD = 1e-6
 CC_THRESHOLD = 0.1
 CS_THRESHOLD = 0.3
 CURVATURE_THRESHOLD = 5.0
+FORCE_THRESHOLD = 0.02  # units of MN/m
 
 # Define the number of coils, rotation order, and non-planar base curves
 R0 = s.x[0]
@@ -104,7 +103,7 @@ print("Number of coils:", len(coils))
 # Save the biot-savart field data
 bs = BiotSavart(coils)
 curves = [c.curve for c in coils]
-curves_to_vtk(curves, OUT_DIR + "curves_init")
+coils_to_vtk(coils, OUT_DIR + "curves_init")
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
 pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                                s_plot.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((qphi, qtheta, 1)),
@@ -120,7 +119,7 @@ Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
 Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
 Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
 Jlink = LinkingNumber(curves, downsample=2)
-Jforce = [LpCurveForce(c, coils, regularization_circ(0.05), p=2.0, threshold=1e3) for c in base_coils]
+Jforce = LpCurveForce(base_coils, coils, p=2.0, threshold=FORCE_THRESHOLD)
 
 # Main optimization function
 # f = Weight(0.0) * Jf
@@ -131,14 +130,15 @@ c_list = [Jf,
           Jcsdist, 
           QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
           sum(Jcs), 
-          Jlink
+          Jlink,
+          Jforce
 ]
 
 start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(
     equality_constraints=c_list,
     MAXITER=200,
-    MAXITER_lag=10
+    MAXITER_lag=40
 )
 
 end_time = time.time()
@@ -152,9 +152,10 @@ print('Final Len constraint:', Jl.J())
 print('Final Curv constraint:', sum(Jcs).J())
 print('Final Link constraint:', Jlink.J())
 print('Final Max Curvatures:', [np.max(c.kappa()) for c in base_curves])
-print('Final Lengths:', [CurveLength(c).J() for c in base_curves], sum(Jls))
+print('Final Lengths:', [CurveLength(c).J() for c in base_curves], sum(Jls).J())
+print('Final Force constraint:', Jforce.J())
 
-curves_to_vtk(curves, OUT_DIR + "optimized_coils_auglag")
+coils_to_vtk(coils, OUT_DIR + "optimized_coils_auglag")
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
 pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None],

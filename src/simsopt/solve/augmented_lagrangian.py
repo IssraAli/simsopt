@@ -2,13 +2,12 @@ import numpy as np
 from scipy.optimize import minimize
 from simsopt.geo import curves_to_vtk
 from simsopt.objectives import SquaredFlux
-import time
 import threading # Import the threading module
 from threadpoolctl import threadpool_limits
 
 __all__ = ['augmented_lagrangian_objective', 
            'grad_augmented_lagrangian', 'augmented_lagrangian_method',
-           'construct_equality_constraints']
+]
 
 class dummyObjective:
     def __init__(self, x):
@@ -17,98 +16,6 @@ class dummyObjective:
         return 0.0
     def dJ(self):
         return np.zeros_like(self.x)
-
-def construct_equality_constraints(objs, types, thresholds):
-    """
-    Construct equality constraints for a list of constraint objects.
-
-    Args:
-        objs (list): List of constraint objects.
-        types (list): List of types of constraints.
-        thresholds (list): List of thresholds for the constraints.
-
-    Returns:
-        list: List of equality constraint objects.
-    """
-    assert len(objs) == len(types) == len(thresholds), "Lengths of objs, types, and thresholds must be the same"
-    equality_constraints = []
-    num_slack_vars = len(thresholds)
-    for i, (obj, type, threshold) in enumerate(zip(objs, types, thresholds)):
-        if type == 'lower':
-            equality_constraints.append(wrapper_lower_bound(obj, threshold, num_slack_vars, i))
-        elif type == 'upper':
-            equality_constraints.append(wrapper_upper_bound(obj, threshold, num_slack_vars, i))
-        else:
-            raise ValueError(f"Invalid type: {type}")
-    return equality_constraints
-
-class wrapper_lower_bound:
-    def __init__(self, g, lower_bound, num_slack_vars, index):
-        self.num_slack_vars = num_slack_vars
-        self.x = np.ascontiguousarray(np.concatenate([g.x, np.zeros(num_slack_vars)]), dtype=np.float64)
-        self.Jobj = g
-        self.lower_bound = lower_bound
-        self.index = index
-        
-        # Python-level lock (still good practice if Jobj instances might be shared and called from different Python threads)
-        if not hasattr(g, '_optimizer_py_lock'): # Use a different name to avoid conflict if previous lock was there
-            g._optimizer_py_lock = threading.Lock()
-        self.Jobj_py_lock = g._optimizer_py_lock
-        
-    def J(self):
-        self.Jobj.x = self.x[:-self.num_slack_vars]
-        
-        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
-            # Python-level lock for atomicity of Jobj.x setting and call
-            # Control OpenMP/BLAS threads for the call to self.Jobj.J()
-            # Try with user_api='openmp' first as OMP_NUM_THREADS is the key indicator
-            g_val = self.Jobj.J()            
-        result = g_val - self.x[-self.num_slack_vars + self.index] - self.lower_bound
-        return result
-
-    def dJ(self):
-        self.Jobj.x = self.x[:-self.num_slack_vars]
-
-        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
-            # Python-level lock for atomicity of Jobj.x setting and call
-            # Control OpenMP/BLAS threads for the call to self.Jobj.J()
-            # Try with user_api='openmp' first as OMP_NUM_THREADS is the key indicator     
-            dJ_orig = np.array(self.Jobj.dJ(), copy=True)
-
-        dJ_slack = np.zeros(self.num_slack_vars)
-        dJ_slack[self.index] = -1.0
-        return np.ascontiguousarray(np.concatenate([dJ_orig, dJ_slack]), dtype=np.float64)
-
-# Apply similar changes to wrapper_upper_bound
-class wrapper_upper_bound:
-    def __init__(self, g, upper_bound, num_slack_vars, index):
-        self.num_slack_vars = num_slack_vars
-        self.x = np.ascontiguousarray(np.concatenate([g.x, np.zeros(num_slack_vars)]), dtype=np.float64)
-        self.Jobj = g
-        self.upper_bound = upper_bound
-        self.index = index
-
-        if not hasattr(g, '_optimizer_py_lock'):
-            g._optimizer_py_lock = threading.Lock()
-        self.Jobj_py_lock = g._optimizer_py_lock
-        
-    def J(self):
-        self.Jobj.x = self.x[:-self.num_slack_vars]
-
-        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
-                g_val = self.Jobj.J()
-                
-        result = g_val + self.x[-self.num_slack_vars + self.index] - self.upper_bound
-        return result
-        
-    def dJ(self):
-        self.Jobj.x = self.x[:-self.num_slack_vars]
-
-        with self.Jobj_py_lock, threadpool_limits(limits=1, user_api='openmp'):
-            dJ_orig = np.array(self.Jobj.dJ(), copy=True)              
-        dJ_slack = np.zeros(self.num_slack_vars)
-        dJ_slack[self.index] = 1.0
-        return np.ascontiguousarray(np.concatenate([dJ_orig, dJ_slack]), dtype=np.float64)
 
 def jac_constraint(constraint_list, dofs):
     """
@@ -225,7 +132,7 @@ def grad_augmented_lagrangian(dofs, f, equality_constraints, lag_mul, mu, option
     if option == 'least-squares':
         # Gradient of the objective function
         dL = np.asarray(f.dJ(), dtype=np.float64) * f.J()
-        dL = np.asarray(dL + np.sqrt(mu) * np.dot(c_vals.T, c_jac), dtype=np.float64)
+        dL = np.asarray(dL + mu * np.dot(c_vals.T - lag_mul / mu, c_jac), dtype=np.float64)
     else:
         # Equality constraints
         dL = f.dJ() - lag_mul @ c_jac + mu * np.dot(c_jac.T, c_vals)
@@ -234,7 +141,6 @@ def grad_augmented_lagrangian(dofs, f, equality_constraints, lag_mul, mu, option
 def augmented_lagrangian_method(
         f=None,
         equality_constraints=[],
-        inequality_constraints=[],
         mu_init=10.0,
         grad_tol=1e-15,
         c_tol=1e-15,
@@ -265,9 +171,8 @@ def augmented_lagrangian_method(
         f (Optimizable, optional): Main objective function (with .J(), .dJ(), .x attributes).
             If not provided, only constraints are used in the optimization.
         equality_constraints (list of Optimizable): List of constraint objects corresponding to equality constraints.
-        inequality_constraints (list of Optimizable): List of constraint objects corresponding to 
-            inequality constraints. These really are a list of equality constraints, but understood to
-            introduce slack variables to convert the inequality constraints to equality constraints.
+            These are equivalent to inequality constraints if the constraint is set up so that if the value is below
+            some threshold, the value is set to zero.
         mu_init (float, optional, default=10.0): Initial penalty parameter (must be > 0).
         grad_tol (float, optional, default=1e-15): Tolerance for gradient norm of Lagrangian.
         c_tol (float, optional, default=1e-15): Tolerance for constraint norm.
@@ -292,41 +197,14 @@ def augmented_lagrangian_method(
 
     k = 1
 
-    # Picks the most dofs from the objective function or the first inequality constraint
+    # Picks the most dofs from the objective function or the first equality constraint
     try:
         x = f.x 
-        try:
-            if len(x) < len(inequality_constraints[0].Jobj.x):
-                x = inequality_constraints[0].x
-        except:
-            pass
-        # except:
-        #     if len(x) < len(equality_constraints[0].Jobj.x):
-        #         x = equality_constraints[0].x
-    except:
-        # If f is None or f.x fails for any other reason, use the first inequality constraint
-        # which should always have more dofs than the equality constraints.
-        try:
-            x = inequality_constraints[0].x
-        except:
+        if len(x) < len(equality_constraints[0].Jobj.x):
             x = equality_constraints[0].x
+    except:
+        x = equality_constraints[0].x
     
-    # Add bounds for the slack variables
-    m_ineq = len(inequality_constraints)
-    if m_ineq > 0:
-        bds = []
-        # No bounds for the original variables
-        for _ in range(len(x) - m_ineq):
-            bds.append((None, None))
-
-        # s >= 0 bounds for all the slack variables
-        for _ in range(m_ineq):
-            bds.append((0.0, None))
-        bounds = bds
-
-        # Add inequality constraints to the list of equality constraints
-        equality_constraints.extend(inequality_constraints)
-
     m_eq = len(equality_constraints)
 
     if verbose:
@@ -394,7 +272,7 @@ def augmented_lagrangian_method(
             h = np.random.uniform(size=x.shape)
             J0, dJ0 = fun(x)
             dJh = sum(dJ0 * h)
-            err = 1e10
+            err = 1e100
             for eps in [1e-3, 1e-4, 1e-5, 1e-6]:
                 J1, _ = fun(x + eps*h)
                 J2, _ = fun(x - eps*h)
@@ -407,12 +285,8 @@ def augmented_lagrangian_method(
             print("Taylor test passed")
             print("------------------------------------------------------------------------------------------------")
         x = dofs_before.copy()
-        if m_ineq > 0:
-            res = minimize(fun, x, method=minimize_method, options=options, 
-                           bounds=bounds, jac=True, tol=argmin_tol)
-        else:
-            res = minimize(fun, x, method=minimize_method, options=options, 
-                           jac=True, tol=argmin_tol)
+        res = minimize(fun, x, method=minimize_method, options=options, 
+                        jac=True, tol=argmin_tol)
         # pr.disable()
         # ss = io.StringIO()
         # sortby = SortKey.TIME
@@ -463,17 +337,17 @@ def augmented_lagrangian_method(
             print("--------------------------------------------------")
 
         if m_eq > 0:
-            try:
-                print(f"Iteration {k}")
-                print('Deviation from target: NSF = {:.2e}, CS-Sep = {:.2e}, CC-Sep = {:.2e}, Len = {:.2e}, Curv = {:.2e}, Link = {:.2e}'.format(
-                    abs(c_vals[0]), abs(c_vals[1]), abs(c_vals[2]), abs(c_vals[3]), abs(c_vals[4]), abs(c_vals[5])))
-                if verbose:
-                    print('Contributions to the objective:', lag_mul * c_vals, mu_k / 2 * np.linalg.norm(c_vals)**2)
-            except:
-                c_str = 'Jf = {:.2e}'.format(f.J()) + ', '
-                for i, c in enumerate(c_vals):
-                    c_str += 'cval[{:d}] = {:.2e}, '.format(i, abs(c))
-                print(c_str)
+            # try:
+            #     print(f"Iteration {k}")
+            #     print('Deviation from target: NSF = {:.2e}, CS-Sep = {:.2e}, CC-Sep = {:.2e}, Len = {:.2e}, Curv = {:.2e}, Link = {:.2e}'.format(
+            #         abs(c_vals[0]), abs(c_vals[1]), abs(c_vals[2]), abs(c_vals[3]), abs(c_vals[4]), abs(c_vals[5])))
+            #     if verbose:
+            #         print('Contributions to the objective:', lag_mul * c_vals, mu_k / 2 * np.linalg.norm(c_vals)**2)
+            # except:
+            c_str = f"Iter {k}: " + 'Jf = {:.2e}'.format(f.J()) + ', '
+            for i, c in enumerate(c_vals):
+                c_str += 'c{:d} = {:.2e}, '.format(i, abs(c))
+            print(c_str)
         if verbose:
             try:
                 print('Max curvatures:', [np.max(c.kappa()) for c in equality_constraints[1].Jobj.curves])
