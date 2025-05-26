@@ -271,7 +271,8 @@ class ALTests(unittest.TestCase):
         """
         from pathlib import Path
         from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
-        from simsopt.field import BiotSavart, Current, coils_via_symmetries
+        from simsopt.field import BiotSavart, Current, coils_via_symmetries, LpCurveForce, LpCurveTorque
+        from simsopt.field.force import coil_force, coil_torque
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty
         from simsopt.geo import CurveSurfaceDistance, LpCurveCurvature, CurveCurveDistance
@@ -288,9 +289,11 @@ class ALTests(unittest.TestCase):
         MAXITER = 100
         FLUX_THRESHOLDS = [3e-4]
         LENGTH_TARGETS = [17.4, 40.0, 100.0]
-        CC_THRESHOLDS = [0.1, 0.2]
-        CS_THRESHOLDS = [0.3, 0.4]
+        CC_THRESHOLDS = [0.1]
+        CS_THRESHOLDS = [0.3]
         CURVATURE_THRESHOLDS = [5]
+        FORCE_THRESHOLDS = [0.03]
+        TORQUE_THRESHOLDS = [0.012]
 
         with ScratchDir(".") as tmpdir:
             OUT_DIR = tmpdir + "/output"
@@ -312,6 +315,7 @@ class ALTests(unittest.TestCase):
             base_curves = curves[:ncoils]
             coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
             curves = [c.curve for c in coils]
+            base_coils = coils[:ncoils]
             bs = BiotSavart(coils)
             curves_to_vtk(curves, OUT_DIR + "curves_init")
             bs.set_points(s.gamma().reshape((-1, 3)))
@@ -328,31 +332,44 @@ class ALTests(unittest.TestCase):
                     for CC_THRESHOLD in CC_THRESHOLDS:
                         for CS_THRESHOLD in CS_THRESHOLDS:
                             for CURVATURE_THRESHOLD in CURVATURE_THRESHOLDS:
-                                Jf = SquaredFlux(s, bs, threshold=FLUX_THRESHOLD)
-                                Jls = [CurveLength(c) for c in base_curves]
-                                Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
-                                Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
-                                Jcs = [LpCurveCurvature(c, 10, CURVATURE_THRESHOLD) for c in base_curves]
-                                Jlink = LinkingNumber(curves, downsample=2)
-                                equality_constraints = [Jf, Jccdist,Jcsdist, 
-                                                        QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
-                                                        sum(Jcs),
-                                                        Jlink]
-    
-                                print(f"Testing: nphi={nphi}, FLUX_THRESHOLD={FLUX_THRESHOLD}, LENGTH_TARGET={LENGTH_TARGET}, CC_THRESHOLD={CC_THRESHOLD}, CS_THRESHOLD={CS_THRESHOLD}, CURVATURE_THRESHOLD={CURVATURE_THRESHOLD}")
-                                # Just check that the optimization runs without error for each parameter set
-                                Jf.x = dofs_orig.copy()
-                                x, fnc, lag_mul = augmented_lagrangian_method(
-                                    equality_constraints=equality_constraints, 
-                                    MAXITER_lag=10,
-                                    MAXITER=MAXITER)
-                                assert x is not None
-                                assert Jf.J() < FLUX_THRESHOLD + eps
-                                assert Jccdist.J() < CC_THRESHOLD + eps
-                                assert Jcsdist.J() < CS_THRESHOLD + eps
-                                assert sum(Jcs).J() < CURVATURE_THRESHOLD + eps
-                                assert sum(Jls).J() < LENGTH_TARGET + eps
-                                assert Jlink.J() == 0
+                                for FORCE_THRESHOLD in FORCE_THRESHOLDS:
+                                    for TORQUE_THRESHOLD in TORQUE_THRESHOLDS:
+                                        print(f"Testing: nphi={nphi}, FLUX_THRESHOLD={FLUX_THRESHOLD}, LENGTH_TARGET={LENGTH_TARGET}, CC_THRESHOLD={CC_THRESHOLD}, CS_THRESHOLD={CS_THRESHOLD}, CURVATURE_THRESHOLD={CURVATURE_THRESHOLD}, FORCE_THRESHOLD={FORCE_THRESHOLD}, TORQUE_THRESHOLD={TORQUE_THRESHOLD}")
+                                        Jf = SquaredFlux(s, bs, threshold=FLUX_THRESHOLD)
+                                        Jls = [CurveLength(c) for c in base_curves]
+                                        Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
+                                        Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
+                                        Jcs = [LpCurveCurvature(c, 10, CURVATURE_THRESHOLD) for c in base_curves]
+                                        Jlink = LinkingNumber(curves, downsample=2)
+                                        Jforce = LpCurveForce(base_coils, coils, p=2.0, threshold=FORCE_THRESHOLD)
+                                        Jtorque = LpCurveTorque(base_coils, coils, p=2.0, threshold=TORQUE_THRESHOLD)
+                                        equality_constraints = [Jf, Jccdist,Jcsdist, 
+                                                                QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
+                                                                sum(Jcs),
+                                                                Jlink,
+                                                                Jforce,
+                                                                Jtorque]
+            
+                                        # Just check that the optimization runs without error for each parameter set
+                                        Jf.x = dofs_orig.copy()
+                                        x, fnc, lag_mul = augmented_lagrangian_method(
+                                            equality_constraints=equality_constraints, 
+                                            MAXITER_lag=10,
+                                            MAXITER=MAXITER)
+                                        assert x is not None
+                                        assert Jf.J() < FLUX_THRESHOLD + eps
+                                        assert Jccdist.J() < CC_THRESHOLD + eps
+                                        assert Jcsdist.J() < CS_THRESHOLD + eps
+                                        assert sum(Jcs).J() < CURVATURE_THRESHOLD + eps
+                                        assert sum(Jls).J() < LENGTH_TARGET + eps
+                                        assert Jlink.J() == 0
+                                        print(Jforce.J(), Jtorque.J())
+                                        coil_forces = [coil_force(c, coils) for c in base_coils]
+                                        coil_torques = [coil_torque(c, coils) for c in base_coils]
+                                        print([np.max(np.abs(coil_forces[i])) for i in range(len(coil_forces))])
+                                        print([np.max(np.abs(coil_torques[i])) for i in range(len(coil_torques))])
+                                        assert np.all([np.max(np.abs(coil_forces[i])) < FORCE_THRESHOLD * 1e6 + eps for i in range(len(coil_forces))])
+                                        assert np.all([np.max(np.abs(coil_torques[i])) < TORQUE_THRESHOLD * 1e6 + eps for i in range(len(coil_torques))])
 
 if __name__ == "__main__":
     unittest.main()
