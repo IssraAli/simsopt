@@ -2,7 +2,6 @@ import numpy as np
 from scipy.optimize import minimize
 from simsopt.geo import curves_to_vtk
 from simsopt.objectives import SquaredFlux
-import threading # Import the threading module
 from threadpoolctl import threadpool_limits
 
 __all__ = ['augmented_lagrangian_objective', 
@@ -30,13 +29,20 @@ def jac_constraint(constraint_list, dofs):
     """
     J = np.zeros((len(constraint_list), len(dofs)), dtype=float)
     for i, c_i in enumerate(constraint_list):
-        # ignore any Current class dofs, which are assumed to be at the beginning of the dofs array
-        dof_dif = len(dofs) - len(c_i.x) 
-        J[i, dof_dif:] = c_i.dJ()
+        grad_ci = np.array([], dtype=np.float64)
+        try:
+            with threadpool_limits(limits=1, user_api='openmp'):
+                grad_ci = c_i.dJ()
+        except Exception as e:
+            print(f"Exception during c_i.dJ() in jac_constraint: {e}")
+            grad_ci = c_i.dJ()
+        dof_dif = len(dofs) - len(c_i.x)
+        grad_ci_arr = np.atleast_1d(np.asarray(grad_ci))
+        J[i, dof_dif:] = grad_ci_arr
     return J
 
 
-def augmented_lagrangian_objective(dofs, f, equality_constraints, lag_mul, mu, option=None):
+def augmented_lagrangian_objective(dofs, f, equality_constraints, lag_mul, mu):
     """
     Compute the value of the augmented Lagrangian for the current optimization variables.
 
@@ -70,22 +76,36 @@ def augmented_lagrangian_objective(dofs, f, equality_constraints, lag_mul, mu, o
         float: Value of the augmented Lagrangian.
     """
     f.x = dofs
-    for c in equality_constraints:
-        dof_dif = len(dofs) - len(c.x)
-        c.x = dofs[dof_dif:]  # Ensure constraint is evaluated at current dofs
-    c_vals = np.array([J.J() for J in equality_constraints])
-    # Equality constraints
-    if option == 'least-squares':
-        L = 1 / 2 * np.linalg.norm(f.J())**2
-        L += 1 / 2 * np.linalg.norm(-lag_mul /
-                                    np.sqrt(mu) + np.sqrt(mu) * c_vals) ** 2
+    if isinstance(f, dummyObjective):
+        f_val = f.J()
     else:
-        # print(f.J(), lag_mul @ c_vals, mu / 2.0 * np.linalg.norm(c_vals)**2)
-        L = f.J() - lag_mul @ c_vals + mu / 2.0 * np.linalg.norm(c_vals)**2
+        try:
+            with threadpool_limits(limits=1, user_api='openmp'):
+                f_val = f.J()
+        except Exception:
+            f_val = f.J()
+
+    # collect constraint values
+    c_vals_list = []
+    for c_i in equality_constraints:
+        dof_dif = len(dofs) - len(c_i.x)
+        c_i.x = dofs[dof_dif:]
+        try:
+            with threadpool_limits(limits=1, user_api='openmp'):
+                val_ci = float(c_i.J())
+        except Exception:
+            val_ci = float(c_i.J())
+        c_vals_list.append(val_ci)
+    c_vals = np.array(c_vals_list, dtype=np.float64)
+
+    # build Lagrangian with mu now a vector
+    #         # 0.5 * sum_i mu_i * c_i^2
+    L = f_val - np.dot(lag_mul, c_vals) + 0.5 * np.dot(mu, c_vals**2)
+
     return L
 
 
-def grad_augmented_lagrangian(dofs, f, equality_constraints, lag_mul, mu, option=None):
+def grad_augmented_lagrangian(dofs, f, equality_constraints, lag_mul, mu):
     """
     Compute the gradient of the augmented Lagrangian with respect to the optimization variables.
 
@@ -117,26 +137,42 @@ def grad_augmented_lagrangian(dofs, f, equality_constraints, lag_mul, mu, option
         np.ndarray: Gradient of the augmented Lagrangian.
     """
     f.x = dofs
-    for c in equality_constraints:
-        dof_dif = len(dofs) - len(c.x)
-        c.x = dofs[dof_dif:]  # Ensure constraint is evaluated at current dofs
-    # Calculate the Jacobian Matrix of the constraints vector g
-    # t0 = time.time()
-    c_jac = jac_constraint(equality_constraints, f.x)
-    # t1 = time.time()
-    # print(f"[profile] jac_constraint: {t1-t0:.3f}s")
-
-    # Ensure all constraint values are floats to avoid dtype=object arrays
-    c_vals = np.array([float(J.J()) for J in equality_constraints], dtype=np.float64)
-
-    if option == 'least-squares':
-        # Gradient of the objective function
-        dL = np.asarray(f.dJ(), dtype=np.float64) * f.J()
-        dL = np.asarray(dL + mu * np.dot(c_vals.T - lag_mul / mu, c_jac), dtype=np.float64)
+    if isinstance(f, dummyObjective):
+        grad_f = f.dJ()
     else:
-        # Equality constraints
-        dL = f.dJ() - lag_mul @ c_jac + mu * np.dot(c_jac.T, c_vals)
-    return dL
+        try:
+            with threadpool_limits(limits=1, user_api='openmp'):
+                grad_f = f.dJ()
+        except Exception:
+            grad_f = f.dJ()
+    grad_f_arr = np.asarray(grad_f, dtype=np.float64)
+
+    # set x on each constraint
+    for c_i in equality_constraints:
+        dof_dif = len(dofs) - len(c_i.x)
+        c_i.x = dofs[dof_dif:]
+
+    # get Jacobian matrix of all constraints
+    c_jac = jac_constraint(equality_constraints, dofs)
+
+    # collect constraint values
+    c_vals_list = []
+    for c_i in equality_constraints:
+        try:
+            with threadpool_limits(limits=1, user_api='openmp'):
+                val_ci = float(c_i.J())
+        except Exception:
+            val_ci = float(c_i.J())
+        c_vals_list.append(val_ci)
+    c_vals = np.array(c_vals_list, dtype=np.float64)
+
+    # build gradient of Lagrangian with vector mu
+    # grad_f - lag_mul^T * jac + jac^T * (mu * c_vals)
+    dL = grad_f_arr
+    dL -= np.dot(lag_mul, c_jac)
+    dL += np.dot(c_jac.T, mu * c_vals)
+
+    return np.asarray(dL, dtype=np.float64)
 
 def augmented_lagrangian_method(
         f=None,
@@ -144,13 +180,14 @@ def augmented_lagrangian_method(
         mu_init=10.0,
         grad_tol=1e-15,
         c_tol=1e-15,
+        tau = 4,
         MAXITER=50,
         argmin_tol=1e-15,
         minimize_method='L-BFGS-B',
         MAXITER_lag=10,
-        lagrangian_form=None,
         OUT_DIR='',
         verbose=False,
+        penalty_type = None,
         ):
     """
     Run the Augmented Lagrangian Method (ALM) for constrained optimization.
@@ -191,22 +228,35 @@ def augmented_lagrangian_method(
             - lagrange_multipliers (np.ndarray): Final Lagrange multipliers
     """
     np.random.seed(1)
+    m_eq = len(equality_constraints)
+
     if mu_init <= 0 or grad_tol <= 0 or c_tol <= 0:
         raise ValueError(
             "eta_init, mu_init and omega_init  must be strictly positive")
-
+    if not penalty_type:
+        if np.isscalar(mu_init):
+            mu_k = np.ones(m_eq, dtype=float) * mu_init
+        else:
+            mu_k = np.array(mu_init, dtype=float)
+            if mu_k.size != m_eq:
+                raise ValueError("mu_init vector length must match number of constraints")
+        if np.any(mu_k <= 1):
+            raise ValueError("All components of mu_init must be > 1")
+    elif penalty_type == 'scalar':
+        mu_k = mu_init
+    else:
+        raise ValueError("Invalid penalty type")
+    
     k = 1
 
     # Picks the most dofs from the objective function or the first equality constraint
     try:
         x = f.x 
-        if len(x) < len(equality_constraints[0].Jobj.x):
-            x = equality_constraints[0].x
+        # if len(x) < len(equality_constraints[0].Jobj.x):
+        #     x = equality_constraints[0].x
     except:
         x = equality_constraints[0].x
     
-    m_eq = len(equality_constraints)
-
     if verbose:
         print('----------------------------------------------------------------')
         print(f'METHOD {minimize_method} IS SELECTED FOR THE OPTIMIZATION')
@@ -224,17 +274,18 @@ def augmented_lagrangian_method(
     # INITIALIZE TO -mu_init * c_vals since then some of the lagrange multipliers
     # will be set to exactly zero, turning off the corresponding constraint for 
     # all remaining iterations. However, need to make sure lag_mul matches c_vals sign
-    c_vals = np.array([J.J() for J in equality_constraints])
+    c_vals = np.array([J.J() for J in equality_constraints], dtype=float)
     lag_mul = -np.random.rand(m_eq) * np.sign(c_vals)
 
     # Evaluate initial lagrangian
     c_norm = np.linalg.norm(c_vals)
-    mu_k = mu_init
-    omega_k = 1.0 / mu_init
-    eta_k = 1.0 / mu_init ** 0.1
-    aug_lag = augmented_lagrangian_objective(x, f, equality_constraints, lag_mul, mu_k, option=lagrangian_form)
+
+    mu_k_scalar = np.mean(mu_k)
+    omega_k = 1.0 / mu_k_scalar
+    eta_k = 1.0 / (mu_k_scalar ** 0.1)
+    aug_lag = augmented_lagrangian_objective(x, f, equality_constraints, lag_mul, mu_k)
     grad_aug_lag_norm = np.linalg.norm(grad_augmented_lagrangian(
-        x, f, equality_constraints, lag_mul, mu_k, option=lagrangian_form))
+        x, f, equality_constraints, lag_mul, mu_k))
 
     if verbose:
         print("--------------------------------------------------------------------------------------------------------------------------------------------")
@@ -255,9 +306,9 @@ def augmented_lagrangian_method(
         dofs_before = x.copy()
         def fun(dofs):
             aug_lag = augmented_lagrangian_objective(
-                dofs, f, equality_constraints, lag_mul, mu_k, option=lagrangian_form)
+                dofs, f, equality_constraints, lag_mul, mu_k)
             grad_aug_lag = grad_augmented_lagrangian(
-                dofs, f, equality_constraints, lag_mul, mu_k, option=lagrangian_form)
+                dofs, f, equality_constraints, lag_mul, mu_k)
             return aug_lag, grad_aug_lag
         options['gtol'] = omega_k
         # options['ftol'] = omega_k
@@ -273,18 +324,19 @@ def augmented_lagrangian_method(
             J0, dJ0 = fun(x)
             dJh = sum(dJ0 * h)
             err = 1e100
-            for eps in [1e-2, 1e-3, 1e-4]:
+            for eps, threshold in zip([1e-3, 1e-4, 1e-5], [2e-3, 5e-5, 5e-7]):
                 J1, _ = fun(x + eps*h)
                 J2, _ = fun(x - eps*h)
                 err_new = np.abs((J1-J2)/(2*eps) - dJh)
                 print("err", err, "err_new", err_new)
-                if not (err_new < 0.3 * err):
+                if not (err_new < threshold):
                     print("Taylor test failed, err_new = {:.2e}, err = {:.2e}".format(err_new, err))
                     raise ValueError("Taylor test failed, check your objective and constraint functions")
                 err = err_new
             print("Taylor test passed")
             print("------------------------------------------------------------------------------------------------")
         x = dofs_before.copy()
+
         res = minimize(fun, x, method=minimize_method, options=options, 
                         jac=True, tol=argmin_tol)
         # pr.disable()
@@ -300,7 +352,7 @@ def augmented_lagrangian_method(
             print('||Δx||:', np.linalg.norm(dofs_after - dofs_before))
         x = res.x
 
-        grad_vec = grad_augmented_lagrangian(x, f, equality_constraints, lag_mul, mu_k, option=lagrangian_form)
+        grad_vec = grad_augmented_lagrangian(x, f, equality_constraints, lag_mul, mu_k)
         
         if isinstance(f, SquaredFlux):
             curves = [c.curve for c in f.field.coils]  # f is assumed to be a SquaredFlux object 
@@ -316,7 +368,7 @@ def augmented_lagrangian_method(
         # Evaluate gradient of the augmented Lagrangian
         grad_aug_lag_norm = np.linalg.norm(grad_vec)
         # Evaluate constraints
-        c_vals = np.array([J.J() for J in equality_constraints])
+        c_vals = np.array([J.J() for J in equality_constraints], dtype=float)
 
         # Check convergence
         c_norm = np.linalg.norm(c_vals, ord=np.inf) if m_eq > 0 else 0
@@ -353,21 +405,30 @@ def augmented_lagrangian_method(
                 print('Max curvatures:', [np.max(c.kappa()) for c in equality_constraints[1].Jobj.curves])
             except:
                 pass
+        # increase penalty only for violated constraints
+
+        if not penalty_type:
+            for i in range(m_eq):
+                if abs(c_vals[i]) > c_tol:
+                    mu_k[i] *= tau
         # Constraints are making good progress, update Lagrange multipliers
         if c_norm < eta_k:
+            # constraints sufficiently small: update multipliers
             if verbose:
                 print("*Constraints are satisfied*")
             lag_mul += -mu_k * c_vals
-            omega_k = max(omega_k / mu_k, grad_tol)
-            eta_k = max(eta_k / mu_k, c_tol)
-
-        # Need to improve constraint satisfaction, increase penalty term
+            # tighten tolerances based on current worst‐case mu
+            omega_k = max(omega_k / mu_k_scalar, grad_tol)
+            eta_k = max(eta_k / mu_k_scalar, c_tol)
         else:
             if verbose:
                 print("*Constraints are not satisfied*")
-            mu_k = 10.0 * mu_k
-            omega_k = max(1.0 / mu_k, grad_tol)
-            eta_k = max(1.0 / mu_k, c_tol)
+            if not penalty_type:
+                mu_k_scalar = np.mean(mu_k)
+            else:
+                mu_k = tau * mu_k
+            omega_k = max(1.0 / mu_k_scalar, grad_tol)
+            eta_k = max(1.0 / (mu_k_scalar ** 0.1), c_tol)
         if verbose:
             print("LAGRANGE MULTIPLIERS:", lag_mul)
             print("--------------------------------------------------------------------------------------------------------------------------------------------")
