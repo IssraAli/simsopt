@@ -273,7 +273,7 @@ def augmented_lagrangian_method(
             J0, dJ0 = fun(x)
             dJh = sum(dJ0 * h)
             err = 1e100
-            for eps in [1e-3, 1e-4, 1e-5, 1e-6]:
+            for eps in [1e-2, 1e-3, 1e-4]:
                 J1, _ = fun(x + eps*h)
                 J2, _ = fun(x - eps*h)
                 err_new = np.abs((J1-J2)/(2*eps) - dJh)
