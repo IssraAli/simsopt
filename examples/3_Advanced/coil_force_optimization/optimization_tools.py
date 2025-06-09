@@ -358,6 +358,7 @@ def optimization(
     coils : list
         List of optimized coil objects.
     """
+    from simsopt.util import calculate_modB_on_major_radius
     start_time = time.perf_counter()
 
     # Initialize the boundary magnetic surface:
@@ -412,6 +413,7 @@ def optimization(
 
         bs = BiotSavart(coils)
         bs.set_points(s.gamma().reshape((-1, 3)))
+        calculate_modB_on_major_radius(bs, s)
     else:
         path = glob.glob(f"../**/{UUID_init_from}/biot_savart.json", recursive=True)[0]
         print("2")

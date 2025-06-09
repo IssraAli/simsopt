@@ -42,6 +42,7 @@ from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, coils_to_vtk
 from simsopt.field.force import LpCurveForce, regularization_circ
 from simsopt.field import Current, coils_via_symmetries
+from simsopt.util import calculate_modB_on_major_radius
 from pathlib import Path
 import time
 
@@ -77,7 +78,7 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta)
 
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 17.4  # comically large length upper bound
+LENGTH_TARGET = 100  # comically large length upper bound
 FLUX_THRESHOLD = 1e-6
 CC_THRESHOLD = 0.1
 CS_THRESHOLD = 0.3
@@ -91,7 +92,7 @@ order = 5
 ncoils = 4
 curves = create_equally_spaced_curves(
     ncoils, s.nfp, stellsym=s.stellsym, R0=R0, R1=R1, order=order, numquadpoints=128)
-base_currents = [Current(1e5) for i in range(ncoils)]
+base_currents = [Current(1.0)*1e5 for i in range(ncoils)]
 base_currents[0].fix_all()
 base_curves = curves[:ncoils]
 coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
@@ -109,6 +110,8 @@ pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                                s_plot.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((qphi, qtheta, 1)),
              "modB": bs.AbsB().reshape((qphi, qtheta, 1))}
 s_plot.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
+modB = calculate_modB_on_major_radius(bs, s)
+print(modB)
 
 # Define the individual terms objective function:
 bs.set_points(s.gamma().reshape((-1, 3)))
