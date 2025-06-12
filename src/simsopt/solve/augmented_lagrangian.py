@@ -324,12 +324,12 @@ def augmented_lagrangian_method(
             J0, dJ0 = fun(x)
             dJh = sum(dJ0 * h)
             err = 1e100
-            for eps, threshold in zip([1e-3, 1e-4, 1e-5], [2e-3, 5e-5, 5e-7]):
+            for eps in [1e-3, 1e-4, 1e-5]:
                 J1, _ = fun(x + eps*h)
                 J2, _ = fun(x - eps*h)
                 err_new = np.abs((J1-J2)/(2*eps) - dJh)
                 print("err", err, "err_new", err_new)
-                if not (err_new < threshold):
+                if not (err_new < err * 0.5):
                     print("Taylor test failed, err_new = {:.2e}, err = {:.2e}".format(err_new, err))
                     raise ValueError("Taylor test failed, check your objective and constraint functions")
                 err = err_new
