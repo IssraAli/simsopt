@@ -613,7 +613,7 @@ def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, ntu
     
     # Get the major radius from the surface and scale coil parameters
     R0 = s.get_rc(0, 0)  # Major radius
-    R1 = s.get_rc(1, 0) * 3.0  # Scale the minor radius component
+    R1 = s.get_rc(1, 0) * 2.5  # Scale the minor radius component
     
     # Initial guess for total current (using QH configuration as reference)
     total_current = 5e7  # 50 MA initial guess is not bad for reactor-scale
@@ -733,7 +733,7 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     # divided by the 10m assumption for the major radius
     R0 = 10.0 / s.get_rc(0, 0)
     length_target /= R0
-    length_target *= (ncoils / 7.0)
+    length_target *= (ncoils / 7.0) ** 0.5
     cc_threshold /= R0
     cs_threshold /= R0 
     curvature_threshold *= R0
