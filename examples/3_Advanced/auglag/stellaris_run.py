@@ -6,22 +6,19 @@ import os
 from pathlib import Path
 import time
 import numpy as np
-from scipy.optimize import minimize
 from simsopt.field import BiotSavart
 from simsopt.field import load_coils_from_makegrid_file, coils_to_vtk
 from simsopt.field import regularization_rect
 from simsopt.field import coils_via_symmetries
 from simsopt.solve import augmented_lagrangian_method
-from simsopt.field.force import LpCurveForce, B2Energy, \
-    SquaredMeanForce, \
-    SquaredMeanTorque, LpCurveTorque
+from simsopt.field.force import LpCurveForce, B2Energy
 from simsopt.util import calculate_modB_on_major_radius
 from simsopt.geo import (
     CurveLength, CurveCurveDistance, 
-    MeanSquaredCurvature, LpCurveCurvature, CurveSurfaceDistance, LinkingNumber,
+    LpCurveCurvature, CurveSurfaceDistance, LinkingNumber,
     SurfaceRZFourier
 )
-from simsopt.objectives import Weight, SquaredFlux, QuadraticPenalty
+from simsopt.objectives import SquaredFlux, QuadraticPenalty
 # from simsopt.mhd import VirtualCasing
 
 CC_THRESHOLD = 1.0
@@ -138,7 +135,7 @@ s_plot.to_vtk(OUT_DIR + "surf_original", extra_data=pointData)
 # initialize the TF coils
 def stellaris_coils(s, ncoils=3, order=8):
     from simsopt.geo import create_equally_spaced_curves
-    from simsopt.field import Current, coils_via_symmetries
+    from simsopt.field import Current
 
     # parameters for the TF coils, increase order for a better solution
     # Total current scaled to give B ~ 5.7 T on axis (actually averaged over the major radius)

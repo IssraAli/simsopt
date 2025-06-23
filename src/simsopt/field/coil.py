@@ -359,7 +359,7 @@ def apply_symmetries_to_currents(base_currents, nfp, stellsym):
                 currents.append(current)
     return currents
 
-def coils_to_vtk(coils, filename, close=False, extra_data=None):
+def coils_to_vtk(coils, filename, close=False, extra_data=None, nturns=1):
     """
     Export a list of Coil objects in VTK format, so they can be
     viewed using Paraview. This function requires the python package ``pyevtk``,
@@ -429,7 +429,9 @@ def coils_to_vtk(coils, filename, close=False, extra_data=None):
     coil_data = np.zeros((data.shape[0], 3))
     for i in range(len(coils)):
         coil_data[i * ppl[i]: (i + 1) * ppl[i], :] = net_torques[i, :]
-    coil_data = np.ascontiguousarray(coil_data)
+    coil_data = np.ascontiguousarray(coil_data) / nturns
+    coil_forces = coil_forces / nturns
+    coil_torques = coil_torques / nturns
 
     # Add pointwise force and torque data to the dictionary
     pointData['NetTorques'] = (contig(coil_data[:, 0]),

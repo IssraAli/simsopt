@@ -40,7 +40,7 @@ from simsopt.geo import CurveLength, CurveCurveDistance, \
     LpCurveCurvature, CurveSurfaceDistance
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, coils_to_vtk
-from simsopt.field.force import LpCurveForce, regularization_circ
+from simsopt.field.force import LpCurveForce
 from simsopt.field import Current, coils_via_symmetries
 from simsopt.util import calculate_modB_on_major_radius
 from pathlib import Path
