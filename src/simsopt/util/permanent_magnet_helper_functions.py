@@ -694,10 +694,10 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
         order: Fourier order for coil curves (default: 16).
         nphi: Number of phi points for surface discretization (default: 32).
         ntheta: Number of theta points for surface discretization (default: 32).
+        verbose: Print out progress and results (default: False).
         **kwargs: Additional keyword arguments for constraint thresholds.
     Returns:
         coils: List of optimized Coil class objects.
-        bs: BiotSavart object with optimized coils.
         results: Dictionary containing optimization results and metrics.
     """
     import numpy as np
