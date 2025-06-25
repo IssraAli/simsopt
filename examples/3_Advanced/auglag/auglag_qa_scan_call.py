@@ -35,8 +35,6 @@ from simsopt.geo import (
 )
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, Current, coils_to_vtk, coils_via_symmetries
-from simsopt.field.force import LpCurveForce, coil_force
-from simsopt.util import calculate_modB_on_major_radius
 
 def parse_arguments():
     """
@@ -75,7 +73,7 @@ def main():
     LENGTH_TARGET = args.length_target
     
     os.makedirs(OUT_DIR, exist_ok=True)
-    print(f"Running optimization with:")
+    print("Running optimization with:")
     print(f"  Coil-Surface Threshold: {CS_THRESHOLD}")
     print(f"  Coil Length Target: {LENGTH_TARGET}")
     print(f"  Output Directory: {OUT_DIR}")
@@ -115,7 +113,7 @@ def main():
     CC_THRESHOLD = 0.083
     MSC_THRESHOLD = 6
     CURVATURE_THRESHOLD = 12
-    FORCE_THRESHOLD = 0.012  # units of MN/m
+    # FORCE_THRESHOLD = 0.012  # units of MN/m
 
     # Define the number of coils, rotation order, and non-planar base curves
     R0 = s.x[0]
@@ -152,13 +150,13 @@ def main():
     bs.set_points(s.gamma().reshape((-1, 3)))
     Jf = SquaredFlux(s, bs, definition="normalized", threshold=FLUX_THRESHOLD)
     Jls = [CurveLength(c) for c in base_curves]
-    Jl = sum(QuadraticPenalty(jj, LENGTH_TARGET, "max") for jj in Jls)
+    # Jl = sum(QuadraticPenalty(jj, LENGTH_TARGET, "max") for jj in Jls)
 
     Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
     Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
     Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
     Jlink = LinkingNumber(curves, downsample=2)
-    Jforce = LpCurveForce(coils[:ncoils], coils, p=2.0, threshold=FORCE_THRESHOLD)
+    # Jforce = LpCurveForce(coils[:ncoils], coils, p=2.0, threshold=FORCE_THRESHOLD)
     Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
     
     # Print initial values
@@ -182,7 +180,7 @@ def main():
 
     start_time = time.time()
     # Perform the optimization
-    res = augmented_lagrangian_method(f=f,
+    _ = augmented_lagrangian_method(f=f,
         equality_constraints=c_list,
         tau=4,
         MAXITER=1500,
@@ -221,7 +219,7 @@ def main():
         "msc_threshold": MSC_THRESHOLD,
         "cc_threshold": CC_THRESHOLD,
         "cs_threshold": CS_THRESHOLD,
-        "force_threshold": FORCE_THRESHOLD,
+        # "force_threshold": FORCE_THRESHOLD,
         "Jf": float(Jf.J()),
         "lengths": [float(J.J()) for J in Jls],
         "max_length": max(float(J.J()) for J in Jls),

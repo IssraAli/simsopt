@@ -11,25 +11,23 @@ from simsopt.util.permanent_magnet_helper_functions import make_qfm
 from simsopt.geo import (
     SurfaceRZFourier)
 from simsopt import load
-from simsopt.field import PSCArray
 
-mpi = MpiPartition(ngroups=8)
+mpi = MpiPartition(ngroups=1)
 comm = comm_world
 print(
     'Script requires specifying two command line arguments -- '
     'the configuration name (QA, QH, QASH, CSX) and assumes that the biotsavart.json '
     'file containing the coil solution is in the passive_coils_<config_name> directory.'
 )
-nphi = 256
-ntheta = 256
+nphi = 128
+ntheta = 128
 quadpoints_phi = np.linspace(0, 1, nphi, endpoint=True)
 quadpoints_theta = np.linspace(0, 1, ntheta, endpoint=True)
 TEST_DIR = (Path(__file__).parent / ".." / ".." / ".." / "tests" / "test_files").resolve()
-nfieldlines = 40
-tmax_fl = 40000
+nfieldlines = 30
+tmax_fl = 30000
 Z0 = np.zeros(nfieldlines)
-aa = 0.06
-input_dir = "passive_coils_" + str(sys.argv[1]) + "/"
+input_dir = str(sys.argv[2]) + "/"
 if str(sys.argv[1]) == 'QA':
     input_name = 'input.LandremanPaul2021_QA_reactorScale_lowres'
     R0 = np.linspace(12.25, 13.2, nfieldlines)
@@ -42,23 +40,16 @@ elif str(sys.argv[1]) == 'QASH':
 elif str(sys.argv[1]) == 'CSX':
     input_name = 'wout_csx_wps_5.0.nc'
     R0 = np.linspace(0.32, 0.415, nfieldlines)
+elif str(sys.argv[1]) == 'stellaris':
+    input_name = 'input.stellaris'
+    R0 = np.linspace(13.75, 14.2, nfieldlines)
 filename = TEST_DIR / input_name
-coils = load(input_dir + "psc_coils_continuation.json")
-coils_TF = load(input_dir + "TF_coils_continuation.json")
 if str(sys.argv[1]) != 'CSX':
     s = SurfaceRZFourier.from_vmec_input(filename, quadpoints_phi=quadpoints_phi, quadpoints_theta=quadpoints_theta)
 else:
     s = SurfaceRZFourier.from_wout(filename, quadpoints_phi=quadpoints_phi, quadpoints_theta=quadpoints_theta)
-curves = [c.curve for c in coils]
-base_curves = curves[:len(curves) // (s.nfp * 2)]
-base_coils = coils[:len(coils) // (s.nfp * 2)]
-curves_TF = [c.curve for c in coils_TF]
-ncoils = len(base_curves)
-a_list = np.ones(len(base_curves)) * aa
-b_list = np.ones(len(base_curves)) * aa
+Bfield = load(input_dir + "biot_savart_optimized.json")
 eval_points = s.gamma().reshape(-1, 3)
-psc_array = PSCArray(base_curves, coils_TF, eval_points, a_list, b_list, nfp=s.nfp, stellsym=s.stellsym)
-Bfield = psc_array.biot_savart_total
 Bfield.set_points(s.gamma().reshape((-1, 3)))
 if str(sys.argv[1]) != 'QASH':
     BdotN = np.mean(np.abs(np.sum(Bfield.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
@@ -74,7 +65,7 @@ else:
 print(BdotN, BdotN_over_B)
 
 # # Make the QFM surfaces
-qfm_surf = make_qfm(s, Bfield, Bn_plasma=Bn_plasma)
+qfm_surf = make_qfm(s, Bfield)
 qfm_surf = qfm_surf.surface
 
 # VMEC does NOT like the CSX plasma because it's very compact
@@ -87,7 +78,7 @@ if str(sys.argv[1]) != 'CSX':
     equil.run()
 
     # Configure quasisymmetry objective:
-    if str(sys.argv[1]) == 'QH':
+    if str(sys.argv[1]) == 'QH' or str(sys.argv[1]) == 'stellaris':
         helicity_n = -1
     else:
         helicity_n = 0

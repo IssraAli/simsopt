@@ -16,19 +16,29 @@ from simsopt.util import calculate_modB_on_major_radius
 from simsopt.geo import (
     CurveLength, CurveCurveDistance, 
     LpCurveCurvature, CurveSurfaceDistance, LinkingNumber,
-    SurfaceRZFourier
+    SurfaceRZFourier, MeanSquaredCurvature
 )
 from simsopt.objectives import SquaredFlux, QuadraticPenalty
 # from simsopt.mhd import VirtualCasing
 
-CC_THRESHOLD = 0.8 #initially with 1.0
-CS_THRESHOLD = 1.38
-LENGTH_TARGET = 140 # initially with 138
-FORCE_THRESHOLD = 0.75  # units of MN/m
-FLUX_THRESHOLD = 1e-15 # initially with 1e-6
-ncoils_choice = 6
-CURVATURE_THRESHOLD =1.573 #1.573 * (ncoils_choice / 6.0) ** 2
-MSC_THRESHOLD = 0.3 # not present initially
+### Alan's setup to get low-force 5 coil solution 
+CC_THRESHOLD = 0.67 #initially with 1.0
+CS_THRESHOLD = 1.37
+LENGTH_TARGET = 138 # initially with 138
+FORCE_THRESHOLD = 0.5  # units of MN/m
+FLUX_THRESHOLD = 1e-6 # initially with 1e-6
+ncoils_choice = 5
+CURVATURE_THRESHOLD = 1.573 #1.573 * (ncoils_choice / 6.0) ** 2
+MSC_THRESHOLD = 0.4 # not present initially
+
+# CC_THRESHOLD = 0.8 #initially with 1.0
+# CS_THRESHOLD = 1.38
+# LENGTH_TARGET = 140 # initially with 138
+# FORCE_THRESHOLD = 0.75  # units of MN/m
+# FLUX_THRESHOLD = 1e-15 # initially with 1e-6
+# ncoils_choice = 6
+# CURVATURE_THRESHOLD =1.573 #1.573 * (ncoils_choice / 6.0) ** 2
+# MSC_THRESHOLD = 0.3 # not present initially
 
 t1 = time.time()
 MAXITER = 800
@@ -40,7 +50,7 @@ OUT_DIR = (f"./stellaris_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" 
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # File for the desired boundary magnetic surface:
-TEST_DIR = (Path(__file__).parent / "./stellaris").resolve()
+TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
 input_name = 'input.stellaris'
 filename = TEST_DIR / input_name
 
@@ -84,7 +94,7 @@ b = 0.32
 nturns_TF = 256
 FORCE_THRESHOLD *= nturns_TF
 
-coils_orig = load_coils_from_makegrid_file('./stellaris/coils.stellaris', order=30, ppp=40)
+coils_orig = load_coils_from_makegrid_file(TEST_DIR / 'coils.stellaris', order=30, ppp=40)
 print(len(coils_orig))
 print(coils_orig[0].curve)
 for c in coils_orig:
@@ -163,7 +173,8 @@ def stellaris_coils(s, ncoils=3, order=8):
 
 
 ncoils = ncoils_choice
-base_curves_TF, curves_TF, coils_TF, currents_TF = stellaris_coils(s, ncoils=ncoils, order=16)
+base_curves_TF, curves_TF, coils_TF, currents_TF = stellaris_coils(
+    s, ncoils=ncoils, order=16)
 ncoils = len(base_curves_TF)
 base_curves_TF = curves_TF[:ncoils]
 base_coils_TF = coils_TF[:ncoils]
