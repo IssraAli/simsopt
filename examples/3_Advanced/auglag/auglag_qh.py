@@ -165,7 +165,7 @@ print('Initial Lengths:', [CurveLength(c).J() for c in base_curves], sum(Jls).J(
 start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     equality_constraints=c_list,
-    tau=3.5,
+    tau=10,
     MAXITER=1500,
     MAXITER_lag=30,
     grad_tol=1e-8,

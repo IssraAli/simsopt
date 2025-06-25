@@ -77,14 +77,14 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta)
 
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 25 # comically large length upper bound
+LENGTH_TARGET = 30 # 25 for pareto front plots
 # LENGTH_TARGET = 5
 FLUX_THRESHOLD = 1e-15
 CC_THRESHOLD = 0.083
 CS_THRESHOLD = 0.15
 MSC_THRESHOLD = 6 
 CURVATURE_THRESHOLD = 12
-FORCE_THRESHOLD = 0.0105  # units of MN/m
+FORCE_THRESHOLD = 0.009  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
 
 # Define the number of coils, rotation order, and non-planar base curves
 R0 = s.x[0]
@@ -172,10 +172,25 @@ c_list = [ Jf,
 ]
 
 start_time = time.time()
+
+# For the 25m Long coils Pareto front, the parameters for optimization were:
+#       tau: 2    
+#       MAXITER: 1500
+#       MAXITER_lag: 50
+#       grad_tol: 1e-8
+#       c_tol: 1e-8
+# For the 30m Long coils Pareto front, the parameters for optimization were:
+#       tau: 4, 5 and 6 (4 for 14 kN/m, 5 for 12, 11 and 9 kN/m, 6 for 9.5 kN/m)
+#       MAXITER: 1500 and 2000 (2000 for 9.5 kN/m)
+#       grad_tol: 1e-8
+#       c_tol: 1e-8
+## The pareto front for 30m long coils seemed to be much more sensitive to the tau parameter than the 25. 
+# between 1500 and 2000 MAXITER doesn't actually affect the optimization. 
+
 x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     equality_constraints=c_list,
-    tau=2,
-    MAXITER=1500,
+    tau=5, #4 for 14, 5 for 12, 5 for 11, 5 for 10, 6 for 9.5, 5 for 9
+    MAXITER=2000, #1500 for all results except for 9.5 and 9
     MAXITER_lag=50,
     grad_tol=1e-8,
     c_tol=1e-8,

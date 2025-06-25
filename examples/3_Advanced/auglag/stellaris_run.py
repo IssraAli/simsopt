@@ -21,16 +21,17 @@ from simsopt.geo import (
 from simsopt.objectives import SquaredFlux, QuadraticPenalty
 # from simsopt.mhd import VirtualCasing
 
-CC_THRESHOLD = 1.0
+CC_THRESHOLD = 0.8 #initially with 1.0
 CS_THRESHOLD = 1.38
-LENGTH_TARGET = 138
+LENGTH_TARGET = 140 # initially with 138
 FORCE_THRESHOLD = 0.75  # units of MN/m
-FLUX_THRESHOLD = 1e-6
-ncoils_choice = 5
-CURVATURE_THRESHOLD = 1.573 * (ncoils_choice / 6.0) ** 2
+FLUX_THRESHOLD = 1e-15 # initially with 1e-6
+ncoils_choice = 6
+CURVATURE_THRESHOLD =1.573 #1.573 * (ncoils_choice / 6.0) ** 2
+MSC_THRESHOLD = 0.3 # not present initially
 
 t1 = time.time()
-MAXITER = 300
+MAXITER = 800
 
 # Directory for output
 OUT_DIR = (f"./stellaris_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" + \
@@ -39,9 +40,10 @@ OUT_DIR = (f"./stellaris_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" 
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # File for the desired boundary magnetic surface:
-TEST_DIR = (Path(__file__).parent / ".").resolve()
+TEST_DIR = (Path(__file__).parent / "./stellaris").resolve()
 input_name = 'input.stellaris'
 filename = TEST_DIR / input_name
+
 
 
 # Virtual casing must not have been run yet.
@@ -82,7 +84,7 @@ b = 0.32
 nturns_TF = 256
 FORCE_THRESHOLD *= nturns_TF
 
-coils_orig = load_coils_from_makegrid_file('coils.stellaris', order=30, ppp=40)
+coils_orig = load_coils_from_makegrid_file('./stellaris/coils.stellaris', order=30, ppp=40)
 print(len(coils_orig))
 print(coils_orig[0].curve)
 for c in coils_orig:
@@ -113,6 +115,7 @@ Jccdist = CurveCurveDistance(curves_TF, CC_THRESHOLD, num_basecurves=ncoils)
 Jcsdist = CurveSurfaceDistance(curves_TF, s, CS_THRESHOLD)
 Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves_TF]
 Jlink = LinkingNumber(curves_TF, downsample=2)
+Jmscs = [MeanSquaredCurvature(c) for c in base_curves_TF]
 Jforce = LpCurveForce(base_coils_TF, coils_orig, p=2.0)
 B2Energy_obj = B2Energy(coils_orig)
 print('Initial normalized flux:', Jf.J())
@@ -120,8 +123,9 @@ print('Initial CS-sep minimum distance:', Jcsdist.shortest_distance())
 print('Initial CC-sep minimum distance:', Jccdist.shortest_distance())
 print('Initial Link constraint:', Jlink.J())
 print('Initial Max Curvatures:', [np.max(c.kappa()) for c in base_curves_TF])
+print('Initial Mean Squared Curvature', [MeanSquaredCurvature(c).J() for c in base_curves_TF])
 print('Initial Lengths:', [CurveLength(c).J() for c in base_curves_TF], sum(Jls).J())
-print('Initial Force:', Jforce.J())
+# print('Initial Force:', Jforce.J())
 
 coils_to_vtk(coils_orig, OUT_DIR + "coils_original")
 calculate_modB_on_major_radius(bs, s)
@@ -194,6 +198,7 @@ Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves_TF]
 Jlink = LinkingNumber(curves_TF, downsample=2)
 Jforce = LpCurveForce(base_coils_TF, coils_TF, p=2.0, threshold=FORCE_THRESHOLD, downsample=2)
 B2Energy_obj = B2Energy(coils_TF)
+Jmscs = [MeanSquaredCurvature(c) for c in base_curves_TF]
 
 # Main optimization function
 # f = Weight(0.0) * Jf
@@ -202,7 +207,8 @@ B2Energy_obj = B2Energy(coils_TF)
 c_list = [Jf, 
           Jccdist, 
           Jcsdist, 
-          QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
+          QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"),
+          sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs),
           sum(Jcs), 
           Jlink,
           Jforce
@@ -212,11 +218,15 @@ c_list = [Jf,
 start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(
     equality_constraints=c_list,
+    tau = 5,
     MAXITER=MAXITER,
     MAXITER_lag=40
 )
 
 end_time = time.time()
+
+
+
 print(f"Time taken: {end_time - start_time} seconds")
 print('Final normalized flux:', Jf.J())
 print('Final CS-Sep constraint:', Jcsdist.J())
@@ -242,8 +252,16 @@ s_plot.to_vtk(OUT_DIR + "surf_optimized", extra_data=pointData)
 
 btot.set_points(s.gamma().reshape((-1, 3)))
 calculate_modB_on_major_radius(btot, s)
+btot.set_points(s_plot.gamma().reshape((-1, 3)))
 
 t2 = time.time()
+max_BdotN_overB = np.max((np.sum(btot.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2
+                                ) / np.linalg.norm(btot.B().reshape(qphi, qtheta, 3), axis=-1))[:, :, None])
+bs.set_points(s.gamma().reshape((-1, 3)))
+BdotN = np.mean(np.abs(np.sum(btot.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
+avg_BdotN_over_B = BdotN / btot.AbsB().mean()
+print("--------------------------------------------------------------------------------------------------------------------------------------------")
+print(f"<B_N>/<|B|> = {avg_BdotN_over_B:.2e}, Max BdotN/|B| = {max_BdotN_overB:.2e}")
 print('Total time = ', t2 - t1)
 btot.save(OUT_DIR + "biot_savart_optimized" + ".json")
 print(OUT_DIR)
