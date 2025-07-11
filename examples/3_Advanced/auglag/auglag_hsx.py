@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 auglag_alan.py
 ===============
@@ -92,8 +93,6 @@ s_plot = SurfaceRZFourier.from_wout(
 ncoils = ncoils_choice
 
 def hsx_coils(s, ncoils=3, order=8):
-    from simsopt.geo import create_equally_spaced_curves
-    from simsopt.field import Current
 
     # parameters for the TF coils, increase order for a better solution
     # Total current scaled to give B ~ 5.7 T on axis (actually averaged over the major radius)

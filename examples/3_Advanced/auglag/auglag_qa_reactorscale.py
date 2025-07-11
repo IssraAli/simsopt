@@ -33,14 +33,13 @@ import os
 from simsopt.objectives import SquaredFlux
 from simsopt.objectives import QuadraticPenalty
 from simsopt.geo import SurfaceRZFourier
-from simsopt.geo import create_equally_spaced_curves
 from simsopt.geo import LinkingNumber
 from simsopt.geo import CurveLength, CurveCurveDistance, \
     LpCurveCurvature, CurveSurfaceDistance, MeanSquaredCurvature
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, coils_to_vtk
 from simsopt.field.force import LpCurveForce, coil_force
-from simsopt.field import Current, coils_via_symmetries, regularization_circ
+from simsopt.field import regularization_circ
 from pathlib import Path
 from simsopt.util import calculate_modB_on_major_radius, initialize_coils_simple
 import time

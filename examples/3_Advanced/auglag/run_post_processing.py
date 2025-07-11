@@ -123,7 +123,9 @@ plt.ylabel(r'rotational transform $\iota$')
 plt.xlabel('Normalized toroidal flux s')
 plt.savefig(OUTDIR+'iota_profile.png', dpi=500)
 from simsopt.field.magneticfieldclasses import InterpolatedField
+from simsopt.geo import SurfaceClassifier
 
+sc_fieldline = SurfaceClassifier(s, h=0.02, p=2)
 
 def skip(rs, phis, zs):
     # Reused function from examples/1_Simple/fieldline_tracing_QA.py
@@ -146,10 +148,6 @@ bsh = InterpolatedField(
     Bfield, degree, rrange, phirange, zrange, True, nfp=s.nfp, stellsym=s.stellsym, skip=skip
 )
 bsh.set_points(s.gamma().reshape((-1, 3)))
-from simsopt.field.tracing import compute_fieldlines, \
-    plot_poincare_data, \
-    SurfaceClassifier, \
-    LevelsetStoppingCriterion
 from simsopt.util import proc0_print
 
 phis = [(i / 4) * (2 * np.pi / s.nfp) for i in range(4)]
@@ -158,7 +156,6 @@ print(R0, Z0)
 
 t1 = time.time()
 # compute the fieldlines from the initial locations specified above
-# sc_fieldline = SurfaceClassifier(s, h=0.02, p=2)
 
 # fieldlines_tys, fieldlines_phi_hits = compute_fieldlines(
 #     bsh, R0, Z0, tmax=tmax_fl, tol=1e-10, comm=comm,
