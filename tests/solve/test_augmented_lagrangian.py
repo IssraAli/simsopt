@@ -73,7 +73,7 @@ class ALTests(unittest.TestCase):
         c1 = MockConstraint(dofs, offset=1.0)
         lag_mul = np.array([0.5])
         mu = 2.0
-        val = al.augmented_lagrangian_objective(dofs, f, [c1], lag_mul, mu, option='least-squares')
+        val = al.augmented_lagrangian_objective(dofs, f, [c1], lag_mul, mu)
         # L = 0.5 * ||f(x)||^2 + 0.5 * ||-lag_mul/sqrt(mu) + sqrt(mu)*g(x)||^2
         fx = np.sum(dofs ** 2)
         gx = np.sum(dofs) + 1.0
@@ -114,7 +114,7 @@ class ALTests(unittest.TestCase):
         c1 = MockConstraint(dofs, offset=1.0)
         lag_mul = np.array([0.5])
         mu = 2.0
-        grad = al.grad_augmented_lagrangian(dofs, f, [c1], lag_mul, mu, option='least-squares')
+        grad = al.grad_augmented_lagrangian(dofs, f, [c1], lag_mul, mu)
         grad_f = 2 * dofs
         grad_g = np.ones_like(dofs)
         fx = np.sum(dofs ** 2)
@@ -152,25 +152,23 @@ class ALTests(unittest.TestCase):
         MAXITERs = [50, 200]
         argmin_tols = [1e-3, 1e-8]
         MAXITER_lags = [10, 20]  # 5 is too few at low res
-        lagrangian_forms = [None, 'least-squares']
         for mu_init in mu_inits:
             for grad_tol in grad_tols:
                 for c_tol in c_tols:
                     for MAXITER in MAXITERs:
                         for argmin_tol in argmin_tols:
                             for MAXITER_lag in MAXITER_lags:
-                                for lagrangian_form in lagrangian_forms:
-                                    print(f"Testing: mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}, lagrangian_form={lagrangian_form}")
-                                    f = SimpleObjective(x0)
-                                    c = EqualityConstraint(x0)
-                                    x_opt, final_L, lag_mul = al.augmented_lagrangian_method(
-                                        f, [c], mu_init=mu_init, grad_tol=grad_tol, c_tol=c_tol, MAXITER=MAXITER, 
-                                        argmin_tol=argmin_tol, MAXITER_lag=MAXITER_lag, lagrangian_form=lagrangian_form)
-                                    constraint_val = x_opt - 2.0
-                                    print('Equality:', x_opt)
-                                    assert np.allclose(x_opt, 2, atol=1e-2)
-                                    assert abs(constraint_val) < 1e-2
-                                    assert lag_mul.shape == (1,)
+                                print(f"Testing: mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}")
+                                f = SimpleObjective(x0)
+                                c = EqualityConstraint(x0)
+                                x_opt, final_L, lag_mul = al.augmented_lagrangian_method(
+                                    f, [c], mu_init=mu_init, grad_tol=grad_tol, c_tol=c_tol, MAXITER=MAXITER, 
+                                    argmin_tol=argmin_tol, MAXITER_lag=MAXITER_lag)
+                                constraint_val = x_opt - 2.0
+                                print('Equality:', x_opt)
+                                assert np.allclose(x_opt, 2, atol=1e-2)
+                                assert abs(constraint_val) < 1e-2
+                                assert lag_mul.shape == (1,)
 
     def test_augmented_lagrangian_method_coils(self):
         """
@@ -198,7 +196,6 @@ class ALTests(unittest.TestCase):
         MAXITERs = [10, 20]
         argmin_tols = [1e-4, 1e-8]
         MAXITER_lags = [5]
-        lagrangian_forms = [None, 'least-squares']
         FLUX_THRESHOLD = 1e-3
         LENGTH_TARGET = 17.4
         CC_THRESHOLD = 0.1
@@ -248,21 +245,19 @@ class ALTests(unittest.TestCase):
                             for MAXITER in MAXITERs:
                                 for argmin_tol in argmin_tols:
                                     for MAXITER_lag in MAXITER_lags:
-                                        for lagrangian_form in lagrangian_forms:
-                                            Jf.x = dofs_orig.copy()
-                                            print(f"Testing: nphi={nphi}, mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}, lagrangian_form={lagrangian_form}")
-                                            # Just check that the optimization runs without error for each parameter set
-                                            x, fnc, lag_mul = augmented_lagrangian_method(
-                                                equality_constraints=equality_constraints, mu_init=mu_init, grad_tol=grad_tol, c_tol=c_tol,
-                                                MAXITER=MAXITER, argmin_tol=argmin_tol, MAXITER_lag=MAXITER_lag,
-                                                lagrangian_form=lagrangian_form)
-                                            assert x is not None
-                                            assert Jf.J() < FLUX_THRESHOLD
-                                            assert Jccdist.J() < CC_THRESHOLD
-                                            assert Jcsdist.J() < CS_THRESHOLD
-                                            assert sum(Jcs).J() < CURVATURE_THRESHOLD
-                                            assert sum(Jls).J() < LENGTH_TARGET
-                                            assert Jlink.J() == 0
+                                        Jf.x = dofs_orig.copy()
+                                        print(f"Testing: nphi={nphi}, mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}")
+                                        # Just check that the optimization runs without error for each parameter set
+                                        x, fnc, lag_mul = augmented_lagrangian_method(
+                                            equality_constraints=equality_constraints, mu_init=mu_init, grad_tol=grad_tol, c_tol=c_tol,
+                                            MAXITER=MAXITER, argmin_tol=argmin_tol, MAXITER_lag=MAXITER_lag)
+                                        assert x is not None
+                                        assert Jf.J() < FLUX_THRESHOLD
+                                        assert Jccdist.J() < CC_THRESHOLD
+                                        assert Jcsdist.J() < CS_THRESHOLD
+                                        assert sum(Jcs).J() < CURVATURE_THRESHOLD
+                                        assert sum(Jls).J() < LENGTH_TARGET
+                                        assert Jlink.J() == 0
 
 
     def test_augmented_lagrangian_method_coils_scan(self):

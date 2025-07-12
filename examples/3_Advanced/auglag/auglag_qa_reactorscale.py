@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 auglag_alan.py
 ===============

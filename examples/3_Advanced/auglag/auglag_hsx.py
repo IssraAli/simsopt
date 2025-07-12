@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-auglag_alan.py
+auglag_hsx.py
 ===============
 
 This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM). The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
