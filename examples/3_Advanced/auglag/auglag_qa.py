@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 auglag_alan.py
 ===============
@@ -33,27 +34,22 @@ import os
 from simsopt.objectives import SquaredFlux
 from simsopt.objectives import QuadraticPenalty
 from simsopt.geo import SurfaceRZFourier
-from simsopt.geo import create_equally_spaced_curves
 from simsopt.geo import LinkingNumber
 from simsopt.geo import CurveLength, CurveCurveDistance, \
     LpCurveCurvature, CurveSurfaceDistance, MeanSquaredCurvature
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, coils_to_vtk
 from simsopt.field.force import LpCurveForce, coil_force
-from simsopt.field import Current, coils_via_symmetries
+from simsopt.field import regularization_circ
 from pathlib import Path
-from simsopt.util import calculate_modB_on_major_radius
+from simsopt.util import calculate_modB_on_major_radius, initialize_coils_simple
 import time
-
-# Define the output directory   
-OUT_DIR = "./output/"
-os.makedirs(OUT_DIR, exist_ok=True)
 
 # Define the test directory
 TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
 
 # Define the filename
-filename = TEST_DIR / 'input.LandremanPaul2021_QA_lowres'
+filename = TEST_DIR / 'input.LandremanPaul2021_QA_reactorscale_lowres'
 
 # Define the number of phi and theta points
 nphi = 32
@@ -77,49 +73,45 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta)
 
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 30 # 25 for pareto front plots
+LENGTH_TARGET = 160 # 25 for pareto front plots
 # LENGTH_TARGET = 5
 FLUX_THRESHOLD = 1e-15
-CC_THRESHOLD = 0.083
-CS_THRESHOLD = 0.15
-MSC_THRESHOLD = 6 
-CURVATURE_THRESHOLD = 12
-FORCE_THRESHOLD = 0.009  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
+CC_THRESHOLD = 1.0
+CS_THRESHOLD = 1.5
+MSC_THRESHOLD = 0.05
+CURVATURE_THRESHOLD = 0.5
+# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
+# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
+# FORCE_THRESHOLD = 1e6
+# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
+FORCE_THRESHOLD = 1.1e2
 
 # Define the number of coils, rotation order, and non-planar base curves
-R0 = s.x[0]
-R1 = 0.7 * s.x[0]
-order = 16
-ncoils = 5
-curves = create_equally_spaced_curves(
-    ncoils, s.nfp, stellsym=s.stellsym, R0=R0, R1=R1, order=order, numquadpoints=128)
-
-total_current = 3e5
-# Since we know the total sum of currents, we only optimize for ncoils-1
-# currents, and then pick the last one so that they all add up to the correct
-# value.
-base_currents = [Current(total_current / ncoils * 1e-5) * 1e5 for _ in range(ncoils-1)]
-# Above, the factors of 1e-5 and 1e5 are included so the current
-# degrees of freedom are O(1) rather than ~ MA.  The optimization
-# algorithm may not perform well if the dofs are scaled badly.
-total_current = Current(total_current)
-total_current.fix_all()
-base_currents += [total_current - sum(base_currents)]
-
-
-base_curves = curves[:ncoils]
-coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
+# R0 = s.x[0]
+# R1 = 0.7 * s.x[0]
+# order = 20
+# ncoils = 4
+ncoils = 3
+coils = initialize_coils_simple(s, ncoils=ncoils)
+a = 0.3  # radius of the coil
+for coil in coils:
+    coil.regularization = regularization_circ(a)
 base_coils = coils[:ncoils]
 curves = [c.curve for c in coils]
+base_curves = curves[:ncoils]
 currents = [c.current for c in coils]
 print("Number of coils:", len(coils))
+
+# Define the output directory   
+OUT_DIR = f"./output_ncoils{ncoils}_lengthtarget{LENGTH_TARGET}_fluxthreshold{FLUX_THRESHOLD}_ccthreshold{CC_THRESHOLD}_csthreshold{CS_THRESHOLD}_mscthreshold{MSC_THRESHOLD}_curvaturethreshold{CURVATURE_THRESHOLD}_forcethreshold{FORCE_THRESHOLD}/"
+os.makedirs(OUT_DIR, exist_ok=True)
 
 # Save the biot-savart field data
 bs = BiotSavart(coils)
 curves = [c.curve for c in coils]
 coils_to_vtk(coils, OUT_DIR + "curves_init")
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
-calculate_modB_on_major_radius(bs, s_plot)
+calculate_modB_on_major_radius(bs, s_plot, print_flag=True)
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
 
 pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
@@ -189,8 +181,8 @@ start_time = time.time()
 
 x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     equality_constraints=c_list,
-    tau=5, #4 for 14, 5 for 12, 5 for 11, 5 for 10, 6 for 9.5, 5 for 9
-    MAXITER=2000, #1500 for all results except for 9.5 and 9
+    tau=10, #4 for 14, 5 for 12, 5 for 11, 5 for 10, 6 for 9.5, 5 for 9
+    MAXITER=1000, #1500 for all results except for 9.5 and 9
     MAXITER_lag=50,
     grad_tol=1e-8,
     c_tol=1e-8,
@@ -216,7 +208,7 @@ print("Forces:")
 print(",".join(f"{f:.2e}" for f in force))
 coils_to_vtk(coils, OUT_DIR + "optimized_coils_auglag")
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
-calculate_modB_on_major_radius(bs, s_plot)
+calculate_modB_on_major_radius(bs, s_plot, print_flag=True)
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
 
 pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
@@ -238,3 +230,4 @@ print("FINAL LAGRANGE MULTIPLIERS:", lag_mul)
 print("--------------------------------------------------------------------------------------------------------------------------------------------")
 print("Final NORMALIZED SQUARED FLUX:", Jf.J())
 print('FINISHED OPTIMIZATION')
+print("Output directory:", OUT_DIR)

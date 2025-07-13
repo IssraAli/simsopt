@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 auglag_alan.py
 ===============
@@ -33,46 +34,29 @@ import os
 from simsopt.objectives import SquaredFlux
 from simsopt.objectives import QuadraticPenalty
 from simsopt.geo import SurfaceRZFourier
-from simsopt.geo import create_equally_spaced_curves
 from simsopt.geo import LinkingNumber
 from simsopt.geo import CurveLength, CurveCurveDistance, \
     LpCurveCurvature, CurveSurfaceDistance, MeanSquaredCurvature
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, coils_to_vtk
 from simsopt.field.force import LpCurveForce, coil_force
-from simsopt.field import Current, coils_via_symmetries
+from simsopt.field import regularization_circ
 from pathlib import Path
+from simsopt.util import calculate_modB_on_major_radius, initialize_coils_simple
 import time
-
-ncoils_choice = 6
-# Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 13.4/6*ncoils_choice #5*35.56 for wiedman comically large length upper bound
-FLUX_THRESHOLD = 1e-15
-CC_THRESHOLD = 0.08 #1.1 for wiedman
-CS_THRESHOLD = 0.12 #1.6 for wiedman
-CURVATURE_THRESHOLD = 12.34 #0.88 for wiedman
-MSC_THRESHOLD = 45.07 #0.08 for wiedman
-
-FORCE_THRESHOLD = 10 # units of MN/m
-
-# Define the output directory   
-OUT_DIR = (f"./output_paper/hsx_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" + \
-           f"force{FORCE_THRESHOLD}_flux{FLUX_THRESHOLD}_length{LENGTH_TARGET}_" + \
-           f"cc{CC_THRESHOLD}_cs{CS_THRESHOLD}/")
-os.makedirs(OUT_DIR, exist_ok=True)
 
 # Define the test directory
 TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
 
 # Define the filename
+filename = TEST_DIR / 'input.LandremanPaul2021_QA_reactorscale_lowres'
 
-filename = TEST_DIR / 'wout_HSX.nc' #'input.QHS_mn1824_ns101' #'input.HSX_QHS_vacuum_ns201'
 # Define the number of phi and theta points
-nphi = 128
-ntheta = 128
+nphi = 32
+ntheta = 32
 
 # Define the surface
-s = SurfaceRZFourier.from_wout(
+s = SurfaceRZFourier.from_vmec_input(
     filename,
     range="half period",
     nphi=nphi,
@@ -82,91 +66,76 @@ qphi = 4 * nphi
 qtheta = 4 * ntheta
 quadpoints_phi = np.linspace(0, 1, qphi)
 quadpoints_theta = np.linspace(0, 1, qtheta)
-s_plot = SurfaceRZFourier.from_wout(
+s_plot = SurfaceRZFourier.from_vmec_input(
     filename,
     range="full torus",
     quadpoints_phi=quadpoints_phi,
     quadpoints_theta=quadpoints_theta)
 
+# Define the upper and lower bounds for the constraints
+LENGTH_TARGET = 160 # 25 for pareto front plots
+# LENGTH_TARGET = 5
+FLUX_THRESHOLD = 1e-15
+CC_THRESHOLD = 1.0
+CS_THRESHOLD = 1.5
+MSC_THRESHOLD = 0.05
+CURVATURE_THRESHOLD = 0.5
+# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
+# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
+# FORCE_THRESHOLD = 1e6
+# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
+FORCE_THRESHOLD = 1.1e2
+
 # Define the number of coils, rotation order, and non-planar base curves
-ncoils = ncoils_choice
-
-def hsx_coils(s, ncoils=3, order=8):
-    from simsopt.geo import create_equally_spaced_curves
-    from simsopt.field import Current
-
-    # parameters for the TF coils, increase order for a better solution
-    # Total current scaled to give B ~ 5.7 T on axis (actually averaged over the major radius)
-    R0 = s.get_rc(0, 0) * 1
-    R1 = s.get_rc(1, 0) * 4
- 
-    total_current = sum([1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05])
-    print('Total current = ', total_current)
-
-    # Create the initial coils
-    base_curves = create_equally_spaced_curves(
-        ncoils, s.nfp, stellsym=True,
-        R0=R0, R1=R1, order=order, numquadpoints=256,
-    ) 
-    
-    base_currents = [(Current(total_current / ncoils * 1e-5) * 1e5) for _ in range(ncoils - 1)]
-    total_current = Current(total_current)
-    total_current.fix_all()
-    base_currents += [total_current - sum(base_currents)]
-    coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)
-    curves = [c.curve for c in coils]
-    return base_curves, curves, coils, base_currents
-
-base_curves, curves, coils, base_currents = hsx_coils(s, ncoils=ncoils, order=10)
-# Above, the factors of 1e-5 and 1e5 are included so the current
-# degrees of freedom are O(1) rather than ~ MA.  The optimization
-# algorithm may not perform well if the dofs are scaled badly.
-
-
+# R0 = s.x[0]
+# R1 = 0.7 * s.x[0]
+# order = 20
+# ncoils = 4
+ncoils = 3
+coils = initialize_coils_simple(s, ncoils=ncoils)
+a = 0.3  # radius of the coil
+for coil in coils:
+    coil.regularization = regularization_circ(a)
 base_coils = coils[:ncoils]
+curves = [c.curve for c in coils]
+base_curves = curves[:ncoils]
 currents = [c.current for c in coils]
 print("Number of coils:", len(coils))
+
+# Define the output directory   
+OUT_DIR = f"./output_ncoils{ncoils}_lengthtarget{LENGTH_TARGET}_fluxthreshold{FLUX_THRESHOLD}_ccthreshold{CC_THRESHOLD}_csthreshold{CS_THRESHOLD}_mscthreshold{MSC_THRESHOLD}_curvaturethreshold{CURVATURE_THRESHOLD}_forcethreshold{FORCE_THRESHOLD}/"
+os.makedirs(OUT_DIR, exist_ok=True)
 
 # Save the biot-savart field data
 bs = BiotSavart(coils)
 curves = [c.curve for c in coils]
-coils_to_vtk(coils, OUT_DIR + "curves_init_hsx")
+coils_to_vtk(coils, OUT_DIR + "curves_init")
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
+calculate_modB_on_major_radius(bs, s_plot, print_flag=True)
+bs.set_points(s_plot.gamma().reshape((-1, 3))) 
+
 pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                                s_plot.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((qphi, qtheta, 1)),
              "modB": bs.AbsB().reshape((qphi, qtheta, 1))}
 s_plot.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
 
+
 # Define the individual terms objective function:
 bs.set_points(s.gamma().reshape((-1, 3)))
-Jf = SquaredFlux(s, bs, definition="normalized", threshold=FLUX_THRESHOLD)
+Jf = SquaredFlux(s, bs, definition="normalized", threshold=FLUX_THRESHOLD) #definition="normalized"
 Jls = [CurveLength(c) for c in base_curves]
 Jl = sum(QuadraticPenalty(jj, LENGTH_TARGET, "max") for jj in Jls)
+
 Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
 Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
 Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
-Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
 Jlink = LinkingNumber(curves, downsample=2)
 Jforce = LpCurveForce(base_coils, coils, p=2.0, threshold=FORCE_THRESHOLD)
+Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
 
 force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in base_coils]
 print("Forces:")
-print(",".join(f"{f:.2e}" for f in force))
-
-# Main optimization function
-f = None
-
-# Constraint list
-c_list = [ Jf,
-        Jccdist, 
-        Jcsdist, 
-        QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
-        sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs),
-        sum(Jcs), 
-        Jlink,
-        #   Jforce
-]
-
+print(",".join(f"{f:.2e}" for f in force)) 
 print('Initial normalized flux:', Jf.J())
 print('Initial CS-Sep constraint:', Jcsdist.J())
 print('Initial CS-sep minimum distance:', Jcsdist.shortest_distance())
@@ -176,19 +145,50 @@ print('Initial Len constraint:', Jl.J())
 print('Initial Curv constraint:', sum(Jcs).J())
 print('Initial Link constraint:', Jlink.J())
 print('Initial Max Curvatures:', [np.max(c.kappa()) for c in base_curves])
+print('Initial Max MSC Curvatures:', [float(J.J()) for J in Jmscs])
 print('Initial Lengths:', [CurveLength(c).J() for c in base_curves], sum(Jls).J())
+print('Initial Force constraint:', Jforce.J())
+# Main optimization function
+f = None
+
+# Constraint list
+c_list = [ Jf,
+        Jccdist, 
+        Jcsdist, 
+        #    Jl,
+        sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs),
+        QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
+        sum(Jcs), 
+        Jlink,
+        Jforce
+]
 
 start_time = time.time()
+
+# For the 25m Long coils Pareto front, the parameters for optimization were:
+#       tau: 2    
+#       MAXITER: 1500
+#       MAXITER_lag: 50
+#       grad_tol: 1e-8
+#       c_tol: 1e-8
+# For the 30m Long coils Pareto front, the parameters for optimization were:
+#       tau: 4, 5 and 6 (4 for 14 kN/m, 5 for 12, 11 and 9 kN/m, 6 for 9.5 kN/m)
+#       MAXITER: 1500 and 2000 (2000 for 9.5 kN/m)
+#       grad_tol: 1e-8
+#       c_tol: 1e-8
+## The pareto front for 30m long coils seemed to be much more sensitive to the tau parameter than the 25. 
+# between 1500 and 2000 MAXITER doesn't actually affect the optimization. 
+
 x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     equality_constraints=c_list,
-    tau=4,
-    MAXITER=1500,
-    MAXITER_lag=30,
+    tau=10, #4 for 14, 5 for 12, 5 for 11, 5 for 10, 6 for 9.5, 5 for 9
+    MAXITER=1000, #1500 for all results except for 9.5 and 9
+    MAXITER_lag=50,
     grad_tol=1e-8,
     c_tol=1e-8,
 )
 
-bs.save(OUT_DIR + "biot_savart_hsx.json")
+bs.save(OUT_DIR + "biot_savart_same_setup.json")
 end_time = time.time()
 print(f"Time taken: {end_time - start_time} seconds")
 print('Final normalized flux:', Jf.J())
@@ -200,21 +200,24 @@ print('Final Len constraint:', Jl.J())
 print('Final Curv constraint:', sum(Jcs).J())
 print('Final Link constraint:', Jlink.J())
 print('Final Max Curvatures:', [np.max(c.kappa()) for c in base_curves])
+print('Final Max MSC Curvatures:', [float(J.J()) for J in Jmscs])
 print('Final Lengths:', [CurveLength(c).J() for c in base_curves], sum(Jls).J())
-print('Final Mean Squared Curvature', [MeanSquaredCurvature(c).J() for c in base_curves])
-# print('Final Force constraint:', Jforce.J())
+print('Final Force constraint:', Jforce.J())
 force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in base_coils]
 print("Forces:")
 print(",".join(f"{f:.2e}" for f in force))
-coils_to_vtk(coils, OUT_DIR + "optimized_coils_auglag_hsx")
+coils_to_vtk(coils, OUT_DIR + "optimized_coils_auglag")
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
+calculate_modB_on_major_radius(bs, s_plot, print_flag=True)
+bs.set_points(s_plot.gamma().reshape((-1, 3))) 
+
 pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None],
         "B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None] /
         bs.AbsB().reshape((qphi, qtheta, 1)),
         "modB": bs.AbsB().reshape((qphi, qtheta, 1))}
-s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag_hsx", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag", extra_data=pointData)
 max_BdotN_overB = np.max(np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None] /
         bs.AbsB().reshape((qphi, qtheta, 1)))
@@ -227,3 +230,4 @@ print("FINAL LAGRANGE MULTIPLIERS:", lag_mul)
 print("--------------------------------------------------------------------------------------------------------------------------------------------")
 print("Final NORMALIZED SQUARED FLUX:", Jf.J())
 print('FINISHED OPTIMIZATION')
+print("Output directory:", OUT_DIR)

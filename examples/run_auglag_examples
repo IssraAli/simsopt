@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# This script runs non-MPI examples. This script is used by the Github
+# Actions continuous integration.
+set -ex
+
+./3_Advanced/auglag/auglag_qa.py
+./3_Advanced/auglag/auglag_qa_reactorscale.py
+./3_Advanced/auglag/auglag_qh.py
+./3_Advanced/auglag/auglag_hsx.py
+./3_Advanced/auglag/auglag_w7x.py
