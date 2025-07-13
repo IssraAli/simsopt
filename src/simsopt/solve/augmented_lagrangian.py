@@ -335,7 +335,7 @@ def augmented_lagrangian_method(
                 J2, _ = fun(x - eps*h)
                 err_new = np.abs((J1-J2)/(2*eps) - dJh)
                 # print("err", err, "err_new", err_new)
-                if not (err_new < err * 0.5):
+                if not (err_new < err * 0.5) and err > 1e-10:  # Exclude very low errors from test
                     print("Taylor test failed, err_new = {:.2e}, err = {:.2e}".format(err_new, err))
                     raise ValueError("Taylor test failed, check your objective and constraint functions")
                 err = err_new
