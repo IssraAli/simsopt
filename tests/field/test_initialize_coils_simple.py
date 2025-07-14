@@ -9,7 +9,7 @@ import glob
 from pathlib import Path
 from simsopt.geo import SurfaceRZFourier
 from simsopt.util import initialize_coils_simple
-from simsopt.util.permanent_magnet_helper_functions import calculate_modB_on_major_radius
+from simsopt.util import calculate_modB_on_major_radius
 from simsopt.field import BiotSavart
 
 def get_curve_order(curve):

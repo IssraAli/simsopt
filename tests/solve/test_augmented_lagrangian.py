@@ -7,6 +7,7 @@ import numpy as np
 import unittest
 from simsopt.solve import augmented_lagrangian as al
 from monty.tempfile import ScratchDir
+from simsopt.field import regularization_circ
 
 class MockObjective:
     def __init__(self, x):
@@ -137,7 +138,7 @@ class ALTests(unittest.TestCase):
         """
         from pathlib import Path
         from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
-        from simsopt.field import BiotSavart, Current, coils_via_symmetries
+        from simsopt.field import BiotSavart, Current, coils_via_symmetries, regularization_circ
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty
         from simsopt.geo import CurveSurfaceDistance, LpCurveCurvature, CurveCurveDistance
@@ -183,7 +184,8 @@ class ALTests(unittest.TestCase):
                 base_currents = [Current(1e5) for i in range(ncoils)]
                 base_currents[0].fix_all()
                 base_curves = curves[:ncoils]
-                coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
+                regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+                coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym, regularizations=regularizations)
                 curves = [c.curve for c in coils]
                 bs = BiotSavart(coils)
                 curves_to_vtk(curves, OUT_DIR + "curves_init")
@@ -229,7 +231,7 @@ class ALTests(unittest.TestCase):
         """
         from pathlib import Path
         from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
-        from simsopt.field import BiotSavart, Current, coils_via_symmetries, LpCurveForce, LpCurveTorque
+        from simsopt.field import BiotSavart, Current, coils_via_symmetries, LpCurveForce, LpCurveTorque, regularization_circ
         from simsopt.field.force import coil_force, coil_torque
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty
@@ -271,7 +273,8 @@ class ALTests(unittest.TestCase):
             base_currents = [Current(1e5) for i in range(ncoils)]
             base_currents[0].fix_all()
             base_curves = curves[:ncoils]
-            coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
+            regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+            coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym, regularizations=regularizations)
             curves = [c.curve for c in coils]
             base_coils = coils[:ncoils]
             bs = BiotSavart(coils)

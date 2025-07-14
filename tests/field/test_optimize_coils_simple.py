@@ -9,7 +9,7 @@ import glob
 import json
 from pathlib import Path
 from simsopt.geo import SurfaceRZFourier
-from simsopt.util.permanent_magnet_helper_functions import optimize_coils_simple
+from simsopt.util import optimize_coils_simple
 
 def test_optimize_coils_simple():
     """Test the optimize_coils_simple function with all input files."""
