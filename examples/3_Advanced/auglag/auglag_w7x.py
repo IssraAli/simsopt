@@ -1,5 +1,63 @@
 #!/usr/bin/env python
 r"""
+w7x_run.py
+===============
+
+This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM) for the W7-X Stellarator.
+The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
+
+Main Features:
+--------------
+- Reads a VMEC equilibrium file to define the target magnetic surface.
+- Initializes a set of non-planar coils with configurable symmetry and Fourier order.
+- Defines an objective function based on the squared normal magnetic field (squared flux) on the target surface.
+- Adds constraints and penalties for engineering requirements such as coil length, coil-to-coil distance, coil-to-surface distance, and curvature.
+- Implements the Augmented Lagrangian optimization loop, updating Lagrange multipliers and penalty parameters.
+- Outputs VTK files for visualization of the surface and coil shapes at various stages.
+
+Usage:
+------
+- Configure the optimization parameters and constraints in the script.
+- Run the script directly to perform optimization using the Augmented Lagrangian or traditional method.
+- Output files are saved in the './output/' directory for post-processing and visualization.
+
+Dependencies:
+-------------
+- simsopt
+- numpy
+- scipy
+- matplotlib
+
+In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
+1) 4 coils solution (#1)
+    ncoils_choice : 4
+    LENGTH_TARGET = 38
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.28
+    CS_THRESHOLD = 0.3 
+    CURVATURE_THRESHOLD = 2.5
+    MSC_THRESHOLD = 1.5
+    FORCE_THRESHOLD = 3.8 # units of MN/m
+
+2) 5 coils solution (#2)
+    ncoils_choice : 5
+    LENGTH_TARGET = 45
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.28
+    CS_THRESHOLD = 0.3 
+    CURVATURE_THRESHOLD = 2
+    MSC_THRESHOLD = 1.5
+    FORCE_THRESHOLD = 3.0 # units of MN/m
+
+3) 5 coils solution (#3)
+    ncoils_choice : 5
+    LENGTH_TARGET = 43
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.28
+    CS_THRESHOLD = 0.3
+    CURVATURE_THRESHOLD = 2
+    MSC_THRESHOLD = 1.5
+    FORCE_THRESHOLD = 3.5 # units of MN/m
 """
 
 import os
@@ -40,22 +98,8 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 # File for the desired boundary magnetic surface:
 TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
-input_name = 'input.W7-X_without_coil_ripple_beta0p05_d23p4_tm' #'input.W7-X_standard_configuration' 
+input_name = 'input.W7-X_without_coil_ripple_beta0p05_d23p4_tm'
 filename = TEST_DIR / input_name
-
-
-
-# Virtual casing must not have been run yet.
-# print('Running the virtual casing calculation')
-# # Resolution for the virtual casing calculation:
-# vc_src_nphi = 160
-# nphi = 64
-# ntheta = 64
-# vc = VirtualCasing.from_vmec(
-#     input_name,
-#     src_nphi=vc_src_nphi, src_ntheta=vc_src_nphi,
-#     trgt_nphi=nphi, trgt_ntheta=ntheta,
-# )
 
 
 # Initialize the boundary magnetic surface:
@@ -76,12 +120,6 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta
 )
 
-# wire cross section for the TF coils is unclear for W7X
-# Only need this if make self forces and B2Energy nonzero in the objective!
-a = 0.32
-b = 0.32
-#nturns_TF = 256
-#FORCE_THRESHOLD *= nturns_TF
 
 from simsopt.configs.zoo import get_w7x_data
 curves_orig, currents_orig, _ = get_w7x_data(Nt_coils = 30, ppp=40)
@@ -99,7 +137,6 @@ Bn = np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)
 absB = np.linalg.norm(bs.B().reshape(nphi, ntheta, 3), axis=-1)
 pointData = {"B_N": Bn[:, :, None],
              "B_N / B": (Bn / absB)[:, :, None],
-            #  "B_N_VC": vc.B_external_normal[:, :, None],
             }
 s.to_vtk(OUT_DIR + "s_original", extra_data=pointData)
 Jf = SquaredFlux(s, bs, definition="normalized")
@@ -111,7 +148,6 @@ Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves_TF]
 Jlink = LinkingNumber(curves_TF, downsample=2)
 Jmscs = [MeanSquaredCurvature(c) for c in base_curves_TF]
 Jforce = LpCurveForce(base_coils_TF, coils_orig, p=2.0)
-B2Energy_obj = B2Energy(coils_orig)
 print('Initial normalized flux:', Jf.J())
 print('Initial CS-sep minimum distance:', Jcsdist.shortest_distance())
 print('Initial CC-sep minimum distance:', Jccdist.shortest_distance())
@@ -210,7 +246,6 @@ c_list = [Jf,
           sum(Jcs), 
           Jlink,
           Jforce
-        #   B2Energy_obj
 ]
 
 start_time = time.time()

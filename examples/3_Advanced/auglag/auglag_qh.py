@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-auglag_alan.py
+auglag_qh.py
 ===============
 
-This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM). The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
+This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM) for the Landreman&Paul QH Stellarator. The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
 
 Main Features:
 --------------
@@ -26,6 +26,27 @@ Dependencies:
 - numpy
 - scipy
 - matplotlib
+
+In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
+1) 4 coils solution (#1)
+    ncoils : 4
+    LENGTH_TARGET = 4*40 
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.8 
+    CS_THRESHOLD = 1
+    CURVATURE_THRESHOLD = 1 
+    MSC_THRESHOLD = 0.1
+    FORCE_THRESHOLD = 10 # units of MN/m
+
+2) 5 coils solution (#2)
+    ncoils_choice : 6
+    LENGTH_TARGET = 5*35.56 
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 1.1 
+    CS_THRESHOLD = 1.6
+    CURVATURE_THRESHOLD = 0.88 
+    MSC_THRESHOLD = 0.08
+    FORCE_THRESHOLD = 10 # units of MN/m
 
 """
 
@@ -54,8 +75,6 @@ TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
 
 # Define the filename
 
-# filename = '/home/gipe/NeutronCoils/test_folder/pedro_WIP/Configurations/input.20231208_v2'
-
 filename = TEST_DIR / 'input.LandremanPaul2021_QH_reactorScale_lowres'
 # Define the number of phi and theta points
 nphi = 200
@@ -79,12 +98,12 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta)
 
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 4*40 #5*35.56 for wiedman comically large length upper bound
+LENGTH_TARGET = 4*40
 FLUX_THRESHOLD = 1e-15
-CC_THRESHOLD = 0.8 #1.1 for wiedman
-CS_THRESHOLD = 1 #1.6 for wiedman
-CURVATURE_THRESHOLD = 1 #0.88 for wiedman
-MSC_THRESHOLD = 0.1 #0.08 for wiedman
+CC_THRESHOLD = 0.8
+CS_THRESHOLD = 1 
+CURVATURE_THRESHOLD = 1 
+MSC_THRESHOLD = 0.1 
 
 FORCE_THRESHOLD = 10 # units of MN/m
 
@@ -98,12 +117,6 @@ curves = create_equally_spaced_curves(
 total_current = 45642162
 base_currents = [Current(total_current / ncoils * 1e-7) * 1e7 for _ in range(ncoils)]
 base_currents[0].fix_all
-# Above, the factors of 1e-5 and 1e5 are included so the current
-# degrees of freedom are O(1) rather than ~ MA.  The optimization
-# algorithm may not perform well if the dofs are scaled badly.
-# total_current = Current(total_current)
-# total_current.fix_all()
-# base_currents += [total_current - sum(base_currents)]
 
 base_curves = curves[:ncoils]
 coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)

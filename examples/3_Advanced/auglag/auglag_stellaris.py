@@ -1,5 +1,54 @@
 #!/usr/bin/env python
 r"""
+stellaris_run.py
+===============
+
+This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM) for the Stellaris Stellarator.
+The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
+
+Main Features:
+--------------
+- Reads a VMEC equilibrium file to define the target magnetic surface.
+- Initializes a set of non-planar coils with configurable symmetry and Fourier order.
+- Defines an objective function based on the squared normal magnetic field (squared flux) on the target surface.
+- Adds constraints and penalties for engineering requirements such as coil length, coil-to-coil distance, coil-to-surface distance, and curvature.
+- Implements the Augmented Lagrangian optimization loop, updating Lagrange multipliers and penalty parameters.
+- Outputs VTK files for visualization of the surface and coil shapes at various stages.
+
+Usage:
+------
+- Configure the optimization parameters and constraints in the script.
+- Run the script directly to perform optimization using the Augmented Lagrangian or traditional method.
+- Output files are saved in the './output/' directory for post-processing and visualization.
+
+Dependencies:
+-------------
+- simsopt
+- numpy
+- scipy
+- matplotlib
+
+In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
+1) 5 coils solution (#1)
+    ncoils_choice : 5
+    LENGTH_TARGET = 130
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.8
+    CS_THRESHOLD = 1.38
+    CURVATURE_THRESHOLD = 1.573
+    MSC_THRESHOLD = 0.3
+    FORCE_THRESHOLD = 0.75 # units of MN/m
+
+2) 6 coils solution (#2)
+    ncoils_choice : 6
+    LENGTH_TARGET = 145
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.7
+    CS_THRESHOLD = 1.3
+    CURVATURE_THRESHOLD = 1.6
+    MSC_THRESHOLD = 0.35
+    FORCE_THRESHOLD = 0.5 # units of MN/m
+
 """
 
 import os
@@ -45,20 +94,6 @@ input_name = 'input.stellaris'
 filename = TEST_DIR / input_name
 
 
-
-# Virtual casing must not have been run yet.
-# print('Running the virtual casing calculation')
-# # Resolution for the virtual casing calculation:
-# vc_src_nphi = 160
-# nphi = 64
-# ntheta = 64
-# vc = VirtualCasing.from_vmec(
-#     input_name,
-#     src_nphi=vc_src_nphi, src_ntheta=vc_src_nphi,
-#     trgt_nphi=nphi, trgt_ntheta=ntheta,
-# )
-
-
 # Initialize the boundary magnetic surface:
 range_param = "half period"
 nphi = 32
@@ -90,11 +125,6 @@ print(coils_orig[0].curve)
 for c in coils_orig:
     c.regularization = regularization_rect(a, b)
 ncoils = 6
-# base_currents_TF = [c.current for c in coils_orig[:ncoils]]
-# base_coils_TF = coils_orig[:ncoils]
-# base_curves_TF = [c.curve for c in base_coils_TF]
-# coils_orig = coils_via_symmetries(base_curves_TF, base_currents_TF, s.nfp, True)
-# print(len(coils_orig))
 print([c.current.get_value() for c in coils_orig])
 curves_TF = [c.curve for c in coils_orig]
 base_curves_TF = curves_TF[:ncoils]
@@ -105,7 +135,6 @@ Bn = np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)
 absB = np.linalg.norm(bs.B().reshape(nphi, ntheta, 3), axis=-1)
 pointData = {"B_N": Bn[:, :, None],
              "B_N / B": (Bn / absB)[:, :, None],
-            #  "B_N_VC": vc.B_external_normal[:, :, None],
             }
 s.to_vtk(OUT_DIR + "s_original", extra_data=pointData)
 Jf = SquaredFlux(s, bs, definition="normalized")
@@ -125,7 +154,6 @@ print('Initial Link constraint:', Jlink.J())
 print('Initial Max Curvatures:', [np.max(c.kappa()) for c in base_curves_TF])
 print('Initial Mean Squared Curvature', [MeanSquaredCurvature(c).J() for c in base_curves_TF])
 print('Initial Lengths:', [CurveLength(c).J() for c in base_curves_TF], sum(Jls).J())
-# print('Initial Force:', Jforce.J())
 
 coils_to_vtk(coils_orig, OUT_DIR + "coils_original")
 calculate_modB_on_major_radius(bs, s)
@@ -241,8 +269,7 @@ print('Final Max Curvatures:', [np.max(c.kappa()) for c in base_curves_TF])
 print('Final Lengths:', [CurveLength(c).J() for c in base_curves_TF], sum(Jls).J())
 print('Final Force constraint:', Jforce.J())
 
-# res = minimize(fun, dofs, jac=True, method='L-BFGS-B',
-#                options={'maxiter': MAXITER, 'maxcor': 500}, tol=1e-10)
+
 coils_to_vtk(coils_TF, OUT_DIR + "coils_optimized")
 
 btot.set_points(s_plot.gamma().reshape((-1, 3)))

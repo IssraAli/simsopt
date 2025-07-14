@@ -13,7 +13,14 @@ from simsopt.geo import (
 from simsopt import load
 
 
-OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QH_total_length_4coils_setup/'
+OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QA_total_length_30_force_threshold14kNm/'
+OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/w7x_ncoils5_curvature2_force3_flux1e-15_length45_cc0.28_cs0.3/'
+OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/w7x_ncoils5_curvature2_force3.8_flux1e-15_length43_cc0.28_cs0.3/'
+OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/hsx_ncoils5_curvature12_force0.12_flux1e-15_length12.083333333333332_cc0.1_cs0.14/'
+OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/hsx_ncoils6_curvature8_force10_flux1e-15_length13.4_cc0.1_cs0.1/'
+OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QA_total_length_force_threshold12kNm/'
+
+# OUTDIR = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/hsx/'
 mpi = MpiPartition(ngroups=8)
 comm = comm_world
 print(
@@ -21,8 +28,8 @@ print(
     'the configuration name (QA, QH, QASH, CSX) and assumes that the biotsavart.json '
     'file containing the coil solution is in the passive_coils_<config_name> directory.'
 )
-nphi = 128 #256
-ntheta = 128 #256
+nphi = 256 #256
+ntheta = 256 #256
 quadpoints_phi = np.linspace(0, 1, nphi, endpoint=True)
 quadpoints_theta = np.linspace(0, 1, ntheta, endpoint=True)
 TEST_DIR = (Path(__file__).parent / ".." / ".." / ".." / "tests" / "test_files").resolve()
@@ -31,15 +38,35 @@ tmax_fl = 10000
 Z0 = np.zeros(nfieldlines)
 aa = 0.06
 if str(sys.argv[1]) == 'QA':
-    input_name = 'input.LandremanPaul2021_QA_lowres'
-    R0 = np.linspace(12.25*0.098749, 13.2*0.098749, nfieldlines)
+    input_name = 'input.LandremanPaul2021_QA_lowres' #'input.LandremanPaul2021_QA_reactorScale_lowres' #'input.LandremanPaul2021_QA_lowres'
+    R0 = np.linspace(12.25, 13.2, nfieldlines) #0.098749
+    # coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QA_total_length_force_threshold12kNm/biot_savart_total_length.json'
+    # coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QA_total_length_30_force_threshold14kNm/biot_savart_qa_scaled_aries.json'
     coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QA_total_length_force_threshold12kNm/biot_savart_total_length.json'
 elif str(sys.argv[1]) == 'QH':
     input_name = 'input.LandremanPaul2021_QH_reactorScale_lowres'
     R0 = np.linspace(16.9, 17.8, nfieldlines)
     coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QH_total_length_4coils_setup/biot_savart_qh.json'
     # coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/LP_QH_total_length_5coils_setup/biot_savart_qh.json'
-filename = TEST_DIR / input_name
+
+elif str(sys.argv[1]) == 'w7x':
+    input_name = 'input.W7-X_without_coil_ripple_beta0p05_d23p4_tm'
+    # coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/w7x_ncoils4_curvature2.5_force3.8_flux1e-15_length38_cc0.28_cs0.3/biot_savart_optimized.json'
+    # coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/w7x_ncoils5_curvature2_force3_flux1e-15_length45_cc0.28_cs0.3/biot_savart_optimized.json'
+    coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/w7x_ncoils5_curvature2_force3.8_flux1e-15_length43_cc0.28_cs0.3/biot_savart_optimized.json'
+
+elif str(sys.argv[1]) == 'hsx':
+    input_name = 'input.QHS_mn1824_ns101'
+    # from simsopt.configs.zoo import get_hsx_data
+    # from simsopt.field import BiotSavart
+    # from simsopt.field import coils_via_symmetries
+    # curves, currents, _ = get_hsx_data(Nt_coils = 16, ppp=40)
+    # coils = coils_via_symmetries(curves, currents, nfp = 4, stellsym = True)
+    # Bfield = BiotSavart(coils)
+    # coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/hsx_ncoils4_curvature10_force10_flux1e-15_length10.0_cc0.1_cs0.14/biot_savart_hsx.json'
+    # coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/hsx_ncoils5_curvature12_force0.12_flux1e-15_length12.083333333333332_cc0.1_cs0.14/biot_savart_hsx.json'
+    coilname = '/home/gipe/auglag/simsopt/examples/3_Advanced/auglag/output_paper/hsx_ncoils6_curvature8_force10_flux1e-15_length13.4_cc0.1_cs0.1/biot_savart_hsx.json'
+filename = TEST_DIR / input_name 
 Bfield = load(coilname)
 coils = Bfield.coils
 s = SurfaceRZFourier.from_vmec_input(filename, quadpoints_phi=quadpoints_phi, quadpoints_theta=quadpoints_theta)
@@ -63,6 +90,21 @@ print(BdotN, BdotN_over_B)
 qfm_surf = make_qfm(s, Bfield)
 qfm_surf = qfm_surf.surface
 
+# Configure quasisymmetry objective:
+if str(sys.argv[1]) == 'QH' or str(sys.argv[1]) == 'hsx':
+    helicity_n = -1    
+    if str(sys.argv[1]) == 'hsx':
+        ns = 101
+    else:
+        ns = 48
+elif str(sys.argv[1]) == 'w7x':
+    helicity_n = 0
+    ns = 201
+
+elif str(sys.argv[1]) == 'QA':
+    helicity_n = 0
+    ns = 75 #50
+
 # VMEC does NOT like the CSX plasma because it's very compact
 # Also probably should be including the plasma current contributions
 # Although Antoine Baillod has had the same issues.
@@ -71,15 +113,11 @@ equil = Vmec(vmec_input, mpi)
 equil.boundary = qfm_surf
 equil.run()
 
-# Configure quasisymmetry objective:
-if str(sys.argv[1]) == 'QH':
-    helicity_n = -1
-else:
-    helicity_n = 0
 
 qs = QuasisymmetryRatioResidual(equil,
-                                np.arange(0, 1.01, 1.01/48),  # Radii to target
+                                np.arange(0, 1.01, 1.01/ns),  # Radii to target
                                 helicity_m=1, helicity_n=helicity_n)  # (M, N) you want in |B|
+
 proc0_print("Quasisymmetry objective:", qs.total())
 proc0_print("Quasisymmetry objective profile:", qs.profile())
 
@@ -92,17 +130,17 @@ b2.read_wout(equil.output_file)
 b2.run()
 
 ## PLOT BOOZER (QFM AND TARGET)
-plt.figure(1)
-plt.rcParams["font.family"] = "Times New Roman"
-plt.rc("font", size=15)
-bx.surfplot(b2, js = 48, fill=False)
-plt.tight_layout()
-plt.savefig(OUTDIR+"Boozer_VMEC.png", dpi=500)
-
 plt.figure(2)
 plt.rcParams["font.family"] = "Times New Roman"
 plt.rc("font", size=15)
-plt.plot(np.arange(0, 1.01, 1.01/48), qs.profile())
+bx.surfplot(b2, js = ns-2, fill=False)
+plt.tight_layout()
+plt.savefig(OUTDIR+"Boozer_VMEC.png", dpi=500)
+
+plt.figure(3)
+plt.rcParams["font.family"] = "Times New Roman"
+plt.rc("font", size=15)
+plt.plot(np.arange(0, 1.01, 1.01/ns), qs.profile())
 plt.xlabel('Normalized toroidal flux')
 plt.ylabel('Two-term quasisymmetry error')
 plt.savefig(OUTDIR+"QS_profile.png", dpi=500)
@@ -150,9 +188,9 @@ bsh = InterpolatedField(
 bsh.set_points(s.gamma().reshape((-1, 3)))
 from simsopt.util import proc0_print
 
-phis = [(i / 4) * (2 * np.pi / s.nfp) for i in range(4)]
-print(rrange, zrange, phirange)
-print(R0, Z0)
+# phis = [(i / 4) * (2 * np.pi / s.nfp) for i in range(4)]
+# print(rrange, zrange, phirange)
+# print(R0, Z0)
 
 t1 = time.time()
 # compute the fieldlines from the initial locations specified above

@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 """
-auglag_hsx.py
+hsx_run.py
 ===============
 
-This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM). The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
+This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM) for the HSX Stellarator.
+The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
 
 Main Features:
 --------------
@@ -27,6 +28,37 @@ Dependencies:
 - scipy
 - matplotlib
 
+In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
+1) 4 coils solution
+    ncoils : 4
+    LENGTH_TARGET = 14.5/6*ncoils_choice 
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.1
+    CS_THRESHOLD = 0.14 
+    CURVATURE_THRESHOLD = 10
+    MSC_THRESHOLD = 25
+    (no force active)
+
+2) 5 coils solution
+    ncoils : 5
+    LENGTH_TARGET = 14.5/6*ncoils_choice 
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.1
+    CS_THRESHOLD = 0.14 
+    CURVATURE_THRESHOLD = 12
+    MSC_THRESHOLD = 30
+    FORCE_THRESHOLD = 0.12 # units of MN/m
+
+3) 6 coils solution
+    ncoils : 6
+    LENGTH_TARGET = 14.5/6*ncoils_choice 
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 0.1
+    CS_THRESHOLD = 0.14 
+    CURVATURE_THRESHOLD = 8
+    MSC_THRESHOLD = 30
+    (no force active)
+
 """
 
 import numpy as np
@@ -35,7 +67,7 @@ from simsopt.objectives import SquaredFlux
 from simsopt.objectives import QuadraticPenalty
 from simsopt.geo import SurfaceRZFourier
 from simsopt.geo import create_equally_spaced_curves
-from simsopt.geo import LinkingNumber
+from simsopt.geo import LinkingNumber, curves_to_vtk
 from simsopt.geo import CurveLength, CurveCurveDistance, \
     LpCurveCurvature, CurveSurfaceDistance, MeanSquaredCurvature
 from simsopt.solve import augmented_lagrangian_method
@@ -45,16 +77,16 @@ from simsopt.field import Current, coils_via_symmetries
 from pathlib import Path
 import time
 
-ncoils_choice = 6
+ncoils_choice = 5
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 13.4/6*ncoils_choice #5*35.56 for wiedman comically large length upper bound
+LENGTH_TARGET = 14.5/6*ncoils_choice # 15 worked
 FLUX_THRESHOLD = 1e-15
-CC_THRESHOLD = 0.08 #1.1 for wiedman
-CS_THRESHOLD = 0.12 #1.6 for wiedman
-CURVATURE_THRESHOLD = 12.34 #0.88 for wiedman
-MSC_THRESHOLD = 45.07 #0.08 for wiedman
+CC_THRESHOLD = 0.1 #
+CS_THRESHOLD = 0.14 #0.2 worked
+CURVATURE_THRESHOLD = 12 #12.34 with 0.8 worked for 6 coils
+MSC_THRESHOLD = 30 #45.07 with 20 worked for 6 coils
 
-FORCE_THRESHOLD = 10 # units of MN/m
+FORCE_THRESHOLD = 0.12 # units of MN/m
 
 # Define the output directory   
 OUT_DIR = (f"./output_paper/hsx_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" + \
@@ -67,13 +99,13 @@ TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
 
 # Define the filename
 
-filename = TEST_DIR / 'wout_HSX.nc' #'input.QHS_mn1824_ns101' #'input.HSX_QHS_vacuum_ns201'
+filename = TEST_DIR / 'input.QHS_mn1824_ns101' #'input.HSX_QHS_vacuum_ns201''input.hsxt'  
 # Define the number of phi and theta points
-nphi = 128
-ntheta = 128
+nphi = 64
+ntheta = 64
 
 # Define the surface
-s = SurfaceRZFourier.from_wout(
+s = SurfaceRZFourier.from_vmec_input(
     filename,
     range="half period",
     nphi=nphi,
@@ -83,7 +115,7 @@ qphi = 4 * nphi
 qtheta = 4 * ntheta
 quadpoints_phi = np.linspace(0, 1, qphi)
 quadpoints_theta = np.linspace(0, 1, qtheta)
-s_plot = SurfaceRZFourier.from_wout(
+s_plot = SurfaceRZFourier.from_vmec_input(
     filename,
     range="full torus",
     quadpoints_phi=quadpoints_phi,
@@ -97,7 +129,7 @@ def hsx_coils(s, ncoils=3, order=8):
     # parameters for the TF coils, increase order for a better solution
     # Total current scaled to give B ~ 5.7 T on axis (actually averaged over the major radius)
     R0 = s.get_rc(0, 0) * 1
-    R1 = s.get_rc(1, 0) * 4
+    R1 = s.get_rc(1, 0) * 2.5
  
     total_current = sum([1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05, 1.500725500000000e+05])
     print('Total current = ', total_current)
@@ -116,7 +148,7 @@ def hsx_coils(s, ncoils=3, order=8):
     curves = [c.curve for c in coils]
     return base_curves, curves, coils, base_currents
 
-base_curves, curves, coils, base_currents = hsx_coils(s, ncoils=ncoils, order=10)
+base_curves, curves, coils, base_currents = hsx_coils(s, ncoils=ncoils, order=7)
 # Above, the factors of 1e-5 and 1e5 are included so the current
 # degrees of freedom are O(1) rather than ~ MA.  The optimization
 # algorithm may not perform well if the dofs are scaled badly.
@@ -163,7 +195,7 @@ c_list = [ Jf,
         sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs),
         sum(Jcs), 
         Jlink,
-        #   Jforce
+        Jforce
 ]
 
 print('Initial normalized flux:', Jf.J())
@@ -180,9 +212,9 @@ print('Initial Lengths:', [CurveLength(c).J() for c in base_curves], sum(Jls).J(
 start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     equality_constraints=c_list,
-    tau=4,
+    tau=6, #6 worked with cc 0.1 and cs 0.1 and l 15
     MAXITER=1500,
-    MAXITER_lag=30,
+    MAXITER_lag=50,
     grad_tol=1e-8,
     c_tol=1e-8,
 )
