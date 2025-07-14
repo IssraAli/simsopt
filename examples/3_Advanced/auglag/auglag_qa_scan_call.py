@@ -1,23 +1,16 @@
+#!/usr/bin/env python
 """
-auglag_qa_scan.py
+auglag_qa_scan_call.py
 ===============
 
 This script performs coil optimization for stellarator devices using the Augmented
 Lagrangian Method (ALM). This version has been modified to accept command-line
 arguments for key parameters to facilitate automated scanning.
 
-Main Features:
---------------
-- Reads a VMEC equilibrium file to define the target magnetic surface.
-- Initializes a set of non-planar coils.
-- Defines an objective function based on the squared normal magnetic field on the target surface.
-- Adds constraints for coil length, coil-to-coil distance, coil-to-surface distance, and curvature.
-- Implements the Augmented Lagrangian optimization loop.
-- Outputs VTK files for visualization.
-
 Usage (for scanning):
 ---------------------
 python auglag_qa_scan.py --cs_threshold [VALUE] --length_target [VALUE] --out_dir [DIRECTORY]
+
 """
 import json
 import numpy as np
@@ -34,7 +27,8 @@ from simsopt.geo import (
     MeanSquaredCurvature
 )
 from simsopt.solve import augmented_lagrangian_method
-from simsopt.field import BiotSavart, Current, coils_to_vtk, coils_via_symmetries
+from simsopt.util import in_github_actions
+from simsopt.field import BiotSavart, Current, coils_to_vtk, coils_via_symmetries, regularization_circ
 
 def parse_arguments():
     """
@@ -87,9 +81,18 @@ def main():
     # Define the filename
     filename = TEST_DIR / 'input.LandremanPaul2021_QA_lowres'
 
-    # Define the number of phi and theta points
-    nphi = 32
-    ntheta = 32
+    # Set some parameters -- warning this is super low resolution!
+    if in_github_actions:
+        nphi = 4
+        ntheta = 4
+        MAXITER = 10
+        MAXITER_lag = 5
+    else:
+        # Define the number of phi and theta points
+        nphi = 32
+        ntheta = 32
+        MAXITER = 50  # 1500 for high-resolution
+        MAXITER_lag = 10  # 50 for high-resolution
 
     # Define the surface
     s = SurfaceRZFourier.from_vmec_input(
@@ -131,7 +134,9 @@ def main():
 
 
     base_curves = curves[:ncoils]
-    coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
+    a = 0.05
+    regularizations = [regularization_circ(a) for _ in range(ncoils)]
+    coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym, regularizations=regularizations)
     curves = [c.curve for c in coils]
 
     print("Number of coils:", len(coils))
@@ -183,8 +188,8 @@ def main():
     _ = augmented_lagrangian_method(f=f,
         equality_constraints=c_list,
         tau=4,
-        MAXITER=1500,
-        MAXITER_lag=30,
+        MAXITER=MAXITER,
+        MAXITER_lag=MAXITER_lag,
         grad_tol=1e-10,
         c_tol=1e-10,
     )

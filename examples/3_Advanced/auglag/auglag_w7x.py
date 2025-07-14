@@ -1,32 +1,9 @@
 #!/usr/bin/env python
 r"""
-w7x_run.py
+auglag_w7x.py
 ===============
-
-This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM) for the W7-X Stellarator.
-The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
-
-Main Features:
---------------
-- Reads a VMEC equilibrium file to define the target magnetic surface.
-- Initializes a set of non-planar coils with configurable symmetry and Fourier order.
-- Defines an objective function based on the squared normal magnetic field (squared flux) on the target surface.
-- Adds constraints and penalties for engineering requirements such as coil length, coil-to-coil distance, coil-to-surface distance, and curvature.
-- Implements the Augmented Lagrangian optimization loop, updating Lagrange multipliers and penalty parameters.
-- Outputs VTK files for visualization of the surface and coil shapes at various stages.
-
-Usage:
-------
-- Configure the optimization parameters and constraints in the script.
-- Run the script directly to perform optimization using the Augmented Lagrangian or traditional method.
-- Output files are saved in the './output/' directory for post-processing and visualization.
-
-Dependencies:
--------------
-- simsopt
-- numpy
-- scipy
-- matplotlib
+This script performs coil optimization for the W7-X coil design 
+using the Augmented Lagrangian Method (ALM).
 
 In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
 1) 4 coils solution (#1)
@@ -66,7 +43,7 @@ import time
 import numpy as np
 from simsopt.field import BiotSavart
 from simsopt.field import coils_to_vtk
-from simsopt.field import coils_via_symmetries
+from simsopt.field import coils_via_symmetries, regularization_circ
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field.force import LpCurveForce, B2Energy
 from simsopt.util import calculate_modB_on_major_radius
@@ -76,6 +53,21 @@ from simsopt.geo import (
     SurfaceRZFourier, MeanSquaredCurvature
 )
 from simsopt.objectives import SquaredFlux, QuadraticPenalty
+from simsopt.util import in_github_actions
+
+# Set some parameters -- warning this is super low resolution!
+if in_github_actions:
+    nphi = 4
+    ntheta = 4
+    MAXITER = 10
+    MAXITER_lag = 5
+else:
+    # Define the number of phi and theta points
+    nphi = 32
+    ntheta = 32
+    MAXITER = 50  # 1000 for high-resolution
+    MAXITER_lag = 10  # 40 for high-resolution
+
 # from simsopt.mhd import VirtualCasing
 
 CC_THRESHOLD = 0.28 #initially with 1.0 
@@ -88,7 +80,6 @@ CURVATURE_THRESHOLD = 2.5 #2 for the 5 coil solutions
 MSC_THRESHOLD = 1.5 # for the 5 coil solutions
 
 t1 = time.time()
-MAXITER = 1000
 
 # Directory for output
 OUT_DIR = (f"./output_paper/w7x_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" + \
@@ -104,8 +95,6 @@ filename = TEST_DIR / input_name
 
 # Initialize the boundary magnetic surface:
 range_param = "half period"
-nphi = 32
-ntheta = 32
 s = SurfaceRZFourier.from_vmec_input(filename, range=range_param, nphi=nphi, ntheta=ntheta)
 
 qphi = nphi * 2
@@ -123,9 +112,10 @@ s_plot = SurfaceRZFourier.from_vmec_input(
 
 from simsopt.configs.zoo import get_w7x_data
 curves_orig, currents_orig, _ = get_w7x_data(Nt_coils = 30, ppp=40)
-coils_orig = coils_via_symmetries(curves_orig, currents_orig, nfp = 5, stellsym = True)
-
 ncoils = 5
+a = 0.15
+regularizations = [regularization_circ(a) for _ in range(ncoils)]
+coils_orig = coils_via_symmetries(curves_orig, currents_orig, nfp=5, stellsym=True, regularizations=regularizations)
 
 print([c.current.get_value() for c in coils_orig])
 curves_TF = [c.curve for c in coils_orig]
@@ -158,7 +148,7 @@ print('Initial Lengths:', [CurveLength(c).J() for c in base_curves_TF], sum(Jls)
 # print('Initial Force:', Jforce.J())
 
 coils_to_vtk(coils_orig, OUT_DIR + "coils_original")
-calculate_modB_on_major_radius(bs, s, print_flag=True)
+calculate_modB_on_major_radius(bs, s)
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
 pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2)[:, :, None],
              "B_N / B": (np.sum(bs.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2
@@ -191,7 +181,8 @@ def w7x_coils(s, ncoils=3, order=8):
     total_current = Current(total_current)
     total_current.fix_all()
     base_currents += [total_current - sum(base_currents)]
-    coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)
+    regularizations = [regularization_circ(a) for _ in range(ncoils)]
+    coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True, regularizations=regularizations)
     curves = [c.curve for c in coils]
     return base_curves, curves, coils, base_currents
 
@@ -205,7 +196,7 @@ base_coils_TF = coils_TF[:ncoils]
 # # Calculate average, approximate on-axis B field strength
 bs = BiotSavart(coils_TF)
 btot = bs
-calculate_modB_on_major_radius(btot, s, print_flag=True)
+calculate_modB_on_major_radius(btot, s)
 btot.set_points(s.gamma().reshape((-1, 3)))
 
 btot.set_points(s_plot.gamma().reshape((-1, 3)))
@@ -218,8 +209,6 @@ btot.set_points(s.gamma().reshape((-1, 3)))
 # Currently, all force terms involve all the coils
 all_coils = coils_TF
 all_base_coils = base_coils_TF
-#for c in all_coils:
-#    c.regularization = regularization_rect(a, b)
 
 # Define the individual terms objective function:
 bs.set_points(s.gamma().reshape((-1, 3)))
@@ -251,14 +240,11 @@ c_list = [Jf,
 start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(
     equality_constraints=c_list,
-    tau = 5,
+    tau=5,
     MAXITER=MAXITER,
-    MAXITER_lag=40
+    MAXITER_lag=MAXITER_lag
 )
-
 end_time = time.time()
-
-
 
 print(f"Time taken: {end_time - start_time} seconds")
 print('Final normalized flux:', Jf.J())
@@ -272,9 +258,6 @@ print('Final Link constraint:', Jlink.J())
 print('Final Max Curvatures:', [np.max(c.kappa()) for c in base_curves_TF])
 print('Final Lengths:', [CurveLength(c).J() for c in base_curves_TF], sum(Jls).J())
 print('Final Force constraint:', Jforce.J())
-
-# res = minimize(fun, dofs, jac=True, method='L-BFGS-B',
-#                options={'maxiter': MAXITER, 'maxcor': 500}, tol=1e-10)
 coils_to_vtk(coils_TF, OUT_DIR + "coils_optimized")
 
 btot.set_points(s_plot.gamma().reshape((-1, 3)))

@@ -39,13 +39,11 @@ from simsopt.geo import create_equally_spaced_curves
 from simsopt.geo import LinkingNumber
 from simsopt.geo import CurveLength, CurveCurveDistance, \
     LpCurveCurvature, CurveSurfaceDistance, MeanSquaredCurvature
-from simsopt.solve import augmented_lagrangian_method
-from simsopt.field import BiotSavart, coils_to_vtk
+from simsopt.field import BiotSavart
 from simsopt.field.force import LpCurveForce, regularization_circ, coil_force
 from simsopt.field import Current, coils_via_symmetries
 from pathlib import Path
 from simsopt.util import calculate_modB_on_major_radius
-import time
 from simsopt import load
 
 def read_wechsung_coils(filename,s,ncoils, outdir):

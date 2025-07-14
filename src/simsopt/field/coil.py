@@ -498,7 +498,7 @@ def coils_via_symmetries(curves, currents, nfp, stellsym, regularizations=None):
     return coils
 
 
-def load_coils_from_makegrid_file(filename, order, ppp=20, group_names=None):
+def load_coils_from_makegrid_file(filename, order, ppp=20, group_names=None, regularizations=None):
     """
     Load coils from a mgrid input file, returning a list of Coil objects.
 
@@ -547,7 +547,10 @@ def load_coils_from_makegrid_file(filename, order, ppp=20, group_names=None):
                     currents.append(curr)
 
     curves = CurveXYZFourier.load_curves_from_makegrid_file(filename, order=order, ppp=ppp, group_names=group_names)
-    coils = [Coil(curves[i], Current(currents[i])) for i in range(len(curves))]
+    if regularizations is None:
+        coils = [Coil(curves[i], Current(currents[i])) for i in range(len(curves))]
+    else:
+        coils = [RegularizedCoil(curves[i], Current(currents[i]), regularizations[i]) for i in range(len(curves))]
 
     return coils
 

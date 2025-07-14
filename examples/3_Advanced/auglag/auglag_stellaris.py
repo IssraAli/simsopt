@@ -1,32 +1,10 @@
 #!/usr/bin/env python
 r"""
-stellaris_run.py
+auglag_stellaris.py
 ===============
 
-This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM) for the Stellaris Stellarator.
-The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
-
-Main Features:
---------------
-- Reads a VMEC equilibrium file to define the target magnetic surface.
-- Initializes a set of non-planar coils with configurable symmetry and Fourier order.
-- Defines an objective function based on the squared normal magnetic field (squared flux) on the target surface.
-- Adds constraints and penalties for engineering requirements such as coil length, coil-to-coil distance, coil-to-surface distance, and curvature.
-- Implements the Augmented Lagrangian optimization loop, updating Lagrange multipliers and penalty parameters.
-- Outputs VTK files for visualization of the surface and coil shapes at various stages.
-
-Usage:
-------
-- Configure the optimization parameters and constraints in the script.
-- Run the script directly to perform optimization using the Augmented Lagrangian or traditional method.
-- Output files are saved in the './output/' directory for post-processing and visualization.
-
-Dependencies:
--------------
-- simsopt
-- numpy
-- scipy
-- matplotlib
+This script performs coil optimization for the Stellaris SQUID design from Proxima Fusion 
+(plasma boundary available from Jorrit Lion upon request) using the Augmented Lagrangian Method (ALM).
 
 In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
 1) 5 coils solution (#1)
@@ -76,14 +54,15 @@ LENGTH_TARGET = 145 # initially with 138
 FORCE_THRESHOLD = 0.5  # units of MN/m
 FLUX_THRESHOLD = 1e-15 # initially with 1e-6
 ncoils_choice = 6
-CURVATURE_THRESHOLD =1.6 #1.573 for the 5 coil solution 1.573 * (ncoils_choice / 6.0) ** 2
+CURVATURE_THRESHOLD = 1.6 #1.573 for the 5 coil solution 1.573 * (ncoils_choice / 6.0) ** 2
 MSC_THRESHOLD = 0.35 # not present initially, set to 0.3 for the 5 coil solution
 
 t1 = time.time()
-MAXITER = 800
+MAXITER = 100  # 800 for high-resolution
+MAXITER_lag = 20  # 40 for high-resolution
 
 # Directory for output
-OUT_DIR = (f"./stellaris_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" + \
+OUT_DIR = (f"./output_paper/stellaris_ncoils{ncoils_choice}_curvature{CURVATURE_THRESHOLD}_" + \
            f"force{FORCE_THRESHOLD}_flux{FLUX_THRESHOLD}_length{LENGTH_TARGET}_" + \
            f"cc{CC_THRESHOLD}_cs{CS_THRESHOLD}/")
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -117,14 +96,13 @@ s_plot = SurfaceRZFourier.from_vmec_input(
 a = 0.32
 b = 0.32
 nturns_TF = 256
+ncoils = 6
 FORCE_THRESHOLD *= nturns_TF
-
-coils_orig = load_coils_from_makegrid_file(TEST_DIR / 'coils.stellaris', order=30, ppp=40)
+regularizations = [regularization_rect(a, b) for _ in range(ncoils * s.nfp * (1 + s.stellsym))]
+coils_orig = load_coils_from_makegrid_file(TEST_DIR / 'coils.stellaris', order=30, ppp=40, 
+                                           regularizations=regularizations)
 print(len(coils_orig))
 print(coils_orig[0].curve)
-for c in coils_orig:
-    c.regularization = regularization_rect(a, b)
-ncoils = 6
 print([c.current.get_value() for c in coils_orig])
 curves_TF = [c.curve for c in coils_orig]
 base_curves_TF = curves_TF[:ncoils]
@@ -185,14 +163,16 @@ def stellaris_coils(s, ncoils=3, order=8):
     total_current = Current(total_current)
     total_current.fix_all()
     base_currents += [total_current - sum(base_currents)]
-    coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)
+    regularizations = [regularization_rect(a, b) for _ in range(ncoils)]
+    coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True, regularizations=regularizations)
     curves = [c.curve for c in coils]
     return base_curves, curves, coils, base_currents
 
 
 ncoils = ncoils_choice
 base_curves_TF, curves_TF, coils_TF, currents_TF = stellaris_coils(
-    s, ncoils=ncoils, order=16)
+    s, ncoils=ncoils, order=16
+)
 ncoils = len(base_curves_TF)
 base_curves_TF = curves_TF[:ncoils]
 base_coils_TF = coils_TF[:ncoils]
@@ -249,7 +229,7 @@ x, fnc, lag_mul = augmented_lagrangian_method(
     equality_constraints=c_list,
     tau = 3,
     MAXITER=MAXITER,
-    MAXITER_lag=40
+    MAXITER_lag=MAXITER_lag
 )
 
 end_time = time.time()

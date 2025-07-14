@@ -1,34 +1,31 @@
 #!/usr/bin/env python
 """
-auglag_alan.py
+auglag_qa_reactorscale.py
 ===============
+This script performs coil optimization for the reactor-scale Landreman-Paul 2021 precise QA configuration 
+using the Augmented Lagrangian Method (ALM).
 
-This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM). The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
+In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
+1) 3 coils solution
+    ncoils : 3
+    LENGTH_TARGET = 182.2
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 1.0
+    CS_THRESHOLD = 1.5
+    CURVATURE_THRESHOLD = 0.5
+    MSC_THRESHOLD = 0.05
+    FORCE_THRESHOLD = 1.1e2
 
-Main Features:
---------------
-- Reads a VMEC equilibrium file to define the target magnetic surface.
-- Initializes a set of non-planar coils with configurable symmetry and Fourier order.
-- Defines an objective function based on the squared normal magnetic field (squared flux) on the target surface.
-- Adds constraints and penalties for engineering requirements such as coil length, coil-to-coil distance, coil-to-surface distance, and curvature.
-- Implements the Augmented Lagrangian optimization loop, updating Lagrange multipliers and penalty parameters.
-- Outputs VTK files for visualization of the surface and coil shapes at various stages.
-
-Usage:
-------
-- Configure the optimization parameters and constraints in the script.
-- Run the script directly to perform optimization using the Augmented Lagrangian or traditional method.
-- Output files are saved in the './output/' directory for post-processing and visualization.
-
-Dependencies:
--------------
-- simsopt
-- numpy
-- scipy
-- matplotlib
-
+2) 4 coils solution
+    ncoils : 4
+    LENGTH_TARGET = 182.2
+    FLUX_THRESHOLD = 1e-15
+    CC_THRESHOLD = 1.0
+    CS_THRESHOLD = 1.5
+    CURVATURE_THRESHOLD = 0.5
+    MSC_THRESHOLD = 0.05
+    FORCE_THRESHOLD = 1.1e2
 """
-
 import numpy as np
 import os
 from simsopt.objectives import SquaredFlux
@@ -43,6 +40,7 @@ from simsopt.field.force import LpCurveForce, coil_force
 from simsopt.field import regularization_circ
 from pathlib import Path
 from simsopt.util import calculate_modB_on_major_radius, initialize_coils_simple
+from simsopt.util import in_github_actions
 import time
 
 # Define the test directory
@@ -51,9 +49,18 @@ TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
 # Define the filename
 filename = TEST_DIR / 'input.LandremanPaul2021_QA_reactorscale_lowres'
 
-# Define the number of phi and theta points
-nphi = 32
-ntheta = 32
+# Set some parameters -- warning this is super low resolution!
+if in_github_actions:
+    nphi = 4
+    ntheta = 4
+    MAXITER = 10
+    MAXITER_lag = 5
+else:
+    # Define the number of phi and theta points
+    nphi = 32
+    ntheta = 32
+    MAXITER = 1000  # 1000 for high-resolution
+    MAXITER_lag = 50  # 50 for high-resolution
 
 # Define the surface
 s = SurfaceRZFourier.from_vmec_input(
@@ -73,29 +80,18 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta)
 
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 160 # 25 for pareto front plots
-# LENGTH_TARGET = 5
+LENGTH_TARGET = 182.2  # 182.2 m is smallest of the Wechsung et al. 2021 coils
 FLUX_THRESHOLD = 1e-15
 CC_THRESHOLD = 1.0
 CS_THRESHOLD = 1.5
 MSC_THRESHOLD = 0.05
 CURVATURE_THRESHOLD = 0.5
-# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
-# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
-# FORCE_THRESHOLD = 1e6
-# FORCE_THRESHOLD = 1.1e2  # 9, 10, 10.5 and 12 units of MN/m for pareto front plots
-FORCE_THRESHOLD = 1.1e2
+FORCE_THRESHOLD = 1.1e2  # Stay within ~ 0.57 MN/m assuming 200 turns of coil
 
 # Define the number of coils, rotation order, and non-planar base curves
-# R0 = s.x[0]
-# R1 = 0.7 * s.x[0]
-# order = 20
-# ncoils = 4
 ncoils = 3
-coils = initialize_coils_simple(s, ncoils=ncoils)
-a = 0.3  # radius of the coil
-for coil in coils:
-    coil.regularization = regularization_circ(a)
+a = 0.15  # radius of the coil
+coils = initialize_coils_simple(s, ncoils=ncoils, regularization=regularization_circ(a))
 base_coils = coils[:ncoils]
 curves = [c.curve for c in coils]
 base_curves = curves[:ncoils]
@@ -111,7 +107,7 @@ bs = BiotSavart(coils)
 curves = [c.curve for c in coils]
 coils_to_vtk(coils, OUT_DIR + "curves_init")
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
-calculate_modB_on_major_radius(bs, s_plot, print_flag=True)
+calculate_modB_on_major_radius(bs, s_plot)
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
 
 pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
@@ -182,8 +178,8 @@ start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     equality_constraints=c_list,
     tau=10, #4 for 14, 5 for 12, 5 for 11, 5 for 10, 6 for 9.5, 5 for 9
-    MAXITER=1000, #1500 for all results except for 9.5 and 9
-    MAXITER_lag=50,
+    MAXITER=MAXITER, #1500 for all results except for 9.5 and 9
+    MAXITER_lag=MAXITER_lag,
     grad_tol=1e-8,
     c_tol=1e-8,
 )
@@ -208,7 +204,7 @@ print("Forces:")
 print(",".join(f"{f:.2e}" for f in force))
 coils_to_vtk(coils, OUT_DIR + "optimized_coils_auglag")
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
-calculate_modB_on_major_radius(bs, s_plot, print_flag=True)
+calculate_modB_on_major_radius(bs, s_plot)
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
 
 pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *

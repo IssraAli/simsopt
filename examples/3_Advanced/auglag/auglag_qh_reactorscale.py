@@ -1,31 +1,10 @@
 #!/usr/bin/env python
 """
-auglag_qh.py
+auglag_qh_reactorscale.py
 ===============
 
-This script performs coil optimization for stellarator devices using the Augmented Lagrangian Method (ALM) for the Landreman&Paul QH Stellarator. The optimization aims to design coil shapes that generate a target magnetic surface, subject to engineering and physics constraints. The script leverages the Simsopt library for geometry, field, and optimization routines.
-
-Main Features:
---------------
-- Reads a VMEC equilibrium file to define the target magnetic surface.
-- Initializes a set of non-planar coils with configurable symmetry and Fourier order.
-- Defines an objective function based on the squared normal magnetic field (squared flux) on the target surface.
-- Adds constraints and penalties for engineering requirements such as coil length, coil-to-coil distance, coil-to-surface distance, and curvature.
-- Implements the Augmented Lagrangian optimization loop, updating Lagrange multipliers and penalty parameters.
-- Outputs VTK files for visualization of the surface and coil shapes at various stages.
-
-Usage:
-------
-- Configure the optimization parameters and constraints in the script.
-- Run the script directly to perform optimization using the Augmented Lagrangian or traditional method.
-- Output files are saved in the './output/' directory for post-processing and visualization.
-
-Dependencies:
--------------
-- simsopt
-- numpy
-- scipy
-- matplotlib
+This script performs coil optimization for the reactor-scale Landreman-Paul 2021 precise QH configuration 
+using the Augmented Lagrangian Method (ALM).
 
 In order to reproduce the coilsets of the paper the following thresholds/parameters should be set:
 1) 4 coils solution (#1)
@@ -62,13 +41,10 @@ from simsopt.geo import CurveLength, CurveCurveDistance, \
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, coils_to_vtk
 from simsopt.field.force import LpCurveForce, coil_force
-from simsopt.field import Current, coils_via_symmetries
+from simsopt.field import Current, coils_via_symmetries, regularization_circ
 from pathlib import Path
+from simsopt.util import in_github_actions
 import time
-
-# Define the output directory   
-OUT_DIR = "./output/"
-os.makedirs(OUT_DIR, exist_ok=True)
 
 # Define the test directory
 TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
@@ -76,9 +52,19 @@ TEST_DIR = Path(__file__).parent / '../' / '../' / '../' / 'tests/test_files'
 # Define the filename
 
 filename = TEST_DIR / 'input.LandremanPaul2021_QH_reactorScale_lowres'
-# Define the number of phi and theta points
-nphi = 200
-ntheta = 32
+
+# Set some parameters -- warning this is super low resolution!
+if in_github_actions:
+    nphi = 4
+    ntheta = 4
+    MAXITER = 10
+    MAXITER_lag = 5
+else:
+    # Define the number of phi and theta points
+    nphi = 32
+    ntheta = 32
+    MAXITER = 50  # 1500 for high-resolution
+    MAXITER_lag = 10  # 30 for high-resolution
 
 # Define the surface
 s = SurfaceRZFourier.from_vmec_input(
@@ -87,6 +73,7 @@ s = SurfaceRZFourier.from_vmec_input(
     nphi=nphi,
     ntheta=ntheta)
 
+# Define a high-resolution, full-torus surface for plotting
 qphi = 4 * nphi
 qtheta = 4 * ntheta
 quadpoints_phi = np.linspace(0, 1, qphi)
@@ -98,13 +85,12 @@ s_plot = SurfaceRZFourier.from_vmec_input(
     quadpoints_theta=quadpoints_theta)
 
 # Define the upper and lower bounds for the constraints
-LENGTH_TARGET = 4*40
+LENGTH_TARGET = 4 * 40  # 4 coils, 40 m per coil
 FLUX_THRESHOLD = 1e-15
 CC_THRESHOLD = 0.8
 CS_THRESHOLD = 1 
 CURVATURE_THRESHOLD = 1 
 MSC_THRESHOLD = 0.1 
-
 FORCE_THRESHOLD = 10 # units of MN/m
 
 # Define the number of coils, rotation order, and non-planar base curves
@@ -118,8 +104,16 @@ total_current = 45642162
 base_currents = [Current(total_current / ncoils * 1e-7) * 1e7 for _ in range(ncoils)]
 base_currents[0].fix_all
 
+# Define the output directory   
+OUT_DIR = (f"./output_paper/qh_ncoils{ncoils}_curvature{CURVATURE_THRESHOLD}_msc{MSC_THRESHOLD}_" + \
+           f"force{FORCE_THRESHOLD}_flux{FLUX_THRESHOLD}_length{LENGTH_TARGET}_" + \
+           f"cc{CC_THRESHOLD}_cs{CS_THRESHOLD}/")
+os.makedirs(OUT_DIR, exist_ok=True)
+
 base_curves = curves[:ncoils]
-coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym)
+a = 0.15  # radius of the coil
+regularizations = [regularization_circ(a) for _ in range(ncoils)]
+coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym, regularizations=regularizations)
 base_coils = coils[:ncoils]
 curves = [c.curve for c in coils]
 currents = [c.current for c in coils]
@@ -180,8 +174,8 @@ start_time = time.time()
 x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     equality_constraints=c_list,
     tau=10,
-    MAXITER=1500,
-    MAXITER_lag=30,
+    MAXITER=MAXITER,
+    MAXITER_lag=MAXITER_lag,
     grad_tol=1e-8,
     c_tol=1e-8,
 )

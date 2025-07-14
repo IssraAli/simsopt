@@ -40,3 +40,9 @@ set -ex
 ./3_Advanced/coil_force_optimization/initiation.py SquaredMeanTorque
 ./3_Advanced/coil_force_optimization/initiation.py B2Energy
 ./3_Advanced/wireframe_gsco_multistep.py
+./3_Advanced/auglag/auglag_qa.py
+./3_Advanced/auglag/auglag_qh_reactorscale.py
+./3_Advanced/auglag/auglag_hsx.py
+./3_Advanced/auglag/auglag_w7x.py
+./3_Advanced/auglag/auglag_qa_scan.py --cs_threshold 0.2 --length_target 30 --out_dir . 
+./3_Advanced/auglag/auglag_qa_scan.py --cs_threshold 0.1 --length_target 25 

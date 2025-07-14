@@ -5,7 +5,8 @@ the permanent magnets functionality in the SIMSOPT code.
 __all__ = ['read_focus_coils', 'coil_optimization',
            'trace_fieldlines', 'make_qfm',
            'calculate_modB_on_major_radius',
-           'make_Bnormal_plots',
+           'make_Bnormal_plots', 'initialize_coils_simple',
+           'optimize_coils_simple'
            ]
 
 import numpy as np
@@ -1187,3 +1188,386 @@ def get_dfs(INPUT_DIR='./output/QA/B2Energy/', OUTPUT_DIR=None):
 
     ### Return statement
     return df, df_filtered, df_pareto
+
+
+def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, nturns=256, regularization=None):
+    """
+    Initializes four coils with order=16 and total current set to produce 
+    a target B-field on-axis. The coil centers and radii are scaled by 
+    the plasma surface major radius. The function iteratively adjusts the
+    total current until the field strength along the major radius averages
+    to the target value.
+
+    Args:
+        s: plasma boundary surface.
+        out_dir: Path or string for the output directory for saved files.
+        target_B: Target magnetic field strength in Tesla (default: 5.7).
+    Returns:
+        coils: List of Coil class objects.
+    """
+    from simsopt.geo import create_equally_spaced_curves
+    from simsopt.field import Current, coils_via_symmetries, BiotSavart
+    from simsopt.field.coil import coils_to_vtk
+    from simsopt.util.coil_optimization_helper_functions import calculate_modB_on_major_radius
+
+    out_dir = Path(out_dir)
+
+    if regularization is not None:
+        regularizations = [regularization for _ in range(ncoils)]
+    
+    # Get the major radius from the surface and scale coil parameters
+    R0 = s.get_rc(0, 0)  # Major radius
+    R1 = s.get_rc(1, 0) * 2.5  # Scale the minor radius component
+    
+    # Initial guess for total current (using QH configuration as reference)
+    total_current = 5e7  # 50 MA initial guess is not bad for reactor-scale
+    
+    # Create equally spaced curves with the specified parameters
+    base_curves = create_equally_spaced_curves(
+        ncoils, s.nfp, stellsym=True,
+        R0=R0, R1=R1, order=order, numquadpoints=256)
+    
+    # print(f"Target B-field: {target_B} T")
+    # print(f"Major radius: {R0:.3f} m")
+    # print(f"Minor radius component: {s.get_rc(1, 0):.3f} m")
+    # print(f"NFP: {s.nfp}")
+    
+    # Iterative current adjustment
+    max_iterations = 20
+    tolerance = 1e-2
+    for iteration in range(max_iterations):
+        # print(f"Iteration {iteration + 1}/{max_iterations}")
+        # print(f"  Current total current: {total_current:.0f} A")
+        
+        # Distribute current among coils
+        base_currents = [(Current(total_current / ncoils * 1e-7) * 1e7) for _ in range(ncoils - 1)]
+        total_current_obj = Current(total_current)
+        total_current_obj.fix_all()
+        base_currents += [total_current_obj - sum(base_currents)]
+        
+        # Create coils using symmetries
+        coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True, regularizations=regularizations)
+        
+        # Create BiotSavart object to evaluate field
+        bs = BiotSavart(coils)
+        
+        # Calculate field strength along major radius
+        B_avg = calculate_modB_on_major_radius(bs, s)
+        
+        # print(f"  Achieved B-field: {B_avg:.3f} T")
+        # print(f"  Difference: {B_avg - target_B:.3f} T")
+        
+        # Check convergence
+        if abs(B_avg - target_B) / target_B < tolerance:
+            # print(f"  ✓ Converged! B-field within {tolerance*100:.1f}% of target")
+            break
+        
+        # Adjust current based on field difference
+        # Use simple linear scaling: new_current = current * (target_B / achieved_B)
+        current_scale_factor = target_B / B_avg
+        total_current *= current_scale_factor
+        
+        # print(f"  New total current: {total_current:.0f} A")
+    
+    else:
+        print(f"  ⚠ Warning: Did not converge within {max_iterations} iterations")
+        print(f"  Final B-field: {B_avg:.3f} T (target: {target_B} T)")
+    
+    # Save final coils to VTK
+    coils_to_vtk(coils, out_dir / "coils_init", nturns=nturns)
+    
+    # print(f"Final configuration:")
+    
+    return coils
+
+
+def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_iter_lag=50, 
+                         ncoils=4, order=16, nphi=32, ntheta=32, verbose=False, **kwargs):
+    """
+    Performs complete coil optimization including initialization and optimization.
+    This function initializes coils with the target B-field and then optimizes
+    them using the augmented Lagrangian method.
+
+    Args:
+        s: plasma boundary surface.
+        target_B: Target magnetic field strength in Tesla (default: 5.7).
+        out_dir: Path or string for the output directory for saved files.
+        max_iterations: Maximum number of optimization iterations (default: 1500).
+        max_iter_lag: Maximum number of Lagrangian iterations (default: 50).
+        ncoils: Number of base coils to create (default: 4).
+        order: Fourier order for coil curves (default: 16).
+        nphi: Number of phi points for surface discretization (default: 32).
+        ntheta: Number of theta points for surface discretization (default: 32).
+        verbose: Print out progress and results (default: False).
+        **kwargs: Additional keyword arguments for constraint thresholds.
+    Returns:
+        coils: List of optimized Coil class objects.
+        results: Dictionary containing optimization results and metrics.
+    """
+    import numpy as np
+    import time
+    from pathlib import Path
+    from simsopt.geo import SurfaceRZFourier
+    from simsopt.geo import LinkingNumber, CurveLength, CurveCurveDistance
+    from simsopt.geo import LpCurveCurvature, CurveSurfaceDistance, MeanSquaredCurvature
+    from simsopt.objectives import SquaredFlux, QuadraticPenalty, Weight
+    from simsopt.solve import augmented_lagrangian_method
+    from simsopt.field import BiotSavart, coils_to_vtk
+    from simsopt.field.force import LpCurveForce, LpCurveTorque, coil_force
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Set default constraint thresholds if not provided
+    # Defaults here are reasonable for 10 m major radius
+    #  reactor-scale device with 5.7 T target B-field
+    length_target = kwargs.get('length_target', 210.0)
+    flux_threshold = kwargs.get('flux_threshold', 1e-8)
+    cc_threshold = kwargs.get('cc_threshold', 1.0)
+    cs_threshold = kwargs.get('cs_threshold', 1.5)
+    msc_threshold = kwargs.get('msc_threshold', 1.0)
+    curvature_threshold = kwargs.get('curvature_threshold', 1.0)
+
+    # 1 MN/m on each of an assumed 256 turns of the coil
+    nturns = kwargs.get('nturns', 256)
+    force_threshold = kwargs.get('force_threshold', 1.0) * nturns
+    torque_threshold = kwargs.get('torque_threshold', 1.0) * nturns
+
+    # Rescale all the length thresholds by the plasma major radius
+    # divided by the 10m assumption for the major radius
+    R0 = 10.0 / s.get_rc(0, 0)
+    length_target /= R0
+    length_target *= (ncoils / 7.0) ** 0.5
+    cc_threshold /= R0
+    cs_threshold /= R0 
+    curvature_threshold *= R0
+    msc_threshold *= R0
+
+    # print(f"Starting coil optimization for target B-field: {target_B} T")
+    # print(f"Surface major radius: {s.get_rc(0, 0):.3f} m")
+    # print(f"Surface minor radius component: {s.get_rc(1, 0):.3f} m")
+    # print(f"Number of base coils: {ncoils}")
+    # print(f"Fourier order: {order}")
+
+    # Step 1: Initialize coils with target B-field
+    # print("Step 1: Initializing coils with target B-field...")
+    coils = initialize_coils_simple(s, out_dir=out_dir, target_B=target_B, ncoils=ncoils, order=order, nturns=nturns)
+
+    # Rescale force_threshold
+    total_current = sum([c.current.get_value() for c in coils[:ncoils]]) / (s.stellsym + 1) / s.nfp
+    coils_backup = initialize_coils_simple(s, out_dir=out_dir, ncoils=ncoils, order=order, nturns=nturns)
+    total_current_reactor_scale = sum([c.current.get_value() for c in coils_backup[:ncoils]]) / (s.stellsym + 1) / s.nfp
+    force_threshold *= (total_current / total_current_reactor_scale) ** 2
+    torque_threshold *= (total_current / total_current_reactor_scale) ** 2
+
+    # Extract base curves and currents from the initialized coils
+    base_curves = [coil.curve for coil in coils[:ncoils]]
+    
+    # print(f"Initialized {len(coils)} coils (including symmetries)")
+
+    # Step 2: Create plotting surface for visualization
+    # print("Step 2: Setting up plotting surface...")
+    qphi = 4 * nphi
+    qtheta = 4 * ntheta
+    quadpoints_phi = np.linspace(0, 1, qphi)
+    quadpoints_theta = np.linspace(0, 1, qtheta)
+    
+    # Create a plotting surface (full torus)
+    # Handle case where surface was created manually (no filename)
+    if hasattr(s, 'filename') and s.filename is not None:
+        s_plot = SurfaceRZFourier.from_vmec_input(
+            s.filename,
+            range="full torus",
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            nfp=s.nfp,
+            stellsym=s.stellsym
+        )
+    else:
+        # Create surface manually with same parameters
+        s_plot = SurfaceRZFourier(
+            nfp=s.nfp,
+            stellsym=s.stellsym,
+            mpol=s.mpol,
+            ntor=s.ntor,
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta
+        )
+    
+    # Copy the surface coefficients
+    for m in range(s.mpol + 1):
+        for n in range(-s.ntor, s.ntor + 1):
+            if s.get_rc(m, n) != 0:
+                s_plot.set_rc(m, n, s.get_rc(m, n))
+            if s.get_zs(m, n) != 0:
+                s_plot.set_zs(m, n, s.get_zs(m, n))
+
+    # Step 3: Create BiotSavart object and save initial state
+    # print("Step 3: Creating BiotSavart object and saving initial state...")
+    bs = BiotSavart(coils)
+    B_avg = calculate_modB_on_major_radius(bs, s)
+    print(f"  Total current: {total_current:.0f} A")
+    print(f"  B-field averaged along major radius: {B_avg:.3f} T")
+    print(f"  Number of coils: {len(coils)}")
+    curves = [c.curve for c in coils]
+    
+    # Save initial coils
+    coils_to_vtk(coils, out_dir / "coils_initial", nturns=nturns)
+    
+    # Calculate and display initial B-field
+    bs.set_points(s_plot.gamma().reshape((-1, 3)))
+    B_initial = calculate_modB_on_major_radius(bs, s_plot)
+    # print(f"Initial B-field on-axis: {B_initial:.3f} T")
+    
+    # Save initial surface data
+    bs.set_points(s_plot.gamma().reshape((-1, 3)))
+    pointData = {
+        "B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
+                          s_plot.unitnormal(), axis=2)[:, :, None] / 
+                    bs.AbsB().reshape((qphi, qtheta, 1)),
+        "modB": bs.AbsB().reshape((qphi, qtheta, 1))
+    }
+    s_plot.to_vtk(out_dir / "surface_initial", extra_data=pointData)
+
+    # Step 4: Define objective function and constraints
+    # print("Step 4: Setting up optimization objectives and constraints...")
+    bs.set_points(s.gamma().reshape((-1, 3)))
+    
+    # Main objective: Squared flux
+    Jf = SquaredFlux(s, bs, definition="normalized", threshold=flux_threshold)
+    
+    # Constraint terms
+    Jls = [CurveLength(c) for c in base_curves]
+    Jl = sum(QuadraticPenalty(jj, length_target, "max") for jj in Jls)
+    Jccdist = CurveCurveDistance(curves, cc_threshold, num_basecurves=ncoils)
+    Jcsdist = CurveSurfaceDistance(curves, s, cs_threshold)
+    Jcs = [LpCurveCurvature(c, 2, curvature_threshold) for c in base_curves]
+    Jlink = LinkingNumber(curves, downsample=2)
+    Jforce = LpCurveForce(coils[:ncoils], coils, p=2.0, threshold=force_threshold, downsample=2)
+    Jtorque = LpCurveTorque(coils[:ncoils], coils, p=2.0, threshold=torque_threshold, downsample=2)
+    Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
+
+    # Print initial constraint values
+    print("Initial thresholds:")
+    print(f" Flux Threshold: {flux_threshold:.2e}")
+    print(f" Length Target: {length_target:.2e}")
+    print(f" CC Threshold: {cc_threshold:.2e}")
+    print(f" CS Threshold: {cs_threshold:.2e}")
+    print(f" MSC Threshold: {msc_threshold:.2e}")
+    print(f" Curvature Threshold: {curvature_threshold:.2e}")
+    print(f" Force Threshold: {force_threshold:.2e}")
+    print(f" Torque Threshold: {torque_threshold:.2e}")
+
+    # Step 5: Run optimization
+    # print("Step 5: Running optimization...")
+    start_time = time.time()
+    
+    # Constraint list for augmented Lagrangian method
+    c_list = [
+        Jf,
+        Jccdist,
+        Weight(1e3) * Jcsdist,
+        QuadraticPenalty(sum(Jls), length_target, "max"),
+        sum(QuadraticPenalty(J, msc_threshold, "max") for J in Jmscs),
+        sum(Jcs),
+        Jlink,
+        Jforce,
+        Jtorque
+    ]
+    
+    # Run optimization
+    _, _, lag_mul = augmented_lagrangian_method(
+        f=None,  # No main objective function
+        equality_constraints=c_list,
+        MAXITER=max_iterations,
+        MAXITER_lag=max_iter_lag,
+        verbose=verbose,
+    )
+    
+    end_time = time.time()
+    print(f"Optimization completed in {end_time - start_time:.1f} seconds")
+
+    # Step 6: Save results and final state
+    # print("Step 6: Saving results and final state...")
+    
+    # Save optimized coils
+    coils_to_vtk(coils, out_dir / "coils_optimized", nturns=nturns)
+    bs.save(out_dir / "biot_savart_optimized.json")
+    
+    # Calculate and display final B-field
+    bs.set_points(s_plot.gamma().reshape((-1, 3)))
+    B_final = calculate_modB_on_major_radius(bs, s_plot)
+    print(f"Final B-field on-axis: {B_final:.3f} T")
+    
+    # Save final surface data
+    bs.set_points(s_plot.gamma().reshape((-1, 3)))
+    pointData = {
+        "B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
+                     s_plot.unitnormal(), axis=2)[:, :, None],
+        "B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
+                         s_plot.unitnormal(), axis=2)[:, :, None] /
+                   bs.AbsB().reshape((qphi, qtheta, 1)),
+        "modB": bs.AbsB().reshape((qphi, qtheta, 1))
+    }
+    s_plot.to_vtk(out_dir / "surface_optimized", extra_data=pointData)
+    
+    # Print final constraint values
+    bs.set_points(s.gamma().reshape((-1, 3)))
+    print("Final constraint values:")
+    print(f"  Normalized flux: {Jf.J():.2e}")
+    print(f"  CS separation: {Jcsdist.J():.2e} (min distance: {Jcsdist.shortest_distance():.3f})")
+    print(f"  CC separation: {Jccdist.J():.2e} (min distance: {Jccdist.shortest_distance():.3f})")
+    print(f"  Length constraint: {Jl.J():.2e}")
+    print(f"  Curvature constraint: {sum(Jcs).J():.2e}")
+    print(f"  Linking number: {Jlink.J():.2e}")
+    print(f"  Force constraint: {Jforce.J():.2e}")
+    print(f"  Max curvatures: {[np.max(c.kappa()) for c in base_curves]}")
+    print(f"  Lengths: {[CurveLength(c).J() for c in base_curves]}")
+    
+    # Calculate final forces
+    force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in coils[:ncoils]]
+    print(f"  Forces: {[f'{f:.2e}' for f in force]}")
+    
+    # Calculate final B_N metrics
+    bs.set_points(s.gamma().reshape((-1, 3)))
+    nphi_s = len(s.quadpoints_phi)
+    ntheta_s = len(s.quadpoints_theta)
+    BdotN = np.mean(np.abs(np.sum(bs.B().reshape((nphi_s, ntheta_s, 3)) * s.unitnormal(), axis=2)))
+    avg_BdotN_over_B = BdotN / bs.AbsB().mean()
+    
+    bs.set_points(s_plot.gamma().reshape((-1, 3)))
+    nphi_plot = len(s_plot.quadpoints_phi)
+    ntheta_plot = len(s_plot.quadpoints_theta)
+    max_BdotN_overB = np.max(np.abs(np.sum(bs.B().reshape((nphi_plot, ntheta_plot, 3)) *
+                                          s_plot.unitnormal(), axis=2)) /
+                            bs.AbsB().reshape((nphi_plot, ntheta_plot, 1)))
+    
+    print(f"  <B_N>/<|B|> = {avg_BdotN_over_B:.2e}")
+    print(f"  Max |B_N|/|B| = {max_BdotN_overB:.2e}")    
+    print("Optimization completed successfully!")
+    print(f"Results saved to: {out_dir}")
+    
+    # Prepare results dictionary
+    bs.set_points(s.gamma().reshape((-1, 3)))
+    results = {
+        'initial_B_field': B_initial,
+        'final_B_field': B_final,
+        'target_B_field': target_B,
+        'optimization_time': end_time - start_time,
+        'final_flux': Jf.J(),
+        'final_cs_separation': Jcsdist.J(),
+        'final_cc_separation': Jccdist.J(),
+        'final_length_constraint': Jl.J(),
+        'final_curvature_constraint': sum(Jcs).J(),
+        'final_linking_number': Jlink.J(),
+        'final_force_constraint': Jforce.J(),
+        'final_forces': force,
+        'final_lengths': [CurveLength(c).J() for c in base_curves],
+        'final_max_curvatures': [np.max(c.kappa()) for c in base_curves],
+        'avg_BdotN_over_B': avg_BdotN_over_B,
+        'max_BdotN_over_B': max_BdotN_overB,
+        'lagrange_multipliers': lag_mul,
+        'output_directory': str(out_dir)
+    }
+    
+    return coils, results
