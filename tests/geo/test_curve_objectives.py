@@ -56,12 +56,14 @@ class Testing(unittest.TestCase):
             dofs[1] = 0.1
             dofs[order+1] = 0.1
         elif curvetype in ["CurvePlanarFourier", "JaxCurvePlanarFourier"]:
-            dofs[0] = 1.
-            dofs[:2*order+1] = 0.1  # give the coil a little bit of curvature
-            dofs[2*order + 1] = 1. # Set orientation to (1, 0, 0, 0)
-            dofs[2*order + 2] = 0.
-            dofs[2*order + 3] = 0.
-            dofs[2*order + 4] = 0.
+            coil.set('rc(0)', 1.0)
+            coil.set('q0', 1.0)
+            coil.set('qi', 1.0)
+            coil.set('qj', 1.0)
+            coil.set('qk', 1.0)
+            coil.set('X', 0.25)
+            coil.set('Y', 0.0)
+            coil.set('Z', 0.1)
         elif curvetype in ["CurveHelical"]:
             dofs[0] = np.pi/2
         else:
@@ -265,6 +267,7 @@ class Testing(unittest.TestCase):
             Jm = J.J()
             deriv_est = (Jp-Jm)/(2*eps)
             err_new = np.linalg.norm(deriv_est-deriv)
+            print(i, err, err_new)
             self.assertLess(err_new, 0.3 * err, f"New error should be less than 0.3 * old error: {err_new} < {0.3 * err}")
             err = err_new
         J_str = json.dumps(SIMSON(J), cls=GSONEncoder)
@@ -274,6 +277,7 @@ class Testing(unittest.TestCase):
     def test_curve_meansquaredcurvature_taylor_test(self):
         for curvetype in self.curvetypes:
             for rotated in [True, False]:
+                print(curvetype, rotated)
                 with self.subTest(curvetype=curvetype, rotated=rotated):
                     curve = self.create_curve(curvetype, rotated)
                     self.subtest_curve_meansquaredcurvature_taylor_test(curve)
