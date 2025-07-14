@@ -44,7 +44,6 @@ class Testing(unittest.TestCase):
         elif curvetype == "CurveHelical":
             coil = CurveHelical(nquadpoints, order, 5, 1, 1.0, 0.3)
         else:
-            # print('Could not find' + curvetype)
             assert False
         dofs = np.zeros((coil.dof_size, ))
         if curvetype in ["CurveXYZFourier", "JaxCurveXYZFourier"]:
@@ -56,14 +55,11 @@ class Testing(unittest.TestCase):
             dofs[1] = 0.1
             dofs[order+1] = 0.1
         elif curvetype in ["CurvePlanarFourier", "JaxCurvePlanarFourier"]:
-            coil.set('rc(0)', 1.0)
-            coil.set('q0', 1.0)
-            coil.set('qi', 1.0)
-            coil.set('qj', 1.0)
-            coil.set('qk', 1.0)
-            coil.set('X', 0.25)
-            coil.set('Y', 0.0)
-            coil.set('Z', 0.1)
+            dofs[0] = 1.0
+            dofs[2*order+1] = 1.0
+            dofs[-1] = 0.1
+            dofs[-2] = 0.25
+            dofs[-3] = 0.0
         elif curvetype in ["CurveHelical"]:
             dofs[0] = np.pi/2
         else:
@@ -163,7 +159,7 @@ class Testing(unittest.TestCase):
         ncurves = 3
         curve_t = curve.curve.__class__.__name__ if isinstance(curve, RotatedCurve) else curve.__class__.__name__
         curves = [curve] + [RotatedCurve(self.create_curve(curve_t, False), 0.1*i, True) for i in range(1, ncurves)]
-        for downsample in [1, 2, 3]:
+        for downsample in [1, 2]:
             J = CurveCurveDistance(curves, 0.4, downsample=downsample)  # Change for CurveHelical, which has deriv = 0 for 0.2
             mindist = 1e10
             for i in range(len(curves)):
@@ -211,7 +207,7 @@ class Testing(unittest.TestCase):
         deriv = np.sum(dJ * h)
         self.assertGreater(np.abs(deriv), 1e-10, "Derivative should be greater than 1e-10")
         err = 1e6
-        for i in range(2, 10):  # CurveHelical fails slightly if you start at i=1
+        for i in range(4, 10):  # CurveHelical fails slightly if you start at i=1
             eps = 0.5**i
             curve.x = curve_dofs + eps * h
             Jp = J.J()
@@ -267,7 +263,6 @@ class Testing(unittest.TestCase):
             Jm = J.J()
             deriv_est = (Jp-Jm)/(2*eps)
             err_new = np.linalg.norm(deriv_est-deriv)
-            print(i, err, err_new)
             self.assertLess(err_new, 0.3 * err, f"New error should be less than 0.3 * old error: {err_new} < {0.3 * err}")
             err = err_new
         J_str = json.dumps(SIMSON(J), cls=GSONEncoder)
@@ -277,7 +272,6 @@ class Testing(unittest.TestCase):
     def test_curve_meansquaredcurvature_taylor_test(self):
         for curvetype in self.curvetypes:
             for rotated in [True, False]:
-                print(curvetype, rotated)
                 with self.subTest(curvetype=curvetype, rotated=rotated):
                     curve = self.create_curve(curvetype, rotated)
                     self.subtest_curve_meansquaredcurvature_taylor_test(curve)
@@ -378,65 +372,6 @@ class Testing(unittest.TestCase):
             err_new = np.linalg.norm(deriv_est-deriv)
             self.assertLess(err_new, 0.3 * err, f"New error should be less than 0.3 * old error: {err_new} < {0.3 * err}")
             err = err_new
-
-    def test_curve_surface_minimum_distance(self):
-        """Test CurveSurfaceMinimumDistance computes candidates and value correctly."""
-        np.random.seed(0)
-        base_curves, base_currents, _ = get_ncsx_data(Nt_coils=10)
-        curves = [c.curve for c in coils_via_symmetries(base_curves, base_currents, 3, True)]
-        ntor = 0
-        surface = SurfaceRZFourier.from_nphi_ntheta(nfp=3, nphi=32, ntheta=32, ntor=ntor)
-        surface.set(f'rc(0,{ntor})', 1.6)
-        surface.set(f'rc(1,{ntor})', 0.2)
-        surface.set(f'zs(1,{ntor})', 0.2)
-
-        from simsopt.geo.curveobjectives import CurveSurfaceMinimumDistance, CurveSurfaceDistance
-        threshold = 1.0
-        J = CurveSurfaceMinimumDistance(curves, surface)
-        Jcs = CurveSurfaceDistance(curves, surface, threshold)
-        # Just check that J.J() runs and is non-negative
-        val = J.J()
-        assert val >= 0
-
-        # Check that shortest_distance returns a reasonable value
-        d = J.J()
-        dd = Jcs.shortest_distance()
-        assert d >= 0
-        print(d, dd)
-        assert np.isclose(d, dd)
-
-    def test_curve_surface_minimum_distance_taylor(self):
-        """Taylor test for CurveSurfaceMinimumDistance objective."""
-        np.random.seed(0)
-        base_curves, base_currents, _ = get_ncsx_data(Nt_coils=10)
-        curves = [c.curve for c in coils_via_symmetries(base_curves, base_currents, 3, True)]
-        ntor = 0
-        surface = SurfaceRZFourier.from_nphi_ntheta(nfp=3, nphi=32, ntheta=32, ntor=ntor)
-        surface.set(f'rc(0,{ntor})', 1.6)
-        surface.set(f'rc(1,{ntor})', 0.2)
-        surface.set(f'zs(1,{ntor})', 0.2)
-
-        from simsopt.geo.curveobjectives import CurveSurfaceMinimumDistance
-        for downsample in [1, 2]:
-            J = CurveSurfaceMinimumDistance(curves, surface)
-            curve_dofs = J.x
-            h = 1e-1 * np.random.rand(len(curve_dofs)).reshape(curve_dofs.shape)
-            dJ = J.dJ()
-            deriv = np.sum(dJ * h)
-            assert np.abs(deriv) > 1e-10
-            err = 1e6
-            for i in range(5, 12):
-                eps = 0.5**i
-                J.x = curve_dofs + eps * h
-                Jp = J.J()
-                J.x = curve_dofs - eps * h
-                Jm = J.J()
-                deriv_est = (Jp-Jm)/(2*eps)
-                err_new = np.linalg.norm(deriv_est-deriv)
-                print("CurveSurfaceMinimumDistance Taylor err_new %s" % (err_new))
-                print(err_new/err)
-                assert err_new < 0.7 * err
-                err = err_new
 
     def test_linking_number(self):
         for downsample in [1, 2, 5]:

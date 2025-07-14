@@ -99,13 +99,13 @@ currents = [c.current for c in coils]
 print("Number of coils:", len(coils))
 
 # Define the output directory   
-OUT_DIR = f"./output_ncoils{ncoils}_lengthtarget{LENGTH_TARGET}_fluxthreshold{FLUX_THRESHOLD}_ccthreshold{CC_THRESHOLD}_csthreshold{CS_THRESHOLD}_mscthreshold{MSC_THRESHOLD}_curvaturethreshold{CURVATURE_THRESHOLD}_forcethreshold{FORCE_THRESHOLD}/"
+OUT_DIR = f"./output_paper/output_ncoils{ncoils}_lengthtarget{LENGTH_TARGET}_fluxthreshold{FLUX_THRESHOLD}_ccthreshold{CC_THRESHOLD}_csthreshold{CS_THRESHOLD}_mscthreshold{MSC_THRESHOLD}_curvaturethreshold{CURVATURE_THRESHOLD}_forcethreshold{FORCE_THRESHOLD}/"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # Save the biot-savart field data
 bs = BiotSavart(coils)
 curves = [c.curve for c in coils]
-coils_to_vtk(coils, OUT_DIR + "curves_init")
+coils_to_vtk(coils, OUT_DIR + "coils_init_qa_reactorscale")
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
 calculate_modB_on_major_radius(bs, s_plot)
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
@@ -113,7 +113,7 @@ bs.set_points(s_plot.gamma().reshape((-1, 3)))
 pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                                s_plot.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((qphi, qtheta, 1)),
              "modB": bs.AbsB().reshape((qphi, qtheta, 1))}
-s_plot.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_init_qa_reactorscale", extra_data=pointData)
 
 
 # Define the individual terms objective function:
@@ -184,7 +184,7 @@ x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     c_tol=1e-8,
 )
 
-bs.save(OUT_DIR + "biot_savart_same_setup.json")
+bs.save(OUT_DIR + "biot_savart_optimized_auglag_qa_reactorscale.json")
 end_time = time.time()
 print(f"Time taken: {end_time - start_time} seconds")
 print('Final normalized flux:', Jf.J())
@@ -202,7 +202,7 @@ print('Final Force constraint:', Jforce.J())
 force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in base_coils]
 print("Forces:")
 print(",".join(f"{f:.2e}" for f in force))
-coils_to_vtk(coils, OUT_DIR + "optimized_coils_auglag")
+coils_to_vtk(coils, OUT_DIR + "coils_optimized_auglag_qa_reactorscale")
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
 calculate_modB_on_major_radius(bs, s_plot)
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
@@ -213,7 +213,7 @@ pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None] /
         bs.AbsB().reshape((qphi, qtheta, 1)),
         "modB": bs.AbsB().reshape((qphi, qtheta, 1))}
-s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag_qa_reactorscale", extra_data=pointData)
 max_BdotN_overB = np.max(np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None] /
         bs.AbsB().reshape((qphi, qtheta, 1)))

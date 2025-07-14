@@ -22,7 +22,6 @@ set -ex
 ./2_Intermediate/strain_optimization.py
 ./2_Intermediate/permanent_magnet_MUSE.py
 ./2_Intermediate/permanent_magnet_QA.py
-./2_Intermediate/permanent_magnet_PM4Stell.py
 ./2_Intermediate/wireframe_rcls_basic.py
 ./2_Intermediate/wireframe_rcls_with_ports.py
 ./2_Intermediate/wireframe_gsco_modular.py
@@ -44,5 +43,5 @@ set -ex
 ./3_Advanced/auglag/auglag_qh_reactorscale.py
 ./3_Advanced/auglag/auglag_hsx.py
 ./3_Advanced/auglag/auglag_w7x.py
-./3_Advanced/auglag/auglag_qa_scan.py --cs_threshold 0.2 --length_target 30 --out_dir . 
-./3_Advanced/auglag/auglag_qa_scan.py --cs_threshold 0.1 --length_target 25 
+./3_Advanced/auglag/auglag_qa_scan_call.py --cs_threshold 0.2 --length_target 30 --out_dir . 
+./3_Advanced/auglag/auglag_qa_scan_call.py --cs_threshold 0.1 --length_target 25 

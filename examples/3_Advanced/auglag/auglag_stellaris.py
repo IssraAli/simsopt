@@ -114,7 +114,7 @@ absB = np.linalg.norm(bs.B().reshape(nphi, ntheta, 3), axis=-1)
 pointData = {"B_N": Bn[:, :, None],
              "B_N / B": (Bn / absB)[:, :, None],
             }
-s.to_vtk(OUT_DIR + "s_original", extra_data=pointData)
+s.to_vtk(OUT_DIR + "s_original_stellaris", extra_data=pointData)
 Jf = SquaredFlux(s, bs, definition="normalized")
 Jls = [CurveLength(c) for c in base_curves_TF]
 Jl = sum(QuadraticPenalty(jj, LENGTH_TARGET, "max") for jj in Jls)
@@ -133,13 +133,13 @@ print('Initial Max Curvatures:', [np.max(c.kappa()) for c in base_curves_TF])
 print('Initial Mean Squared Curvature', [MeanSquaredCurvature(c).J() for c in base_curves_TF])
 print('Initial Lengths:', [CurveLength(c).J() for c in base_curves_TF], sum(Jls).J())
 
-coils_to_vtk(coils_orig, OUT_DIR + "coils_original")
+coils_to_vtk(coils_orig, OUT_DIR + "coils_original_stellaris")
 calculate_modB_on_major_radius(bs, s)
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
 pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2)[:, :, None],
              "B_N / B": (np.sum(bs.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2
                                 ) / np.linalg.norm(bs.B().reshape(qphi, qtheta, 3), axis=-1))[:, :, None]}
-s_plot.to_vtk(OUT_DIR + "surf_original", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_original_stellaris", extra_data=pointData)
 
 
 # initialize the TF coils
@@ -176,6 +176,7 @@ base_curves_TF, curves_TF, coils_TF, currents_TF = stellaris_coils(
 ncoils = len(base_curves_TF)
 base_curves_TF = curves_TF[:ncoils]
 base_coils_TF = coils_TF[:ncoils]
+coils_to_vtk(coils_TF, OUT_DIR + "coils_init_stellaris")
 
 # # Calculate average, approximate on-axis B field strength
 bs = BiotSavart(coils_TF)
@@ -187,7 +188,7 @@ btot.set_points(s_plot.gamma().reshape((-1, 3)))
 pointData = {"B_N": np.sum(btot.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2)[:, :, None],
              "B_N / B": (np.sum(btot.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2
                                 ) / np.linalg.norm(btot.B().reshape(qphi, qtheta, 3), axis=-1))[:, :, None]}
-s_plot.to_vtk(OUT_DIR + "surf_initial", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_init_stellaris", extra_data=pointData)
 btot.set_points(s.gamma().reshape((-1, 3)))
 
 # Currently, all force terms involve all the coils
@@ -250,13 +251,13 @@ print('Final Lengths:', [CurveLength(c).J() for c in base_curves_TF], sum(Jls).J
 print('Final Force constraint:', Jforce.J())
 
 
-coils_to_vtk(coils_TF, OUT_DIR + "coils_optimized")
+coils_to_vtk(coils_TF, OUT_DIR + "coils_optimized_auglag_stellaris")
 
 btot.set_points(s_plot.gamma().reshape((-1, 3)))
 pointData = {"B_N": np.sum(btot.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2)[:, :, None],
              "B_N / B": (np.sum(btot.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2
                                 ) / np.linalg.norm(btot.B().reshape(qphi, qtheta, 3), axis=-1))[:, :, None]}
-s_plot.to_vtk(OUT_DIR + "surf_optimized", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag_stellaris", extra_data=pointData)
 
 btot.set_points(s.gamma().reshape((-1, 3)))
 calculate_modB_on_major_radius(btot, s)
@@ -271,5 +272,5 @@ avg_BdotN_over_B = BdotN / btot.AbsB().mean()
 print("--------------------------------------------------------------------------------------------------------------------------------------------")
 print(f"<B_N>/<|B|> = {avg_BdotN_over_B:.2e}, Max BdotN/|B| = {max_BdotN_overB:.2e}")
 print('Total time = ', t2 - t1)
-btot.save(OUT_DIR + "biot_savart_optimized" + ".json")
+btot.save(OUT_DIR + "biot_savart_optimized_auglag_stellaris" + ".json")
 print(OUT_DIR)

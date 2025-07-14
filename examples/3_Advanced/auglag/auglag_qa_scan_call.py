@@ -143,13 +143,13 @@ def main():
 
     # Save the biot-savart field dataW
     bs = BiotSavart(coils)
-    coils_to_vtk(coils, os.path.join(OUT_DIR, "curves_init"))
+    coils_to_vtk(coils, os.path.join(OUT_DIR, "coils_init_qa_scan"))
     
     # Plot initial surface
     bs.set_points(s_plot.gamma().reshape((-1, 3)))
     pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                                    s_plot.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((qphi, qtheta, 1))}
-    s_plot.to_vtk(os.path.join(OUT_DIR, "surf_init"), extra_data=pointData)
+    s_plot.to_vtk(os.path.join(OUT_DIR, "surf_init_qa_scan"), extra_data=pointData)
 
     # Define the individual terms objective function:
     bs.set_points(s.gamma().reshape((-1, 3)))
@@ -198,7 +198,7 @@ def main():
     print(f"Time taken: {end_time - start_time:.2f} seconds")
 
     # Save final results
-    coils_to_vtk(coils, os.path.join(OUT_DIR, "optimized_coils_auglag"))
+    coils_to_vtk(coils, os.path.join(OUT_DIR, "coils_optimized_auglag_qa_scan"))
     bs.set_points(s_plot.gamma().reshape((-1, 3)))
     
     pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
@@ -243,9 +243,9 @@ def main():
 
     with open(os.path.join(OUT_DIR, "results.json"), "w") as outfile:
         json.dump(results, outfile, indent=2)
-    bs.save(os.path.join(OUT_DIR,"biot_savart.json"))  # save the optimized coil shapes and currents
+    bs.save(os.path.join(OUT_DIR,"biot_savart_optimized_auglag_qa_scan.json"))  # save the optimized coil shapes and currents
 
-    s_plot.to_vtk(os.path.join(OUT_DIR, "surf_optimized_auglag"), extra_data=pointData)
+    s_plot.to_vtk(os.path.join(OUT_DIR, "surf_optimized_auglag_qa_scan"), extra_data=pointData)
     print("----------------------------------------------------")
     print("FINAL NORMALIZED SQUARED FLUX:", avg_BdotN_over_B)
     print('Final CS-sep minimum distance:', Jcsdist.shortest_distance())

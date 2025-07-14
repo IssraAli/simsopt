@@ -122,12 +122,12 @@ print("Number of coils:", len(coils))
 # Save the biot-savart field data
 bs = BiotSavart(coils)
 curves = [c.curve for c in coils]
-coils_to_vtk(coils, OUT_DIR + "curves_init_qh")
+coils_to_vtk(coils, OUT_DIR + "coils_init_qh_reactorscale")
 bs.set_points(s_plot.gamma().reshape((-1, 3))) 
 pointData = {"B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                                s_plot.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((qphi, qtheta, 1)),
              "modB": bs.AbsB().reshape((qphi, qtheta, 1))}
-s_plot.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_init_qh_reactorscale", extra_data=pointData)
 
 # Define the individual terms objective function:
 bs.set_points(s.gamma().reshape((-1, 3)))
@@ -180,7 +180,7 @@ x, fnc, lag_mul = augmented_lagrangian_method(f=f,
     c_tol=1e-8,
 )
 
-bs.save(OUT_DIR + "biot_savart_qh.json")
+bs.save(OUT_DIR + "biot_savart_optimized_auglag_qh_reactorscale.json")
 end_time = time.time()
 print(f"Time taken: {end_time - start_time} seconds")
 print('Final normalized flux:', Jf.J())
@@ -198,7 +198,7 @@ print('Final Mean Squared Curvature', [MeanSquaredCurvature(c).J() for c in base
 force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in base_coils]
 print("Forces:")
 print(",".join(f"{f:.2e}" for f in force))
-coils_to_vtk(coils, OUT_DIR + "optimized_coils_auglag_qh")
+coils_to_vtk(coils, OUT_DIR + "coils_optimized_auglag_qh_reactorscale")
 bs.set_points(s_plot.gamma().reshape((-1, 3)))
 pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None],
@@ -206,7 +206,7 @@ pointData = {"B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None] /
         bs.AbsB().reshape((qphi, qtheta, 1)),
         "modB": bs.AbsB().reshape((qphi, qtheta, 1))}
-s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag_qh", extra_data=pointData)
+s_plot.to_vtk(OUT_DIR + "surf_optimized_auglag_qh_reactorscale", extra_data=pointData)
 max_BdotN_overB = np.max(np.sum(bs.B().reshape((qphi, qtheta, 3)) *
                         s_plot.unitnormal(), axis=2)[:, :, None] /
         bs.AbsB().reshape((qphi, qtheta, 1)))
