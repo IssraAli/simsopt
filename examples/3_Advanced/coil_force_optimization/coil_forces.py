@@ -108,7 +108,7 @@ s = SurfaceRZFourier.from_vmec_input(filename, range="half period", nphi=nphi, n
 
 # Create the initial coils:
 base_curves = create_equally_spaced_curves(
-    ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order, jax_flag=False
+    ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order, use_jax_curve=False
 )
 base_currents = [Current(1e5) for i in range(ncoils)]
 # Since the target field is zero, one possible solution is just to set all
@@ -116,7 +116,9 @@ base_currents = [Current(1e5) for i in range(ncoils)]
 # of the currents:
 base_currents[0].fix_all()
 
-coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)
+regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+coils = coils_via_symmetries(base_curves, base_currents, s.nfp, 
+                             True, regularizations)
 base_coils = coils[:ncoils]
 bs = BiotSavart(coils)
 bs.set_points(s.gamma().reshape((-1, 3)))
@@ -126,7 +128,6 @@ bs.set_points(s.gamma().reshape((-1, 3)))
 a = 0.05
 nturns = 100
 curves = [c.curve for c in coils]
-a_list = regularization_circ(a) * np.ones(len(coils))
 coils_to_vtk(coils, OUT_DIR + "coils_init", close=True)
 pointData = {"B_N": np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)[:, :, None]}
 s.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
@@ -138,8 +139,6 @@ Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
 Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
 Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
 Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
-for c in coils:
-    c.regularization = regularization_circ(a)
 Jforce = LpCurveForce(base_coils, coils, p=4)
 J_b2energy = B2Energy(coils)
 

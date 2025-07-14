@@ -132,14 +132,15 @@ s_plot = SurfaceRZFourier.from_vmec_input(
 
 # Create the initial coils:
 base_curves = create_equally_spaced_curves(
-    ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order, jax_flag=False)
+    ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order, use_jax_curve=False)
 base_currents = [Current(1e5) for i in range(ncoils)]
 # Since the target field is zero, one possible solution is just to set all
 # currents to 0. To avoid the minimizer finding that solution, we fix one
 # of the currents:
 base_currents[0].fix_all()
 
-coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)
+coils = coils_via_symmetries(base_curves, base_currents, s.nfp, 
+                             True, regularizations=[regularization_circ(0.05)] * ncoils)
 base_coils = coils[:ncoils]
 bs = BiotSavart(coils)
 bs.set_points(s.gamma().reshape((-1, 3)))
@@ -164,8 +165,6 @@ Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
 Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
 Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
 Jlength = QuadraticPenalty(sum(Jls), LENGTH_TARGET)
-for c in coils:
-    c.regularization = regularization_circ(0.05)
 
 if sys.argv[1] == 'SquaredMeanForce':
     Jforce = SquaredMeanForce(base_coils, coils)
