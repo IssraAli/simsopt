@@ -470,7 +470,7 @@ class CoilForcesTest(unittest.TestCase):
 
         # Test LpCurveForce
         p = 2.5
-        threshold = 1.0e3
+        threshold = 1.0e-3  # threshold is in MA/m
         objective = float(LpCurveForce(coils[0], coils, p=p, threshold=threshold).J())
         dJ = LpCurveForce(coils[0], coils, p=p, threshold=threshold).dJ()
         np.testing.assert_allclose(dJ.shape, (ncoils * len(coils[0].x),))
@@ -480,13 +480,13 @@ class CoilForcesTest(unittest.TestCase):
         gammadash_norm = np.linalg.norm(coils[0].curve.gammadash(), axis=1)
         force_norm = np.linalg.norm(coil_force(coils[0], coils), axis=1)
         print("force_norm mean:", np.mean(force_norm), "max:", np.max(force_norm))
-        objective_alt = (1 / p) * np.sum(np.maximum(force_norm - threshold, 0)**p * gammadash_norm) / np.shape(gammadash_norm)[0]
+        objective_alt = (1 / p) * np.sum(np.maximum(force_norm * 1e-6 - threshold, 0)**p * gammadash_norm) / np.shape(gammadash_norm)[0]
 
         print("objective:", objective, "objective_alt:", objective_alt, "diff:", objective - objective_alt)
         np.testing.assert_allclose(objective, objective_alt, rtol=1e-6)
 
         # Test SquaredMeanForce
-        objective = float(SquaredMeanForce(coils[0], coils).J())
+        objective = float(SquaredMeanForce(coils[0], coils).J()) * 1e12 # Convert from MN^2 to N^2
         dJ = SquaredMeanForce(coils[0], coils).dJ()
         np.testing.assert_allclose(dJ.shape, (ncoils * len(coils[0].x),))
 
@@ -499,8 +499,8 @@ class CoilForcesTest(unittest.TestCase):
 
         # Test SquaredMeanForce
         p = 2.5
-        threshold = 1.0e3
-        objective = SquaredMeanForce(coils[0], coils).J()
+        threshold = 1.0e-3  # threshold is in MA/m
+        objective = SquaredMeanForce(coils[0], coils).J() * 1e12 # Convert from MN^2 to N^2
 
         # Now compute the objective a different way, using the independent
         # coil_force function
@@ -513,16 +513,16 @@ class CoilForcesTest(unittest.TestCase):
 
         # Test SquaredMeanForce vs SquaredMeanForce
         p = 2.5
-        threshold = 1.0e3
+        threshold = 1.0e-3  # threshold is in MA/m
         objective = 0.0
         objective2 = 0.0
         objective3 = 0.0
         objective_mixed = 0.0
         objective_direct = 0.0
         for i in range(len(coils)):
-            objective += float(SquaredMeanForce(coils[i], coils).J())
-            objective2 += float(SquaredMeanForce(coils[i], coils, downsample=2).J())
-            objective3 += float(SquaredMeanForce(coils[i], coils, downsample=3).J())
+            objective += float(SquaredMeanForce(coils[i], coils).J()) * 1e12 # Convert to N^2
+            objective2 += float(SquaredMeanForce(coils[i], coils, downsample=2).J()) * 1e12 # Convert to N^2
+            objective3 += float(SquaredMeanForce(coils[i], coils, downsample=3).J()) * 1e12 # Convert to N^2
             objective_mixed += np.linalg.norm(np.sum(coil_force(coils[i], coils) * gammadash_norm[:, None], axis=0) / gammadash_norm.shape[0]) ** 2
             objective_direct += np.linalg.norm(coil_net_force(coils[i], coils)) ** 2
 
@@ -549,7 +549,7 @@ class CoilForcesTest(unittest.TestCase):
             objective3 += float(LpCurveForce(coils[i], coils, p=p, threshold=threshold, downsample=3).J())
             force_norm = np.linalg.norm(coil_force(coils[i], coils), axis=1)
             gammadash_norm = np.linalg.norm(coils[i].curve.gammadash(), axis=1)
-            objective_alt += (1 / p) * np.sum(np.maximum(force_norm - threshold, 0)**p * gammadash_norm) / gammadash_norm.shape[0]
+            objective_alt += (1 / p) * np.sum(np.maximum(force_norm * 1e-6 - threshold, 0)**p * gammadash_norm) / gammadash_norm.shape[0]
 
         print("objective:", objective, "objective_alt:", objective_alt, "diff:", objective - objective_alt)
         np.testing.assert_allclose(objective, objective_alt, rtol=1e-6)
@@ -566,7 +566,7 @@ class CoilForcesTest(unittest.TestCase):
             x_new[3] += 0.1
             base_curves[i].x = x_new
 
-        objective = float(SquaredMeanTorque(coils[0], coils).J())
+        objective = float(SquaredMeanTorque(coils[0], coils).J()) * 1e12 # Convert from MN^2 to N^2
 
         # Now compute the objective a different way, using the independent
         # coil_force function
@@ -583,9 +583,9 @@ class CoilForcesTest(unittest.TestCase):
         objective_alt = 0.0
         objective_direct = 0.0
         for i in range(len(coils)):
-            objective += float(SquaredMeanTorque(coils[i], coils).J())
-            objective2 += float(SquaredMeanTorque(coils[i], coils, downsample=2).J())
-            objective3 += float(SquaredMeanTorque(coils[i], coils, downsample=3).J())
+            objective += float(SquaredMeanTorque(coils[i], coils).J()) * 1e12 # Convert from MN^2 to N^2
+            objective2 += float(SquaredMeanTorque(coils[i], coils, downsample=2).J()) * 1e12 # Convert from MN^2 to N^2
+            objective3 += float(SquaredMeanTorque(coils[i], coils, downsample=3).J()) * 1e12 # Convert from MN^2 to N^2
             gammadash_norm = np.linalg.norm(coils[i].curve.gammadash(), axis=1)
             objective_alt += np.linalg.norm(np.sum(coil_torque(coils[i], coils) * gammadash_norm[:, None], axis=0) / gammadash_norm.shape[0]) ** 2
             objective_direct += np.linalg.norm(coil_net_torque(coils[i], coils)) ** 2
@@ -615,7 +615,7 @@ class CoilForcesTest(unittest.TestCase):
             objective3 += float(LpCurveTorque(coils[i], coils, p=p, threshold=threshold, downsample=3).J())
             torque_norm = np.linalg.norm(coil_torque(coils[i], coils), axis=1)
             gammadash_norm = np.linalg.norm(coils[i].curve.gammadash(), axis=1)
-            objective_alt += (1 / p) * np.sum(np.maximum(torque_norm - threshold, 0)**p * gammadash_norm) / gammadash_norm.shape[0]
+            objective_alt += (1 / p) * np.sum(np.maximum(torque_norm * 1e-6 - threshold, 0)**p * gammadash_norm) / gammadash_norm.shape[0]
 
         print("objective:", objective, "objective_alt:", objective_alt, "diff:", objective - objective_alt)
         np.testing.assert_allclose(objective, objective_alt, rtol=1e-6)
@@ -644,11 +644,11 @@ class CoilForcesTest(unittest.TestCase):
         coil3 = Coil(curve3, current3)
         coils = [coil1, coil2, coil3]
         # LpCurveForce
-        val = LpCurveForce(coil1, coil2, p=2.5, threshold=1.0e3).J()
+        val = LpCurveForce(coil1, coil2, p=2.5, threshold=1.0e-3).J()
         self.assertTrue(np.isfinite(val))
-        val = LpCurveForce(coil1, [coil2, coil3], p=2.5, threshold=1.0e3).J()
+        val = LpCurveForce(coil1, [coil2, coil3], p=2.5, threshold=1.0e-3).J()
         self.assertTrue(np.isfinite(val))
-        val = LpCurveForce(coil1, coils, p=2.5, threshold=1.0e3).J()
+        val = LpCurveForce(coil1, coils, p=2.5, threshold=1.0e-3).J()
         self.assertTrue(np.isfinite(val))
         # SquaredMeanForce
         val = SquaredMeanForce(coil1, coil3).J()
@@ -658,11 +658,11 @@ class CoilForcesTest(unittest.TestCase):
         val = SquaredMeanForce(coil1, coils).J()
         self.assertTrue(np.isfinite(val))
         # LpCurveTorque
-        val = LpCurveTorque(coil1, coils, p=2.5, threshold=1.0e3).J()
+        val = LpCurveTorque(coil1, coils, p=2.5, threshold=1.0e-3).J()
         self.assertTrue(np.isfinite(val))
-        val = LpCurveTorque([coil1, coil2], coils, p=2.5, threshold=1.0e3).J()
+        val = LpCurveTorque([coil1, coil2], coils, p=2.5, threshold=1.0e-3).J()
         self.assertTrue(np.isfinite(val))
-        val = LpCurveTorque(coil3, coil1, p=2.5, threshold=1.0e3).J()
+        val = LpCurveTorque(coil3, coil1, p=2.5, threshold=1.0e-3).J()
         self.assertTrue(np.isfinite(val))
         # SquaredMeanTorque
         val = SquaredMeanTorque(coil1, coils).J()
@@ -715,10 +715,10 @@ class CoilForcesTest(unittest.TestCase):
                             for reg_name, reg_func in regularization_types:
                                 regularization = reg_func()
                                 for downsample in downsample_list:
-                                    for jax_flag in jax_flag_list:
+                                    for use_jax_curve in jax_flag_list:
                                         for numquadpoints in numquadpoints_list:
-                                            base_curves = create_equally_spaced_curves(ncoils, nfp, stellsym, numquadpoints=numquadpoints, jax_flag=jax_flag)
-                                            base_curves2 = create_equally_spaced_curves(ncoils, nfp, stellsym, numquadpoints=numquadpoints, jax_flag=jax_flag)
+                                            base_curves = create_equally_spaced_curves(ncoils, nfp, stellsym, numquadpoints=numquadpoints, use_jax_curve=use_jax_curve)
+                                            base_curves2 = create_equally_spaced_curves(ncoils, nfp, stellsym, numquadpoints=numquadpoints, use_jax_curve=use_jax_curve)
                                             base_currents = [Current(I) for j in range(ncoils)]
                                             coils = coils_via_symmetries(base_curves, base_currents, nfp, stellsym)
                                             for c in coils:
@@ -785,7 +785,7 @@ class CoilForcesTest(unittest.TestCase):
         I = 1.7e4
 
         p = 2.5
-        threshold = 1.0e3
+        threshold = 1.0e-3  # threshold is in MA/m
         regularization = regularization_circ(0.05)
 
         # List of objective classes to test
