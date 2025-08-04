@@ -138,7 +138,7 @@ class ALTests(unittest.TestCase):
         """
         from pathlib import Path
         from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
-        from simsopt.field import BiotSavart, Current, coils_via_symmetries, regularization_circ
+        from simsopt.field import BiotSavart, Current, coils_via_symmetries
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty
         from simsopt.geo import CurveSurfaceDistance, LpCurveCurvature, CurveCurveDistance
@@ -231,7 +231,7 @@ class ALTests(unittest.TestCase):
         """
         from pathlib import Path
         from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
-        from simsopt.field import BiotSavart, Current, coils_via_symmetries, LpCurveForce, LpCurveTorque, regularization_circ
+        from simsopt.field import BiotSavart, Current, coils_via_symmetries, LpCurveForce, LpCurveTorque
         from simsopt.field.force import coil_force, coil_torque
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty

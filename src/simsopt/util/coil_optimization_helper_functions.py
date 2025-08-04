@@ -1466,7 +1466,7 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     c_list = [
         Jf,
         Jccdist,
-        Weight(1e3) * Jcsdist,
+        Weight(1e3) * Jcsdist,  # Special attention to avoiding coil-surface intersections
         QuadraticPenalty(sum(Jls), length_target, "max"),
         sum(QuadraticPenalty(J, msc_threshold, "max") for J in Jmscs),
         sum(Jcs),

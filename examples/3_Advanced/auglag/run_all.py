@@ -7,7 +7,7 @@ import glob
 import json
 from pathlib import Path
 from simsopt.geo import SurfaceRZFourier
-from simsopt.util.permanent_magnet_helper_functions import optimize_coils_simple
+from simsopt.util import optimize_coils_simple
     
 # Clean up previous test output files
 print("Cleaning up previous test output files...")
