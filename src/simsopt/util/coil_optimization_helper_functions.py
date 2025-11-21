@@ -1216,7 +1216,6 @@ def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, ntu
         regularizations = [regularization for _ in range(ncoils)]
     else:
         regularizations = None
-        
     # Get the major radius from the surface and scale coil parameters
     R0 = s.get_rc(0, 0)  # Major radius
     R1 = s.get_rc(1, 0) * 2.5  # Scale the minor radius component
@@ -1329,6 +1328,7 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     cs_threshold = kwargs.get('cs_threshold', 1.5)
     msc_threshold = kwargs.get('msc_threshold', 1.0)
     curvature_threshold = kwargs.get('curvature_threshold', 1.0)
+    regularization = kwargs.get('regularization', None)
 
     # 1 MN/m on each of an assumed 256 turns of the coil
     nturns = kwargs.get('nturns', 256)
@@ -1353,11 +1353,11 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
 
     # Step 1: Initialize coils with target B-field
     # print("Step 1: Initializing coils with target B-field...")
-    coils = initialize_coils_simple(s, out_dir=out_dir, target_B=target_B, ncoils=ncoils, order=order, nturns=nturns)
+    coils = initialize_coils_simple(s, out_dir=out_dir, target_B=target_B, ncoils=ncoils, order=order, nturns=nturns, regularization=regularization)
 
     # Rescale force_threshold
     total_current = sum([c.current.get_value() for c in coils[:ncoils]]) / (s.stellsym + 1) / s.nfp
-    coils_backup = initialize_coils_simple(s, out_dir=out_dir, ncoils=ncoils, order=order, nturns=nturns)
+    coils_backup = initialize_coils_simple(s, out_dir=out_dir, ncoils=ncoils, order=order, nturns=nturns, regularization=regularization)
     total_current_reactor_scale = sum([c.current.get_value() for c in coils_backup[:ncoils]]) / (s.stellsym + 1) / s.nfp
     force_threshold *= (total_current / total_current_reactor_scale) ** 2
     torque_threshold *= (total_current / total_current_reactor_scale) ** 2
