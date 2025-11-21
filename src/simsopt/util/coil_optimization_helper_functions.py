@@ -1314,7 +1314,7 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     from simsopt.objectives import SquaredFlux, QuadraticPenalty, Weight
     from simsopt.solve import augmented_lagrangian_method
     from simsopt.field import BiotSavart, coils_to_vtk
-    from simsopt.field.force import LpCurveForce, LpCurveTorque, coil_force
+    from simsopt.field.force import LpCurveForce, LpCurveTorque, coil_force, coil_torque
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1331,7 +1331,7 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     regularization = kwargs.get('regularization', None)
 
     # 1 MN/m on each of an assumed 256 turns of the coil
-    nturns = kwargs.get('nturns', 256)
+    nturns = kwargs.get('nturns', 200)
     force_threshold = kwargs.get('force_threshold', 1.0) * nturns
     torque_threshold = kwargs.get('torque_threshold', 1.0) * nturns
 
@@ -1345,11 +1345,11 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     curvature_threshold *= R0
     msc_threshold *= R0
 
-    # print(f"Starting coil optimization for target B-field: {target_B} T")
-    # print(f"Surface major radius: {s.get_rc(0, 0):.3f} m")
-    # print(f"Surface minor radius component: {s.get_rc(1, 0):.3f} m")
-    # print(f"Number of base coils: {ncoils}")
-    # print(f"Fourier order: {order}")
+    print(f"Starting coil optimization for target B-field: {target_B} T")
+    print(f"Surface major radius: {s.get_rc(0, 0):.3f} m")
+    print(f"Surface minor radius component: {s.get_rc(1, 0):.3f} m")
+    print(f"Number of base coils: {ncoils}")
+    print(f"Fourier order: {order}")
 
     # Step 1: Initialize coils with target B-field
     # print("Step 1: Initializing coils with target B-field...")
@@ -1527,8 +1527,9 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     print(f"  Lengths: {[CurveLength(c).J() for c in base_curves]}")
     
     # Calculate final forces
-    force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in coils[:ncoils]]
-    print(f"  Forces: {[f'{f:.2e}' for f in force]}")
+    max_force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in coils[:ncoils]]
+    max_torque = [np.max(np.linalg.norm(coil_torque(c, coils), axis=1)) for c in coils[:ncoils]]
+    print(f"  Max forces on each coil: {[f'{f:.2e}' for f in max_force]}")
     
     # Calculate final B_N metrics
     bs.set_points(s.gamma().reshape((-1, 3)))
@@ -1556,16 +1557,18 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
         'final_B_field': B_final,
         'target_B_field': target_B,
         'optimization_time': end_time - start_time,
-        'final_flux': Jf.J(),
-        'final_cs_separation': Jcsdist.J(),
-        'final_cc_separation': Jccdist.J(),
-        'final_length_constraint': Jl.J(),
-        'final_curvature_constraint': sum(Jcs).J(),
+        'final_normalized_squared_flux': Jf.J(),
+        'final_min_cs_separation': Jcsdist.shortest_distance(),
+        'final_min_cc_separation': Jccdist.shortest_distance(),
+        'final_total_length': sum(CurveLength(c).J() for c in base_curves),
+        'final_max_curvature': max(np.max(c.kappa()) for c in base_curves),
+        'final_average_curvature': np.mean([c.kappa() for c in base_curves]),
+        'final_mean_squared_curvature': np.max([np.mean(c.kappa() ** 2) for c in base_curves]),
         'final_linking_number': Jlink.J(),
-        'final_force_constraint': Jforce.J(),
-        'final_forces': force,
-        'final_lengths': [CurveLength(c).J() for c in base_curves],
-        'final_max_curvatures': [np.max(c.kappa()) for c in base_curves],
+        'final_max_max_coil_force': np.max(max_force),
+        'final_avg_max_coil_force': np.mean(max_force),
+        'final_max_max_coil_torque': np.max(max_torque),
+        'final_avg_max_coil_torque': np.mean(max_torque),
         'avg_BdotN_over_B': avg_BdotN_over_B,
         'max_BdotN_over_B': max_BdotN_overB,
         'lagrange_multipliers': lag_mul,
