@@ -1214,7 +1214,9 @@ def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, ntu
 
     if regularization is not None:
         regularizations = [regularization for _ in range(ncoils)]
-    
+    else:
+        regularizations = None
+        
     # Get the major radius from the surface and scale coil parameters
     R0 = s.get_rc(0, 0)  # Major radius
     R1 = s.get_rc(1, 0) * 2.5  # Scale the minor radius component
