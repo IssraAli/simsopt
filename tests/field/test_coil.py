@@ -15,7 +15,12 @@ from simsopt.field.coil import coils_to_makegrid, coils_to_focus, load_coils_fro
 from simsopt.field.biotsavart import BiotSavart
 from simsopt.field.selffield import regularization_circ
 from simsopt._core.json import GSONEncoder, GSONDecoder, SIMSON
-from simsopt.configs import get_ncsx_data
+from simsopt.configs import get_data
+
+try:
+    import pyevtk
+except ImportError:
+    pyevtk = None
 
 try:
     import pyevtk
@@ -178,7 +183,7 @@ class ScaledCurrentTesting(unittest.TestCase):
             c3 = ScaledCurrent(c0, fak)
             assert abs(c3.get_value()-fak * c0.get_value()) < 1e-15
             assert np.linalg.norm((c3.vjp(one)-fak * c0.vjp(one))(c0)) < 1e-15
-            c3.set_dofs(5. * fak)
+            c3.current_to_scale.x = np.array([5.])
             assert np.isclose(c3.current_to_scale.get_value(), 5.)
 
             c4 = -c0
@@ -203,44 +208,38 @@ class ScaledCurrentTesting(unittest.TestCase):
 
 class CoilFormatConvertTesting(unittest.TestCase):
     def test_makegrid(self):
-        """
-        Test exporting coil data to FOCUS format using coils_to_focus.
-        """
-        curves, currents, ma = get_ncsx_data()
+        base_curves, base_currents, ma, nfp, bs= get_data("ncsx")
         with ScratchDir("."):
-            coils_to_focus('test.focus', curves, currents, nfp=3, stellsym=True)
+            coils_to_focus('test.focus', base_curves, base_currents, nfp=nfp, stellsym=True)
 
     def test_focus(self):
-        """
-        Test exporting coil data to MAKEGRID format using coils_to_makegrid.
-        """
-        curves, currents, ma = get_ncsx_data()
+        base_curves, base_currents, ma, nfp, bs = get_data("ncsx")
         with ScratchDir("."):
-            coils_to_makegrid('coils.test', curves, currents, nfp=3, stellsym=True)
+            coils_to_makegrid('coils.test', base_curves, base_currents, nfp=nfp, stellsym=True)
 
     def test_load_coils_from_makegrid_file(self):
         """
         Test loading coils from a MAKEGRID file and verify that geometry and Biot-Savart fields are preserved.
         """
         order = 25
-        ppp = 10
+        points_per_period = 10
 
-        curves, currents, ma = get_ncsx_data(Nt_coils=order, ppp=ppp)
+        base_curves, base_currents, ma, nfp, bs = get_data("ncsx", coil_order=order, points_per_period=points_per_period)
         with ScratchDir("."):
-            coils_to_makegrid("coils.file_to_load", curves, currents, nfp=1)
-            loaded_coils = load_coils_from_makegrid_file("coils.file_to_load", order, ppp)
+            coils_to_makegrid("coils.file_to_load", base_curves, base_currents, nfp=1)
+            loaded_coils = load_coils_from_makegrid_file("coils.file_to_load", order, points_per_period)
 
-        gamma = [curve.gamma() for curve in curves]
+        gamma = [curve.gamma() for curve in base_curves]
         loaded_gamma = [coil.curve.gamma() for coil in loaded_coils]
         loaded_currents = [coil.current for coil in loaded_coils]
-        coils = [Coil(curve, current) for curve, current in zip(curves, currents)]
+        coils = [Coil(curve, current) for curve, current in zip(base_curves, base_currents)]
 
         for j_coil in range(len(coils)):
             np.testing.assert_allclose(
-                currents[j_coil].get_value(),
+                base_currents[j_coil].get_value(),
                 loaded_currents[j_coil].get_value()
             )
-            np.testing.assert_allclose(curves[j_coil].x, loaded_coils[j_coil].curve.x)
+            np.testing.assert_allclose(base_curves[j_coil].x, loaded_coils[j_coil].curve.x)
 
         np.random.seed(1)
 
@@ -263,12 +262,12 @@ class CoilFormatConvertTesting(unittest.TestCase):
         Test loading specific coil groups from a MAKEGRID file and verify correct selection and geometry.
         """
         order = 25
-        ppp = 10
+        points_per_period = 10
 
         # Coil group_names is a list of strings
         filecoils = os.path.join(TEST_DIR, "coils.M16N08")
-        coils = load_coils_from_makegrid_file(filecoils, order, ppp, group_names=["245th-coil", "100th-coil"])
-        all_coils = load_coils_from_makegrid_file(filecoils, order, ppp)
+        coils = load_coils_from_makegrid_file(filecoils, order, points_per_period, group_names=["245th-coil", "100th-coil"])
+        all_coils = load_coils_from_makegrid_file(filecoils, order, points_per_period)
         #     NOTE: coils will be returned in order they appear in the file, not in order of listed groups.
         #     So group_names = ["245th-coil","100th-coil"] gives the array [<coil nr 100>, <coil nr 245>]
         compare_coils = [all_coils[99], all_coils[244]]
@@ -277,8 +276,8 @@ class CoilFormatConvertTesting(unittest.TestCase):
         np.testing.assert_allclose(gamma, compare_gamma)
 
         # Coil group_names is a single string
-        coils = load_coils_from_makegrid_file(filecoils, order, ppp, group_names="256th-coil")
-        all_coils = load_coils_from_makegrid_file(filecoils, order, ppp)
+        coils = load_coils_from_makegrid_file(filecoils, order, points_per_period, group_names="256th-coil")
+        all_coils = load_coils_from_makegrid_file(filecoils, order, points_per_period)
         compare_coils = [all_coils[255]]
         gamma = [coil.curve.gamma() for coil in coils]
         compare_gamma = [coil.curve.gamma() for coil in compare_coils]
@@ -316,6 +315,47 @@ class CoilFormatConvertTesting(unittest.TestCase):
 
         np.testing.assert_allclose(bs.B(), bs_planar.B(), atol=1e-16)
 
+    def test_coils_via_symmetries_with_regularizations(self):
+        """
+        Test coils_via_symmetries with regularizations returns RegularizedCoil objects
+        and produces the same Biot-Savart field as without regularizations.
+        """
+        ncoils = 4
+        nfp = 4
+        stellsym = True
+        R0 = 2.3
+        R1 = 0.9
+
+        curves = create_equally_spaced_curves(ncoils, nfp, stellsym, R0=R0, R1=R1)
+        currents = [Current(1e5) for _ in range(ncoils)]
+
+        # Without regularizations: plain Coil objects
+        coils = coils_via_symmetries(curves, currents, nfp, stellsym)
+        self.assertEqual(len(coils), ncoils * nfp * (1 + stellsym))
+        for c in coils:
+            self.assertIsInstance(c, Coil)
+            self.assertNotIsInstance(c, RegularizedCoil)
+
+        # With regularizations: RegularizedCoil objects, same B field
+        regs = [regularization_circ(0.05) for _ in range(ncoils)]
+        coils_reg = coils_via_symmetries(curves, currents, nfp, stellsym, regularizations=regs)
+        self.assertEqual(len(coils_reg), ncoils * nfp * (1 + stellsym))
+        for c in coils_reg:
+            self.assertIsInstance(c, RegularizedCoil)
+            self.assertIsNotNone(c.regularization)
+
+        bs = BiotSavart(coils)
+        bs_reg = BiotSavart(coils_reg)
+        x1d = np.linspace(R0, R0 + 0.3, 4)
+        y1d = np.linspace(0, 0.2, 3)
+        z1d = np.linspace(-0.2, 0.4, 5)
+        x, y, z = np.meshgrid(x1d, y1d, z1d)
+        points = np.ascontiguousarray(np.array([x.ravel(), y.ravel(), z.ravel()]).T)
+        bs.set_points(points)
+        bs_reg.set_points(points)
+        np.testing.assert_allclose(bs.B(), bs_reg.B(), atol=1e-16,
+                                   err_msg="B field with regularizations should match without")
+
     @unittest.skipIf(pyevtk is None, "pyevtk not found")
     def test_coils_to_vtk_creates_file(self):
         """
@@ -330,7 +370,7 @@ class CoilFormatConvertTesting(unittest.TestCase):
                         for extra_data in [None, {}]:
                             curve = get_curve(curvetype, rotated=rotated, x=20)  # Give the curve more than 1 quadpoint
                             if coil_type == RegularizedCoil:
-                                coil = coil_type(curve, Current(1.0), regularization=regularization_circ(0.05))
+                                coil = coil_type(curve, Current(1.0), regularization_circ(0.05))
                             else:
                                 coil = coil_type(curve, Current(1.0))
                             filename = "test_coil"

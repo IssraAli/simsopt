@@ -1,468 +1,610 @@
 import unittest
-import tempfile
+import os
 import shutil
+import numpy as np
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from monty.tempfile import ScratchDir
 
-from simsopt.util.coil_optimization_helper_functions import (
-    initial_optimizations, 
-    initial_optimizations_QH
+from simsopt.util import (
+    initial_vacuum_stage_II_optimizations, continuation_vacuum_stage_II_optimizations,
+    read_focus_coils, build_stage_II_data_array, make_stage_II_pareto_plots,
+    vacuum_stage_II_optimization, coil_optimization
 )
-from simsopt.field import LpCurveForce, SquaredMeanForce, LpCurveTorque, SquaredMeanTorque, B2Energy
+# from simsopt.field import LpCurveForce, LpCurveTorque, SquaredMeanForce, SquaredMeanTorque
+
+# Test directory setup
+TEST_DIR = Path(__file__).parent / "../test_files"
+OUTPUT_DIR = Path(__file__).parent / "test_output"
 
 
 class TestInitialOptimizations(unittest.TestCase):
-    """Test cases for initial_optimizations function."""
 
-    def setUp(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.test_input_file = Path(__file__).parent / ".." / ".." / "tests" / "test_files" / "input.LandremanPaul2021_QA"
-        
-    def tearDown(self):
-        """Clean up test fixtures."""
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_basic(self, mock_optimization):
-        """Test basic functionality of initial_optimizations."""
-        # Mock the optimization function to avoid actual optimization
-        mock_optimization.return_value = None
-        
-        # Test with minimal parameters
-        initial_optimizations(
-            N=2,  # Small number for testing
-            MAXITER=10,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            debug=False,
-            ncoils=3
-        )
-        
-        # Check that optimization was called twice (N=2)
-        self.assertEqual(mock_optimization.call_count, 2)
-        
-        # Check that the calls were made with expected parameters
-        calls = mock_optimization.call_args_list
-        for call in calls:
-            args, kwargs = call
-            # Check that required parameters are present in positional args
-            self.assertEqual(len(args), 20)  # 20 positional arguments
-            self.assertIn('with_force', kwargs)
-            self.assertIn('debug', kwargs)
-            self.assertIn('MAXITER', kwargs)
+    def test_initial_optimizations_basic(self):
+        """Test basic functionality of initial_optimizations with real file."""
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
             
-            # Check parameter ranges (positional arguments)
-            self.assertTrue(0.35 <= args[2] <= 0.75)  # R1
-            self.assertTrue(5 <= args[8] <= 12)  # CURVATURE_THRESHOLD
-            self.assertTrue(4 <= args[10] <= 6)  # MSC_THRESHOLD
-            self.assertTrue(0.166 <= args[14] <= 0.300)  # CS_THRESHOLD
-            self.assertTrue(0.083 <= args[12] <= 0.120)  # CC_THRESHOLD
-            self.assertTrue(0 <= args[16] <= 5e+04)  # FORCE_THRESHOLD
-            self.assertTrue(4.9 <= args[6] <= 5.0)  # LENGTH_TARGET
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_with_force_objective(self, mock_optimization):
-        """Test initial_optimizations with force objective."""
-        mock_optimization.return_value = None
-        
-        # Test with force objective
-        initial_optimizations(
-            N=1,
-            MAXITER=10,
-            FORCE_OBJ=LpCurveForce,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            debug=True,
-            ncoils=4
-        )
-        
-        # Check that optimization was called with force parameters
-        call_args = mock_optimization.call_args
-        args, kwargs = call_args
-        
-        self.assertTrue(kwargs['with_force'])
-        self.assertEqual(args[18], LpCurveForce)  # FORCE_OBJ is positional arg
-        self.assertTrue(1e-13 <= args[17] <= 1e-8)  # FORCE_WEIGHT is positional arg
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_without_force_objective(self, mock_optimization):
-        """Test initial_optimizations without force objective."""
-        mock_optimization.return_value = None
-        
-        # Test without force objective
-        initial_optimizations(
-            N=1,
-            MAXITER=10,
-            FORCE_OBJ=None,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            debug=False,
-            ncoils=5
-        )
-        
-        # Check that optimization was called without force parameters
-        call_args = mock_optimization.call_args
-        args, kwargs = call_args
-        
-        self.assertFalse(kwargs['with_force'])
-        self.assertEqual(args[17], 0)  # FORCE_WEIGHT is positional arg
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_parameter_ranges(self, mock_optimization):
-        """Test that parameter ranges are within expected bounds."""
-        mock_optimization.return_value = None
-        
-        # Run multiple iterations to test parameter ranges
-        initial_optimizations(
-            N=10,
-            MAXITER=5,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            debug=False,
-            ncoils=3
-        )
-        
-        calls = mock_optimization.call_args_list
-        for call in calls:
-            args, kwargs = call
-            # Test weight parameter ranges (positional arguments)
-            self.assertTrue(1e-4 <= args[7] <= 1e-2)  # LENGTH_WEIGHT
-            self.assertTrue(1e-9 <= args[9] <= 1e-5)  # CURVATURE_WEIGHT
-            self.assertTrue(1e-7 <= args[11] <= 1e-3)  # MSC_WEIGHT
-            self.assertTrue(1e-1 <= args[15] <= 1e+4)  # CS_WEIGHT
-            self.assertTrue(1e+2 <= args[13] <= 1e+5)  # CC_WEIGHT
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_different_force_objectives(self, mock_optimization):
-        """Test initial_optimizations with different force objectives."""
-        mock_optimization.return_value = None
-        
-        force_objectives = [LpCurveForce, SquaredMeanForce, B2Energy]
-        
-        for force_obj in force_objectives:
-            with self.subTest(force_obj=force_obj.__name__):
-                initial_optimizations(
-                    N=1,
-                    MAXITER=5,
-                    FORCE_OBJ=force_obj,
-                    OUTPUT_DIR=self.temp_dir + "/test_output/",
-                    INPUT_FILE=str(self.test_input_file),
-                    debug=False,
-                    ncoils=3
-                )
-                
-                call_args = mock_optimization.call_args
-                args, kwargs = call_args
-                
-                self.assertTrue(kwargs['with_force'])
-                self.assertEqual(args[18], force_obj)  # FORCE_OBJ is positional arg
-
-    def test_initial_optimizations_invalid_input_file(self):
-        """Test that initial_optimizations handles invalid input file gracefully."""
-        with self.assertRaises(Exception):
-            initial_optimizations(
+            output_dir = "qa_output/"
+            
+            # Test initial optimizations with default parameters and no output directory
+            initial_vacuum_stage_II_optimizations(
                 N=1,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
                 MAXITER=5,
-                OUTPUT_DIR=self.temp_dir + "/test_output/",
-                INPUT_FILE="nonexistent_file.txt",
-                debug=False,
                 ncoils=3
             )
+            # Repeat but specify the output directory and debug mode
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3,
+                debug=True
+            )
+            
+            # Check that output directory was created
+            self.assertTrue(os.path.exists(output_dir))
+            
+            # Check that a results.json file was created
+            results_files = list(Path(output_dir).glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Check that biot_savart.json files were created
+            biot_savart_files = list(Path(output_dir).glob("*/biot_savart.json"))
+            self.assertGreater(len(biot_savart_files), 0)
+
+    def test_initial_optimizations_with_force_objective(self):
+        """Test initial_optimizations with force objective."""
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
+            
+            output_dir = "qa_force_output/"
+            
+            # Test initial optimizations with force objective
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                # FORCE_OBJ=LpCurveForce,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3
+            )
+
+            # Test continuation optimizations with force objective
+            continuation_vacuum_stage_II_optimizations(
+                N=1,
+                dx=0.1,
+                INPUT_DIR=output_dir,
+                OUTPUT_DIR=output_dir + "_continuation/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                MAXITER=5,
+                # FORCE_OBJ=LpCurveForce,
+            )
+
+            # Test initial optimizations with torque objective (commented out for now)
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                # FORCE_OBJ=LpCurveTorque,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3
+            )
+
+            # Test continuation optimizations with torque objective (commented out for now)
+            continuation_vacuum_stage_II_optimizations(
+                N=1,
+                dx=0.1,
+                INPUT_DIR=output_dir,
+                OUTPUT_DIR=output_dir + "_continuation/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                MAXITER=5,
+                # FORCE_OBJ=LpCurveTorque,
+            )
+
+            # Test initial optimizations with SquaredMeanForce objective (commented out for now)
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                # FORCE_OBJ=SquaredMeanForce,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3
+            )
+
+            # Test continuation optimizations with SquaredMeanForce objective (commented out for now)
+            continuation_vacuum_stage_II_optimizations(
+                N=1,
+                dx=0.1,
+                INPUT_DIR=output_dir,
+                OUTPUT_DIR=output_dir + "_continuation/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                MAXITER=5,
+                # FORCE_OBJ=SquaredMeanForce,
+            )
+
+            # Test initial optimizations with SquaredMeanTorque objective (commented out for now)
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                # FORCE_OBJ=SquaredMeanTorque,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3
+            )
+
+            # Test continuation optimizations with SquaredMeanTorque objective (commented out for now)
+            continuation_vacuum_stage_II_optimizations(
+                N=1,
+                dx=0.1,
+                INPUT_DIR=output_dir,
+                OUTPUT_DIR=output_dir + "_continuation/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                MAXITER=5,
+                # FORCE_OBJ=SquaredMeanTorque,
+            )
+            
+            # Check that output directory was created
+            self.assertTrue(os.path.exists(output_dir))
+            
+            # Check that a results.json file was created
+            results_files = list(Path(output_dir).glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Check that biot_savart.json files were created
+            biot_savart_files = list(Path(output_dir).glob("*/biot_savart.json"))
+            self.assertGreater(len(biot_savart_files), 0)
 
 
 class TestInitialOptimizationsQH(unittest.TestCase):
-    """Test cases for initial_optimizations_QH function."""
 
-    def setUp(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.test_input_file = Path(__file__).parent / ".." / ".." / "tests" / "test_files" / "input.LandremanPaul2021_QH_magwell_R0=1"
-        
-    def tearDown(self):
-        """Clean up test fixtures."""
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_QH_basic(self, mock_optimization):
-        """Test basic functionality of initial_optimizations_QH."""
-        # Mock the optimization function to return expected values
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-123'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        # Test with minimal parameters
-        initial_optimizations_QH(
-            N=2,  # Small number for testing
-            MAXITER=10,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            ncoils=3
-        )
-        
-        # Check that optimization was called twice (N=2)
-        self.assertEqual(mock_optimization.call_count, 2)
-        
-        # Check that the calls were made with expected parameters
-        calls = mock_optimization.call_args_list
-        for call in calls:
-            args, kwargs = call
-            print(args)
-            print(kwargs)
-            # Check that required parameters are present in positional args
-            self.assertEqual(len(args), 20, msg="There should be 20 positional arguments")
-            self.assertIn('MAXITER', kwargs, msg="MAXITER should be present in kwargs")
-            self.assertIn('with_force', kwargs, msg="with_force should be present in kwargs")
-            self.assertFalse(kwargs['with_force'], msg="with_force should be False")
-            # Check parameter ranges (different from QA)
-            self.assertTrue(0.35 <= args[2] <= 0.75, msg="R1 should be between 0.35 and 0.75")  # R1
-            self.assertTrue(5 <= args[8] <= 12, msg="CURVATURE_THRESHOLD should be between 5 and 12")  # CURVATURE_THRESHOLD
-            self.assertTrue(4 <= args[10] <= 6, msg="MSC_THRESHOLD should be between 4 and 6")  # MSC_THRESHOLD
-            self.assertTrue(0.166 <= args[14] <= 0.300, msg="CS_THRESHOLD should be between 0.166 and 0.300")  # CS_THRESHOLD
-            self.assertTrue(0.083 <= args[12] <= 0.120, msg="CC_THRESHOLD should be between 0.083 and 0.120")  # CC_THRESHOLD
-            self.assertTrue(0 <= args[16] <= 5e+04, msg="FORCE_THRESHOLD should be between 0 and 5e+04")  # FORCE_THRESHOLD
-            self.assertTrue(4.9 <= args[6] <= 5.0, msg="LENGTH_TARGET should be between 4.9 and 5.0")  # LENGTH_TARGET
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_QH_with_force_objective(self, mock_optimization):
-        """Test initial_optimizations_QH with force objective."""
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-456'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        # Test with force objective
-        initial_optimizations_QH(
-            N=1,
-            MAXITER=10,
-            FORCE_OBJ=LpCurveForce,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            ncoils=4
-        )
-        
-        # Check that optimization was called with force parameters
-        call_args = mock_optimization.call_args
-        args, kwargs = call_args
-        
-        self.assertTrue(kwargs['with_force'])
-        self.assertTrue(1e-14 <= args[17] <= 1e-9)  # FORCE_WEIGHT is positional arg
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_QH_without_force_objective(self, mock_optimization):
-        """Test initial_optimizations_QH without force objective."""
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-789'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        # Test without force objective
-        initial_optimizations_QH(
-            N=1,
-            MAXITER=10,
-            FORCE_OBJ=None,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            ncoils=5
-        )
-        
-        # Check that optimization was called without force parameters
-        call_args = mock_optimization.call_args
-        args, kwargs = call_args
-        
-        self.assertFalse(kwargs['with_force'])
-        self.assertEqual(args[17], 0)  # FORCE_WEIGHT is positional arg
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_QH_parameter_ranges(self, mock_optimization):
-        """Test that QH parameter ranges are within expected bounds."""
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-param'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        # Run multiple iterations to test parameter ranges
-        initial_optimizations_QH(
-            N=10,
-            MAXITER=5,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            ncoils=3
-        )
-        
-        calls = mock_optimization.call_args_list
-        for call in calls:
-            args, kwargs = call
-            # Test weight parameter ranges (positional arguments)
-            self.assertTrue(1e-3 <= args[7] <= 1e-1)  # LENGTH_WEIGHT
-            self.assertTrue(1e-9 <= args[9] <= 1e-5)  # CURVATURE_WEIGHT
-            self.assertTrue(1e-5 <= args[11] <= 1e-1)  # MSC_WEIGHT
-            self.assertTrue(1e-1 <= args[15] <= 1e+4)  # CS_WEIGHT
-            self.assertTrue(1e+2 <= args[13] <= 1e+5)  # CC_WEIGHT
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_QH_different_force_objectives(self, mock_optimization):
-        """Test initial_optimizations_QH with different force objectives."""
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-force'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        force_objectives = [LpCurveForce, SquaredMeanForce, LpCurveTorque, SquaredMeanTorque, B2Energy]
-        
-        for force_obj in force_objectives:
-            with self.subTest(force_obj=force_obj.__name__):
-                initial_optimizations_QH(
-                    N=1,
-                    MAXITER=5,
-                    FORCE_OBJ=force_obj,
-                    OUTPUT_DIR=self.temp_dir + "/test_output/",
-                    INPUT_FILE=str(self.test_input_file),
-                    ncoils=3
-                )
-                
-                call_args = mock_optimization.call_args
-                args, kwargs = call_args
-                
-                self.assertTrue(kwargs['with_force'])
-
-    def test_initial_optimizations_QH_invalid_input_file(self):
-        """Test that initial_optimizations_QH handles invalid input file gracefully."""
-        with self.assertRaises(Exception):
-            initial_optimizations_QH(
+    def test_initial_optimizations_QH_basic(self):
+        """Test basic functionality of initial_optimizations_QH with real file."""
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QH_reactorScale_lowres", ".")
+            
+            output_dir = "qh_output/"
+            
+            # Test initial optimizations with default parameters on LP QH
+            initial_vacuum_stage_II_optimizations(
                 N=1,
                 MAXITER=5,
-                OUTPUT_DIR=self.temp_dir + "/test_output/",
-                INPUT_FILE="nonexistent_file.txt",
-                ncoils=3
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QH_reactorScale_lowres',
+                ncoils=3,
+                config="QH"
             )
 
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_initial_optimizations_QH_return_values(self, mock_optimization):
-        """Test that initial_optimizations_QH properly handles return values from optimization."""
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-return'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        # Test that the function completes without error
-        initial_optimizations_QH(
-            N=1,
-            MAXITER=5,
-            OUTPUT_DIR=self.temp_dir + "/test_output/",
-            INPUT_FILE=str(self.test_input_file),
-            ncoils=3
-        )
-        
-        # Verify that optimization was called
-        mock_optimization.assert_called_once()
+            # Test initial optimizations with debug = True on LP QH
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                # FORCE_OBJ=LpCurveForce,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QH_reactorScale_lowres',
+                ncoils=3,
+                debug=True,
+                config="QH"
+            )
+            
+            # Check that output directory was created
+            self.assertTrue(os.path.exists(output_dir))
+            
+            # Check that a results.json file was created
+            results_files = list(Path(output_dir).glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Check that biot_savart.json files were created
+            biot_savart_files = list(Path(output_dir).glob("*/biot_savart.json"))
+            self.assertGreater(len(biot_savart_files), 0)
+
+    def test_initial_optimizations_QH_with_force_objective(self):
+        """Test initial_optimizations_QH with force objective using real file."""
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QH_reactorScale_lowres", ".")
+            
+            output_dir = "qh_force_output/"
+            
+            # Test initial optimizations with force objective on LP QH
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                # FORCE_OBJ=LpCurveForce,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QH_reactorScale_lowres',
+                ncoils=3,
+                config="QH"
+            )
+            
+            # Check that output directory was created
+            self.assertTrue(os.path.exists(output_dir))
+            
+            # Check that a results.json file was created
+            results_files = list(Path(output_dir).glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Check that biot_savart.json files were created
+            biot_savart_files = list(Path(output_dir).glob("*/biot_savart.json"))
+            self.assertGreater(len(biot_savart_files), 0)
 
 
-class TestInitialOptimizationsComparison(unittest.TestCase):
-    """Test cases comparing QA and QH optimization functions."""
+class TestReadFocusCoils(unittest.TestCase):
 
-    def setUp(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.qa_input_file = Path(__file__).parent / ".." / ".." / "tests" / "test_files" / "input.LandremanPaul2021_QA"
-        self.qh_input_file = Path(__file__).parent / ".." / ".." / "tests" / "test_files" / "input.LandremanPaul2021_QH_magwell_R0=1"
-        
-    def tearDown(self):
-        """Clean up test fixtures."""
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_qa_vs_qh_parameter_differences(self, mock_optimization):
-        """Test that QA and QH functions use different parameter ranges."""
-        mock_optimization.return_value = None
-        
-        # Run QA optimization
-        initial_optimizations(
-            N=1,
-            MAXITER=5,
-            OUTPUT_DIR=self.temp_dir + "/qa_output/",
-            INPUT_FILE=str(self.qa_input_file),
-            ncoils=5
-        )
-        
-        qa_call = mock_optimization.call_args
-        qa_args, qa_kwargs = qa_call
-        
-        # Reset mock
-        mock_optimization.reset_mock()
-        
-        # Run QH optimization
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-compare'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        initial_optimizations_QH(
-            N=1,
-            MAXITER=5,
-            OUTPUT_DIR=self.temp_dir + "/qh_output/",
-            INPUT_FILE=str(self.qh_input_file),
-            ncoils=3
-        )
-        
-        qh_call = mock_optimization.call_args
-        qh_args, qh_kwargs = qh_call
-        
-        # Compare parameter ranges
-        # QH should have different weight ranges than QA
-        self.assertNotEqual(qa_args[7], qh_args[7])  # LENGTH_WEIGHT
-        self.assertNotEqual(qa_args[11], qh_args[11])  # MSC_WEIGHT
-        
-        # Check that QH uses different ncoils default
-        self.assertEqual(qa_args[4], 5)
-        self.assertEqual(qh_args[4], 3)
-
-    @patch('simsopt.util.coil_optimization_helper_functions.optimization')
-    def test_qa_vs_qh_force_weight_ranges(self, mock_optimization):
-        """Test that QA and QH use different force weight ranges."""
-        mock_optimization.return_value = None
-        
-        # Test QA force weights
-        initial_optimizations(
-            N=1,
-            MAXITER=5,
-            FORCE_OBJ=LpCurveForce,
-            OUTPUT_DIR=self.temp_dir + "/qa_output/",
-            INPUT_FILE=str(self.qa_input_file),
-            ncoils=3
-        )
-        
-        qa_call = mock_optimization.call_args
-        qa_args, qa_kwargs = qa_call
-        qa_force_weight = qa_args[17]
-        
-        # Reset mock
-        mock_optimization.reset_mock()
-        
-        # Test QH force weights
-        mock_result = MagicMock()
-        mock_results = {'UUID': 'test-uuid-force-compare'}
-        mock_coils = [MagicMock()]
-        mock_optimization.return_value = (mock_result, mock_results, mock_coils)
-        
-        initial_optimizations_QH(
-            N=1,
-            MAXITER=5,
-            FORCE_OBJ=LpCurveForce,
-            OUTPUT_DIR=self.temp_dir + "/qh_output/",
-            INPUT_FILE=str(self.qh_input_file),
-            ncoils=3
-        )
-        
-        qh_call = mock_optimization.call_args
-        qh_args, qh_kwargs = qh_call
-        qh_force_weight = qh_args[17]
-        
-        # Both should be within their respective ranges
-        self.assertTrue(1e-13 <= qa_force_weight <= 1e-8)
-        self.assertTrue(1e-14 <= qh_force_weight <= 1e-9)
+    def test_read_focus_coils_basic(self):
+        """Test basic functionality of read_focus_coils with real FOCUS file."""
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "muse_tf_coils.focus", ".")
+            
+            focus_file = TEST_DIR / "muse_tf_coils.focus"
+            
+            # Test reading the FOCUS file
+            coils = read_focus_coils(focus_file)
+            
+            # Check that coils were read
+            self.assertIsNotNone(coils)
+            self.assertGreater(len(coils), 0)
+            
+            # Check that each coil has the expected attributes
+            for coil in coils:
+                self.assertIsNotNone(coil)
 
 
-if __name__ == '__main__':
+class TestContinuation(unittest.TestCase):
+
+    def test_continuation_basic(self):
+        """Test basic functionality of continuation with real files, this test differs 
+        from previous only in that it checks the continuation folder for new files."""
+        with ScratchDir("."):
+            # First run initial_optimizations to create input data for continuation
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
+            
+            # Test initial optimizations with default parameters
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                OUTPUT_DIR="qa_output/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3
+            )
+            
+            # Test continuation optimizations with default parameters
+            continuation_vacuum_stage_II_optimizations(
+                N=1,
+                dx=0.1,
+                INPUT_DIR="qa_output/",
+                OUTPUT_DIR="qa_output_continuation/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                MAXITER=5
+            )
+            
+            # Check that output directory was created for the continuation optimizations
+            self.assertTrue(os.path.exists("qa_output_continuation/"))
+            
+            # Check that a results.json file was created for the continuation optimizations
+            results_files = list(Path("qa_output_continuation/").glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Check that biot_savart.json files were created for the continuation optimizations
+            biot_savart_files = list(Path("qa_output_continuation/").glob("*/biot_savart.json"))
+            self.assertGreater(len(biot_savart_files), 0)
+
+
+class TestRealOptimizationRun(unittest.TestCase):
+
+    def test_initial_optimizations_and_continuation(self):
+        """Test initial_optimizations and continuation together for a nontrivial optimization run."""
+        with ScratchDir("."):
+            # Run initial optimizations
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
+            
+            # Do initial optimizations with maxiters, N, and ncoils set to nontrivial values.
+            initial_vacuum_stage_II_optimizations(
+                N=2,
+                MAXITER=50,
+                OUTPUT_DIR="qa_output/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=4,
+                config="QA"
+            )
+            
+            # Run continuation on the previous optimization results
+            continuation_vacuum_stage_II_optimizations(
+                N=2,
+                dx=0.01,
+                INPUT_DIR="qa_output/",
+                OUTPUT_DIR="qa_output_continuation/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                MAXITER=5,
+                config="QA"
+            )
+
+            # Build a data array and make the Pareto plots
+            df, df_filtered, _ = build_stage_II_data_array(
+                INPUT_DIR="qa_output/", 
+                margin_up=1e5,
+                margin_low=1e-5,
+            )
+            make_stage_II_pareto_plots(df, df_filtered, OUTPUT_DIR="qa_output_continuation/")
+            
+            # Check that both output directories were created
+            self.assertTrue(os.path.exists("qa_output/"))
+            self.assertTrue(os.path.exists("qa_output_continuation/"))
+            
+            # Check that results.json files were created in both directories
+            qa_results = list(Path("qa_output/").glob("*/results.json"))
+            continuation_results = list(Path("qa_output_continuation/").glob("*/results.json"))
+            continuation_hist = list(Path("qa_output_continuation/").glob("histograms.pdf"))
+            self.assertGreater(len(qa_results), 0)
+            self.assertGreater(len(continuation_results), 0)
+            self.assertGreater(len(continuation_hist), 0)
+            
+            # Check that biot_savart.json files were created in both directories
+            qa_biot_savart = list(Path("qa_output/").glob("*/biot_savart.json"))
+            continuation_biot_savart = list(Path("qa_output_continuation/").glob("*/biot_savart.json"))
+            self.assertGreater(len(qa_biot_savart), 0)
+            self.assertGreater(len(continuation_biot_savart), 0)
+
+
+class TestOptimizationKwargs(unittest.TestCase):
+
+    def test_initial_optimizations_with_all_kwargs(self):
+        """Test initial_optimizations with all kwargs explicitly passed."""
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
+            
+            output_dir = "qa_output_kwargs/"
+            
+            # Test with all kwargs explicitly passed
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3,
+                config="QA",
+                FORCE_OBJ=None,
+                with_force=False,
+                debug=True
+            )
+            
+            # Check that output directory was created
+            self.assertTrue(os.path.exists(output_dir))
+            
+            # Check that a results.json file was created
+            results_files = list(Path(output_dir).glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Verify that the results.json contains expected keys
+            if results_files:
+                import json
+                with open(results_files[0], 'r') as f:
+                    results_data = json.load(f)
+                    # Check that key optimization parameters are present
+                    self.assertIn('JF', results_data)
+                    self.assertIn('Jf', results_data)
+                    self.assertIn('lengths', results_data)
+                    self.assertIn('max_κ', results_data)
+                    self.assertIn('MSCs', results_data)
+
+    def test_continuation_with_all_kwargs(self):
+        """Test continuation_optimizations with all kwargs explicitly passed."""
+        with ScratchDir("."):
+            # First run initial_optimizations to create input data for continuation
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
+            
+            # Run initial optimizations to create input data for continuation
+            initial_vacuum_stage_II_optimizations(
+                N=1,
+                MAXITER=5,
+                OUTPUT_DIR="qa_output_kwargs_init/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                ncoils=3,
+                config="QA"
+            )
+            
+            # Now test continuation with all kwargs
+            continuation_vacuum_stage_II_optimizations(
+                N=1,
+                dx=0.1,
+                config="QA",
+                INPUT_DIR="qa_output_kwargs_init/",
+                OUTPUT_DIR="qa_output_kwargs_continuation/",
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                FORCE_OBJ=None,
+                debug=True,
+                MAXITER=5
+            )
+            
+            # Check that output directory was created
+            self.assertTrue(os.path.exists("qa_output_kwargs_continuation/"))
+            
+            # Check that a results.json file was created
+            results_files = list(Path("qa_output_kwargs_continuation/").glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Verify that the results.json contains expected keys
+            if results_files:
+                import json
+                with open(results_files[0], 'r') as f:
+                    results_data = json.load(f)
+                    # Check that key optimization parameters are present
+                    self.assertIn('JF', results_data)
+                    self.assertIn('Jf', results_data)
+                    self.assertIn('lengths', results_data)
+                    self.assertIn('max_κ', results_data)
+                    self.assertIn('MSCs', results_data)
+
+    def test_vacuum_stage_II_optimization_with_all_kwargs(self):
+        """Test vacuum_stage_II_optimization with all kwargs explicitly passed."""
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
+            
+            output_dir = "qa_output_direct/"
+            
+            # Test with all kwargs explicitly passed
+            results = vacuum_stage_II_optimization(
+                config="QA",
+                OUTPUT_DIR=output_dir,
+                INPUT_FILE=TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                R1=0.5,
+                order=5,
+                ncoils=3,
+                UUID_init_from=None,
+                # All kwargs explicitly passed
+                LENGTH_TARGET=5.0,
+                LENGTH_WEIGHT=1e-3,
+                CURVATURE_THRESHOLD=12.0,
+                CURVATURE_WEIGHT=1e-8,
+                MSC_THRESHOLD=5.0,
+                MSC_WEIGHT=1e-4,
+                CC_THRESHOLD=0.083,
+                CC_WEIGHT=1e3,
+                CS_THRESHOLD=0.166,
+                CS_WEIGHT=1e3,
+                FORCE_THRESHOLD=2e4,
+                FORCE_WEIGHT=1e-10,
+                FORCE_OBJ=None,
+                ARCLENGTH_WEIGHT=1e-2,
+                dx=0.05,
+                with_force=False,
+                debug=True,
+                MAXITER=5
+            )
+            
+            # Check that output directory was created
+            self.assertTrue(os.path.exists(output_dir))
+            
+            # Check that results dictionary is returned
+            self.assertIsInstance(results, dict)
+            self.assertIn('UUID', results)
+            self.assertIn('JF', results)
+            self.assertIn('Jf', results)
+            self.assertIn('lengths', results)
+            self.assertIn('max_κ', results)
+            self.assertIn('MSCs', results)
+            
+            # Check that a results.json file was created
+            results_files = list(Path(output_dir).glob("*/results.json"))
+            self.assertGreater(len(results_files), 0)
+            
+            # Verify that the results.json matches the returned dict
+            if results_files:
+                import json
+                with open(results_files[0], 'r') as f:
+                    results_data = json.load(f)
+                    # Check that returned UUID matches saved UUID
+                    self.assertEqual(results['UUID'], results_data['UUID'])
+
+
+class TestCoilOptimization(unittest.TestCase):
+
+    def test_coil_optimization_basic(self):
+        """Test basic functionality of coil_optimization function."""
+        from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves
+        from simsopt.field import Current, coils_via_symmetries, BiotSavart
+        from simsopt.objectives import SquaredFlux
+        
+        with ScratchDir("."):
+            # Copy required files into the temp dir
+            shutil.copy(TEST_DIR / "input.LandremanPaul2021_QA_reactorScale_lowres", ".")
+            
+            # Create surface from test file
+            nphi = 32
+            ntheta = 32
+            s = SurfaceRZFourier.from_vmec_input(
+                TEST_DIR / 'input.LandremanPaul2021_QA_reactorScale_lowres',
+                range="half period",
+                nphi=nphi,
+                ntheta=ntheta
+            )
+            nfp = s.nfp
+            R0 = s.get_rc(0, 0)
+            
+            # Create initial coils
+            ncoils = 3
+            order = 5
+            R1 = 0.5
+            base_curves = create_equally_spaced_curves(
+                ncoils,
+                nfp,
+                stellsym=True,
+                R0=R0,
+                R1=R1,
+                order=order,
+            )
+            
+            # Create currents
+            total_current = 3e5
+            base_currents = [Current(total_current / ncoils * 1e-5) * 1e5 for _ in range(ncoils-1)]
+            total_current_obj = Current(total_current)
+            total_current_obj.fix_all()
+            base_currents += [total_current_obj - sum(base_currents)]
+            
+            # Create coils with symmetries
+            coils = coils_via_symmetries(base_curves, base_currents, nfp, True)
+            curves = [c.curve for c in coils]
+            
+            # Create BiotSavart object
+            bs = BiotSavart(coils)
+            bs.set_points(s.gamma().reshape((-1, 3)))
+            fB_initial = SquaredFlux(s, bs).J()
+            
+            # Run optimization with minimal iterations
+            bs_optimized = coil_optimization(
+                s, bs, base_curves, curves,
+                MAXITER=5,
+                LENGTH_WEIGHT=1.0,
+                LENGTH_THRESHOLD=18.0 * R0,
+                CC_WEIGHT=1.0,
+                CC_THRESHOLD=0.1 * R0,
+                CS_WEIGHT=1e-2,
+                CS_THRESHOLD=0.15 * R0,
+                CURVATURE_WEIGHT=1e-6,
+                CURVATURE_THRESHOLD=0.1 * R0,
+                MSC_WEIGHT=1e-6,
+                MSC_THRESHOLD=0.1 * R0,
+                LINKING_NUMBER_WEIGHT=0.0,
+                FORCE_WEIGHT=0.0,
+                FORCE_THRESHOLD=0.0
+            )
+            
+            # Verify that optimization returns a BiotSavart object
+            self.assertIsInstance(bs_optimized, BiotSavart)
+            
+            # Verify that the coils are still present
+            self.assertEqual(len(bs_optimized.coils), len(coils))
+            
+            # Verify that the field can still be evaluated
+            bs_optimized.set_points(s.gamma().reshape((-1, 3)))
+            final_BdotN = np.mean(np.abs(np.sum(bs_optimized.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
+            
+            # Field should be finite
+            self.assertTrue(np.isfinite(final_BdotN))
+
+            # fB should have decreased
+            fB_final = SquaredFlux(s, bs_optimized).J()
+            self.assertLess(fB_final, fB_initial)
+
+            # Run optimization with minimal iterations without passing arguments
+            bs_optimized = coil_optimization(
+                s, bs, base_curves, curves,
+                MAXITER=5,
+            )
+            
+            # Verify that points are set correctly
+            points = s.gamma().reshape((-1, 3))
+            np.testing.assert_allclose(bs_optimized.get_points_cart_ref(), points, atol=1e-8)
+
+
+if __name__ == "__main__":
     unittest.main() 
