@@ -40,7 +40,7 @@ from simsopt.geo import CurveLength, CurveCurveDistance, \
     LpCurveCurvature, CurveSurfaceDistance, MeanSquaredCurvature
 from simsopt.solve import augmented_lagrangian_method
 from simsopt.field import BiotSavart, coils_to_vtk
-from simsopt.field.force import LpCurveForce, coil_force
+from simsopt.field.force import LpCurveForce
 from simsopt.field import Current, coils_via_symmetries, regularization_circ
 from pathlib import Path
 from simsopt.util import in_github_actions
@@ -141,7 +141,7 @@ Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
 Jlink = LinkingNumber(curves, downsample=2)
 Jforce = LpCurveForce(base_coils, coils, p=2.0, threshold=FORCE_THRESHOLD)
 
-force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in base_coils]
+force = [np.max(np.linalg.norm(c.force(coils), axis=1)) for c in base_coils]
 print("Forces:")
 print(",".join(f"{f:.2e}" for f in force))
 
@@ -195,7 +195,7 @@ print('Final Max Curvatures:', [np.max(c.kappa()) for c in base_curves])
 print('Final Lengths:', [CurveLength(c).J() for c in base_curves], sum(Jls).J())
 print('Final Mean Squared Curvature', [MeanSquaredCurvature(c).J() for c in base_curves])
 # print('Final Force constraint:', Jforce.J())
-force = [np.max(np.linalg.norm(coil_force(c, coils), axis=1)) for c in base_coils]
+force = [np.max(np.linalg.norm(c.force(coils), axis=1)) for c in base_coils]
 print("Forces:")
 print(",".join(f"{f:.2e}" for f in force))
 coils_to_vtk(coils, OUT_DIR + "coils_optimized_auglag_qh_reactorscale")

@@ -6,7 +6,7 @@ __all__ = ['read_focus_coils', 'coil_optimization',
            'trace_fieldlines', 'make_qfm', 'vacuum_stage_II_optimization',
            'calculate_modB_on_major_radius', 'initial_vacuum_stage_II_optimizations',
            'continuation_vacuum_stage_II_optimizations', 'make_stage_II_pareto_plots',
-           'build_stage_II_data_array',
+           'build_stage_II_data_array', 'initialize_coils_simple',
            ]
 
 import numpy as np
@@ -85,6 +85,95 @@ def read_focus_coils(filename):
     return coils, base_currents, ncoils
 
 
+def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, nturns=256, regularization=None):
+    """
+    Initializes four coils with order=16 and total current set to produce 
+    a target B-field on-axis. The coil centers and radii are scaled by 
+    the plasma surface major radius. The function iteratively adjusts the
+    total current until the field strength along the major radius averages
+    to the target value.
+
+    Args:
+        s: plasma boundary surface.
+        out_dir: Path or string for the output directory for saved files.
+        target_B: Target magnetic field strength in Tesla (default: 5.7).
+    Returns:
+        coils: List of Coil class objects.
+    """
+    from simsopt.geo import create_equally_spaced_curves
+    from simsopt.field import Current, coils_via_symmetries, BiotSavart
+    from simsopt.field.coil import coils_to_vtk
+    from simsopt.util.coil_optimization_helper_functions import calculate_modB_on_major_radius
+
+    out_dir = Path(out_dir)
+
+    if regularization is not None:
+        regularizations = [regularization for _ in range(ncoils)]
+    else:
+        regularizations = None
+    # Get the major radius from the surface and scale coil parameters
+    R0 = s.get_rc(0, 0)  # Major radius
+    R1 = s.get_rc(1, 0) * 2.5  # Scale the minor radius component
+    
+    # Initial guess for total current (using QH configuration as reference)
+    total_current = 5e7  # 50 MA initial guess is not bad for reactor-scale
+    
+    # Create equally spaced curves with the specified parameters
+    base_curves = create_equally_spaced_curves(
+        ncoils, s.nfp, stellsym=True,
+        R0=R0, R1=R1, order=order, numquadpoints=256)
+    
+    # print(f"Target B-field: {target_B} T")
+    # print(f"Major radius: {R0:.3f} m")
+    # print(f"Minor radius component: {s.get_rc(1, 0):.3f} m")
+    # print(f"NFP: {s.nfp}")
+    
+    # Iterative current adjustment
+    max_iterations = 20
+    tolerance = 1e-2
+    for iteration in range(max_iterations):
+        # print(f"Iteration {iteration + 1}/{max_iterations}")
+        # print(f"  Current total current: {total_current:.0f} A")
+        
+        # Distribute current among coils
+        base_currents = [(Current(total_current / ncoils * 1e-7) * 1e7) for _ in range(ncoils - 1)]
+        total_current_obj = Current(total_current)
+        total_current_obj.fix_all()
+        base_currents += [total_current_obj - sum(base_currents)]
+        
+        # Create coils using symmetries
+        coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True, regularizations=regularizations)
+        
+        # Create BiotSavart object to evaluate field
+        bs = BiotSavart(coils)
+        
+        # Calculate field strength along major radius
+        B_avg = calculate_modB_on_major_radius(bs, s)
+        
+        # print(f"  Achieved B-field: {B_avg:.3f} T")
+        # print(f"  Difference: {B_avg - target_B:.3f} T")
+        
+        # Check convergence
+        if abs(B_avg - target_B) / target_B < tolerance:
+            # print(f"  ✓ Converged! B-field within {tolerance*100:.1f}% of target")
+            break
+        
+        # Adjust current based on field difference
+        # Use simple linear scaling: new_current = current * (target_B / achieved_B)
+        current_scale_factor = target_B / B_avg
+        total_current *= current_scale_factor
+        
+        # print(f"  New total current: {total_current:.0f} A")
+    
+    else:
+        print(f"  ⚠ Warning: Did not converge within {max_iterations} iterations")
+        print(f"  Final B-field: {B_avg:.3f} T (target: {target_B} T)")
+    
+    # Save final coils to VTK
+    coils_to_vtk(coils, out_dir / "coils_init")    
+    return coils
+
+
 def coil_optimization(s, bs, base_curves, curves, **kwargs):
     """
     Basic stellarator coil optimization wrapper function that can be reused in many 
@@ -131,7 +220,6 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
         LinkingNumber
     from simsopt.objectives import QuadraticPenalty, SquaredFlux
     from simsopt.field.force import LpCurveForce
-    from simsopt.field.selffield import regularization_circ
 
     nphi = len(s.quadpoints_phi)
     ntheta = len(s.quadpoints_theta)
@@ -176,8 +264,7 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
     Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
     Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
     linking_number = LinkingNumber(curves)
-    # Hard-coded finite widths below -- 3 cm width for 1m device, ~ 30 cm width for 10m device
-    Jforce = [LpCurveForce(c, coils, regularization_circ(0.03 * R0), p=2, threshold=FORCE_THRESHOLD) for c in base_coils]
+    Jforce = [LpCurveForce(c, coils, p=2, threshold=FORCE_THRESHOLD) for c in base_coils]
 
     # Form the total objective function.
     JF = Jf \
@@ -706,7 +793,8 @@ def vacuum_stage_II_optimization(
         total_current.fix_all()
         base_currents += [total_current - sum(base_currents)]
 
-        coils = coils_via_symmetries(base_curves, base_currents, nfp, True)
+        regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+        coils = coils_via_symmetries(base_curves, base_currents, nfp, True, regularizations)
         base_coils = coils[:ncoils]
         curves = [c.curve for c in coils]
 
@@ -840,7 +928,6 @@ def vacuum_stage_II_optimization(
     
     lpcurveforce = sum([LpCurveForce(c, coils, p=2, 
         threshold=FORCE_THRESHOLD, 
-        regularization=reg_param
         ) for c in base_coils]
     ).J()
     max_forces = [np.max(np.linalg.norm(c_reg.force(coils), axis=1)) for c_reg in base_coils_reg]

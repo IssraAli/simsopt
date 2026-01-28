@@ -31,8 +31,9 @@ def initialize_coils_for_pm_optimization(config_flag, TEST_DIR, s, out_dir=''):
         coils: List of Coil class objects.
     """
     from simsopt.geo import create_equally_spaced_curves
-    from simsopt.field import Current, Coil, coils_via_symmetries
+    from simsopt.field import Current, RegularizedCoil, coils_via_symmetries
     from simsopt.geo import curves_to_vtk
+    from simsopt.field.selffield import regularization_circ
     from simsopt.util.coil_optimization_helper_functions import read_focus_coils
 
     out_dir = Path(out_dir)
@@ -51,7 +52,7 @@ def initialize_coils_for_pm_optimization(config_flag, TEST_DIR, s, out_dir=''):
         base_currents += [total_current - sum(base_currents)]
         coils = []
         for i in range(ncoils):
-            coils.append(Coil(base_curves[i], base_currents[i]))
+            coils.append(RegularizedCoil(base_curves[i], base_currents[i], regularization_circ(0.05)))
 
     elif config_flag == 'qh':
         # generate planar TF coils
@@ -68,7 +69,8 @@ def initialize_coils_for_pm_optimization(config_flag, TEST_DIR, s, out_dir=''):
         total_current = Current(total_current)
         total_current.fix_all()
         base_currents += [total_current - sum(base_currents)]
-        coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)
+        regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+        coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True, regularizations)
 
     elif config_flag == 'qa':
         # generate planar TF coils
@@ -84,7 +86,8 @@ def initialize_coils_for_pm_optimization(config_flag, TEST_DIR, s, out_dir=''):
         total_current = Current(total_current)
         total_current.fix_all()
         base_currents += [total_current - sum(base_currents)]
-        coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)
+        regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+        coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True, regularizations)
     
     # fix all the coil shapes so only the currents are optimized
     for i in range(ncoils):

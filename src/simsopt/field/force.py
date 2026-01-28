@@ -6,6 +6,7 @@ import jax.scipy as jscp
 from jax import grad, vmap
 from jax.lax import cond
 from .biotsavart import BiotSavart
+from .coil import RegularizedCoil
 from .selffield import B_regularized_pure
 from ..geo.jit import jit
 from .._core.optimizable import Optimizable
