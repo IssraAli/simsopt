@@ -513,6 +513,7 @@ class TestCoilOptimization(unittest.TestCase):
         from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves
         from simsopt.field import Current, coils_via_symmetries, BiotSavart
         from simsopt.objectives import SquaredFlux
+        from simsopt.field.selffield import regularization_circ
         
         with ScratchDir("."):
             # Copy required files into the temp dir
@@ -551,7 +552,8 @@ class TestCoilOptimization(unittest.TestCase):
             base_currents += [total_current_obj - sum(base_currents)]
             
             # Create coils with symmetries
-            coils = coils_via_symmetries(base_curves, base_currents, nfp, True)
+            regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+            coils = coils_via_symmetries(base_curves, base_currents, nfp, True, regularizations=[regularization_circ(0.05) for _ in range(ncoils)])
             curves = [c.curve for c in coils]
             
             # Create BiotSavart object

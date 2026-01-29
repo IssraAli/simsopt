@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from simsopt.geo import SurfaceRZFourier
 from simsopt.util import optimize_coils_simple
+from simsopt.field.selffield import regularization_circ
 
 def test_optimize_coils_simple():
     """Test the optimize_coils_simple function with all input files."""
@@ -82,7 +83,8 @@ def test_optimize_coils_simple():
                 order=4,
                 nphi=8,
                 ntheta=8,
-                verbose=False
+                verbose=False,
+                regularization=regularization_circ(0.05)
             )
             
             print("  ✓ Function completed successfully!")

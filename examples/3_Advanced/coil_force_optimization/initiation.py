@@ -21,7 +21,7 @@ This pareto scan script was used to generate the results in the papers:
     Nuclear Fusion, 65(4), p.046029.
     https://iopscience.iop.org/article/10.1088/1741-4326/adc318/meta
 """
-from simsopt.util.coil_optimization_helper_functions import initial_optimizations
+from simsopt.util.coil_optimization_helper_functions import initial_vacuum_stage_II_optimizations
 from simsopt.field import LpCurveForce, B2Energy, SquaredMeanForce, LpCurveTorque, SquaredMeanTorque
 import sys
 from pathlib import Path
@@ -50,6 +50,6 @@ TEST_DIR = (Path(__file__).parent / ".." / ".." / ".." / "tests" / "test_files")
 INPUT_FILE = TEST_DIR / "input.LandremanPaul2021_QA"
 N = 5  # number of optimizations to run
 MAXITER = 5  # maximum number of iterations for each optimization
-initial_optimizations(OUTPUT_DIR=OUTPUT_DIR, INPUT_FILE=INPUT_FILE, 
+initial_vacuum_stage_II_optimizations(OUTPUT_DIR=OUTPUT_DIR, INPUT_FILE=INPUT_FILE, 
                       FORCE_OBJ=func, N=N, MAXITER=MAXITER)
 
