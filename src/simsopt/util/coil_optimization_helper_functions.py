@@ -480,7 +480,7 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
         + CURVATURE_WEIGHT * sum([LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]) \
         + MSC_WEIGHT * sum([QuadraticPenalty(MeanSquaredCurvature(c), MSC_THRESHOLD) for c in base_curves]) \
         + LINKING_NUMBER_WEIGHT * LinkingNumber(curves) \
-        + FORCE_WEIGHT * sum([LpCurveForce(c, coils, regularization_circ(0.03 * R0), p=2, threshold=FORCE_THRESHOLD) for c in base_curves])
+        + FORCE_WEIGHT * Jforce
 
     Args:
         s (Surface): Surface representing the plasma boundary
@@ -514,6 +514,8 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
         LinkingNumber
     from simsopt.objectives import QuadraticPenalty, SquaredFlux
     from simsopt.field.force import LpCurveForce
+    from simsopt.field.selffield import regularization_circ
+    from simsopt.field.coil import RegularizedCoil
 
     nphi = len(s.quadpoints_phi)
     ntheta = len(s.quadpoints_theta)
@@ -558,7 +560,14 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
     Jcs = [LpCurveCurvature(c, 2, CURVATURE_THRESHOLD) for c in base_curves]
     Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
     linking_number = LinkingNumber(curves)
-    Jforce = [LpCurveForce(c, coils, p=2, threshold=FORCE_THRESHOLD) for c in base_coils]
+    # Hard-coded finite widths below -- 3 cm width for 1m device, ~ 30 cm width for 10m device
+    # Convert coils to RegularizedCoil objects for force calculation if FORCE_WEIGHT > 0
+    if FORCE_WEIGHT > 0:
+        reg_base_coils = [RegularizedCoil(c.curve, c.current, regularization_circ(0.03 * R0)) if not isinstance(c, RegularizedCoil) else c for c in base_coils]
+        reg_coils = [RegularizedCoil(c.curve, c.current, regularization_circ(0.03 * R0)) if not isinstance(c, RegularizedCoil) else c for c in coils]
+        Jforce = sum([LpCurveForce([reg_base_coils[i]], reg_coils, p=2, threshold=FORCE_THRESHOLD) for i in range(len(reg_base_coils))])
+    else:
+        Jforce = None
 
     # Form the total objective function.
     JF = Jf \
@@ -567,8 +576,9 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
         + CS_WEIGHT * Jcsdist \
         + CURVATURE_WEIGHT * sum(Jcs) \
         + MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD) for J in Jmscs) \
-        + LINKING_NUMBER_WEIGHT * linking_number \
-        + FORCE_WEIGHT * sum(Jforce)
+        + LINKING_NUMBER_WEIGHT * linking_number
+    if FORCE_WEIGHT > 0:
+        JF = JF + FORCE_WEIGHT * Jforce
 
     def fun(dofs):
         """ Function for coil optimization grabbed from stage_two_optimization.py """
@@ -584,7 +594,8 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
         outstr += f", Len=sum([{cl_string}])={sum(J.J() for J in Jls):.1f}, ϰ=[{kap_string}], ∫ϰ²/L=[{msc_string}]"
         outstr += f", C-C-Sep={Jccdist.shortest_distance():.2f}, C-S-Sep={Jcsdist.shortest_distance():.2f}"
         outstr += f", Linking Number={linking_number.J():.1f}"
-        outstr += f", Force={sum(Jforce).J():.1f}"
+        if Jforce is not None:
+            outstr += f", Force={Jforce.J():.1f}"
         outstr += f", ║∇J║={np.linalg.norm(grad):.1e}"
         print(outstr)
         valuestr = f"J={J:.2e}, Jf={jf:.2e}"
@@ -594,7 +605,8 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
         valuestr += f", curvatureObj={CURVATURE_WEIGHT * sum(Jcs).J():.2e}"
         valuestr += f", mscObj={MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD) for J in Jmscs).J():.2e}"
         valuestr += f", linkingNumberObj={LINKING_NUMBER_WEIGHT * linking_number.J():.2e}"
-        valuestr += f", forceObj={FORCE_WEIGHT * sum(Jforce).J():.2e}"
+        if Jforce is not None:
+            valuestr += f", forceObj={FORCE_WEIGHT * Jforce.J():.2e}"
         print(valuestr)
         return J, grad
 
@@ -1072,6 +1084,7 @@ def vacuum_stage_II_optimization(
     from simsopt.field.force import LpCurveForce
     from simsopt.field.selffield import regularization_circ
     from simsopt.field import RegularizedCoil
+    with_force = kwargs.get('with_force', False)
 
     if UUID_init_from is None: # No previous optimization to initialize from
         base_curves = initial_base_curves(R0, R1, order, ncoils)
@@ -1087,8 +1100,11 @@ def vacuum_stage_II_optimization(
         total_current.fix_all()
         base_currents += [total_current - sum(base_currents)]
 
-        regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
-        coils = coils_via_symmetries(base_curves, base_currents, nfp, True, regularizations)
+        if with_force:
+            regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
+            coils = coils_via_symmetries(base_curves, base_currents, nfp, True, regularizations=regularizations)
+        else:
+            coils = coils_via_symmetries(base_curves, base_currents, nfp, True)
         base_coils = coils[:ncoils]
         curves = [c.curve for c in coils]
 
@@ -1121,7 +1137,6 @@ def vacuum_stage_II_optimization(
     FORCE_OBJ = kwargs.get('FORCE_OBJ', None)
     ARCLENGTH_WEIGHT = kwargs.get('ARCLENGTH_WEIGHT', 1e-2)
     dx = kwargs.get('dx', 0.05)
-    with_force = kwargs.get('with_force', False)
     debug = kwargs.get('debug', False)
     MAXITER = kwargs.get('MAXITER', 14000)
 
@@ -1222,7 +1237,7 @@ def vacuum_stage_II_optimization(
     
     lpcurveforce = sum([LpCurveForce(c, coils, p=2, 
         threshold=FORCE_THRESHOLD, 
-        ) for c in base_coils]
+        ) for c in base_coils_reg]
     ).J()
     max_forces = [np.max(np.linalg.norm(c_reg.force(coils), axis=1)) for c_reg in base_coils_reg]
     min_forces = [np.min(np.linalg.norm(c_reg.force(coils), axis=1)) for c_reg in base_coils_reg]
@@ -1396,9 +1411,15 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
         data = get_field_values(df, field)
         data_filtered = get_field_values(df_filtered, field)
         
-        # Filter out NaN and infinite values
-        data = data[np.isfinite(data)]
-        data_filtered = data_filtered[np.isfinite(data_filtered)]
+        # Filter out NaN and infinite values - ensure we have numpy arrays
+        if len(data) > 0:
+            data = data[np.isfinite(data)]
+        else:
+            data = np.array([])
+        if len(data_filtered) > 0:
+            data_filtered = data_filtered[np.isfinite(data_filtered)]
+        else:
+            data_filtered = np.array([])
         
         # Skip plotting if no valid data
         if len(data) == 0:
@@ -1407,16 +1428,33 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
             plt.xlabel(field)
             return
         
-        if np.min(data) > 0:
+        if len(data) > 0 and np.min(data) > 0:
             bins = np.logspace(np.log10(data.min()), np.log10(data.max()), nbins)
         else:
             bins = nbins
         _, bins, _ = plt.hist(data, bins=bins, label="before filtering")
-        plt.hist(data_filtered, bins=bins, alpha=1, label="after filtering")
+        if len(data_filtered) > 0:
+            plt.hist(data_filtered, bins=bins, alpha=1, label="after filtering")
         plt.xlabel(field)
         plt.legend(loc=0, fontsize=6)
-        plt.xlim(0, np.mean(data) * 2)
-        if np.min(data) > 0:
+        if len(data) > 0:
+            mean_val = np.mean(data)
+            min_val = data.min()
+            max_val = data.max()
+            if mean_val > 0:
+                plt.xlim(0, mean_val * 2)
+            else:
+                # Handle case where min == max
+                if min_val == max_val:
+                    if min_val == 0:
+                        plt.xlim(-0.1, 0.1)
+                    else:
+                        plt.xlim(min_val - 0.1 * abs(min_val), 
+                                max_val + 0.1 * abs(max_val))
+                else:
+                    plt.xlim(min_val - 0.1 * abs(min_val), 
+                            max_val + 0.1 * abs(max_val))
+        if len(data) > 0 and np.min(data) > 0:
             plt.xscale("log")
 
     fields = [

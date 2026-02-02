@@ -202,7 +202,6 @@ def b2energy_pure(gammas, gammadashs, currents, downsample, regularizations):
     Pure function for minimizing the total vacuum magnetic field energy from a set of m coils
     which may have different numbers of quadrature points (but are downsampled to have 
     the same number, denoted n, of quadrature points).
-
     The function is
 
      .. math::
@@ -340,7 +339,7 @@ class B2Energy(Optimizable):
 
 
 def net_fluxes_pure(gammas, gammadashs, gammas2, gammadashs2, currents2, downsample):
-    """
+    r"""
     Calculate the net magnetic flux through a set of m coils with n quadrature points
     due to another set of m' coils with n' quadrature points.
 
@@ -401,7 +400,7 @@ def net_fluxes_pure(gammas, gammadashs, gammas2, gammadashs2, currents2, downsam
 
 
 def net_ext_fluxes_pure(gammadash, A_ext, downsample):
-    """
+    r"""
     Calculate the net magnetic flux through a coil with n quadrature points
     due to an external vector potential evaluated at those points.
 
@@ -545,7 +544,7 @@ class NetFluxes(Optimizable):
 
 def squared_mean_force_pure(gammas, gammas2, gammadashs, gammadashs2, currents,
                             currents2, downsample):
-    """
+    r"""
     Compute the squared mean force on a set of m coils with varying quadrature points 
     (downsampled to have the smallest number, denoted n, of quadrature points),
     due to themselves and another set of m' coils with varying quadrature points
@@ -676,7 +675,7 @@ class SquaredMeanForce(Optimizable):
 
     Args:
         coils_to_target (list of Coil, shape (m,)): 
-            List of coils to use for computing MeanSquaredForce. 
+            List of coils to use for computing SquaredMeanForce. 
         source_coils (list of Coil, shape (m',)): 
             List of coils that provide forces on the first set of coils but that
             we do not care about optimizing their forces. 
@@ -692,9 +691,7 @@ class SquaredMeanForce(Optimizable):
             while retaining higher accuracy for the other objectives. 
     """
 
-    def __init__(self, coils_to_target, source_coils, downsample=1):
-        if not isinstance(downsample, int):
-            raise ValueError("downsample must be an integer")
+    def __init__(self, coils_to_target, source_coils, downsample: int = 1):
         if not isinstance(coils_to_target, list):
             coils_to_target = [coils_to_target]
         if not isinstance(source_coils, list):
@@ -968,7 +965,7 @@ class LpCurveForce(Optimizable):
             while retaining higher accuracy for the other objectives. 
     """
 
-    def __init__(self, coils_to_target, source_coils, p=2.0, threshold=0.0, downsample=1):
+    def __init__(self, coils_to_target, source_coils, p: float = 2.0, threshold: float = 0.0, downsample: int = 1):
         if not isinstance(coils_to_target, list):
             coils_to_target = [coils_to_target]
         if not isinstance(source_coils, list):
@@ -1251,7 +1248,7 @@ class LpCurveTorque(Optimizable):
             while retaining higher accuracy for the other objectives. 
     """
 
-    def __init__(self, coils_to_target, source_coils, p=2.0, threshold=0.0, downsample=1):
+    def __init__(self, coils_to_target, source_coils, p: float = 2.0, threshold: float = 0.0, downsample: int = 1):
         if not isinstance(coils_to_target, list):
             coils_to_target = [coils_to_target]
         if not isinstance(source_coils, list):
@@ -1523,7 +1520,7 @@ class SquaredMeanTorque(Optimizable):
         float: Value of the objective function.
     """
 
-    def __init__(self, coils_to_target, source_coils, downsample=1):
+    def __init__(self, coils_to_target, source_coils, downsample: int = 1):
         if not isinstance(coils_to_target, list):
             coils_to_target = [coils_to_target]
         if not isinstance(source_coils, list):

@@ -22,11 +22,6 @@ try:
 except ImportError:
     pyevtk = None
 
-try:
-    import pyevtk
-except ImportError:
-    pyevtk = None
-
 import os
 
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
