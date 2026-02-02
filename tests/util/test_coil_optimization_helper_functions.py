@@ -553,7 +553,7 @@ class TestCoilOptimization(unittest.TestCase):
             
             # Create coils with symmetries
             regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
-            coils = coils_via_symmetries(base_curves, base_currents, nfp, True, regularizations=[regularization_circ(0.05) for _ in range(ncoils)])
+            coils = coils_via_symmetries(base_curves, base_currents, nfp, True, regularizations)
             curves = [c.curve for c in coils]
             
             # Create BiotSavart object

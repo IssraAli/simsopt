@@ -2,6 +2,7 @@ import numpy as np
 from scipy.optimize import minimize
 from simsopt.geo import curves_to_vtk
 from simsopt.objectives import SquaredFlux
+from simsopt.solve.constrained_lbfgsb import minimize_with_hard_constraints
 from threadpoolctl import threadpool_limits
 
 __all__ = ['augmented_lagrangian_objective', 
@@ -188,6 +189,8 @@ def augmented_lagrangian_method(
         OUT_DIR='',
         verbose=False,
         penalty_type=None,
+        hard_constraints=None,
+        feasibility_check=None,
         ):
     """
     Run the Augmented Lagrangian Method (ALM) for constrained optimization.
@@ -216,10 +219,15 @@ def augmented_lagrangian_method(
         MAXITER (int, optional, default=50): Max iterations for inner minimization.
         argmin_tol (float, optional, default=1e-15): Tolerance for inner minimization.
         minimize_method (str, optional, default='L-BFGS-B'): Optimization method for inner loop.
+            Use 'L-BFGS-B-custom' to use ConstrainedLBFGSB with hard constraint support.
         MAXITER_lag (int, optional, default=10): Max outer ALM iterations.
         lagrangian_form (str, optional, default=None): If 'least-squares', use least-squares form.
         OUT_DIR (str, optional, default=''): Directory for output files.
         verbose (bool, optional, default=False): Whether to print verbose output.
+        hard_constraints (list, optional): List of hard constraint objects (e.g., LinkingNumber)
+            for use with minimize_method='L-BFGS-B-custom'. Steps violating these are rejected.
+        feasibility_check (callable, optional): Function that takes hard_constraints list and
+            returns True if feasible. Default checks if all |constraint.J()| < 0.5.
 
     Returns:
         tuple: (x, final_Lagrangian_value, lagrange_multipliers)
@@ -343,8 +351,17 @@ def augmented_lagrangian_method(
             # print("------------------------------------------------------------------------------------------------")
         x = dofs_before.copy()
 
-        res = minimize(fun, x, method=minimize_method, options=options, 
-                        jac=True, tol=argmin_tol)
+        if minimize_method == 'L-BFGS-B-custom':
+            # Use custom solver with hard constraint support
+            res = minimize_with_hard_constraints(
+                fun, x, jac=True,
+                hard_constraints=hard_constraints,
+                feasibility_check=feasibility_check,
+                options=options
+            )
+        else:
+            res = minimize(fun, x, method=minimize_method, options=options, 
+                            jac=True, tol=argmin_tol)
         # pr.disable()
         # ss = io.StringIO()
         # sortby = SortKey.TIME
