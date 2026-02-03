@@ -232,7 +232,6 @@ class ALTests(unittest.TestCase):
         from pathlib import Path
         from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
         from simsopt.field import BiotSavart, Current, coils_via_symmetries, LpCurveForce, LpCurveTorque
-        from simsopt.field.force import coil_force, coil_torque
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty
         from simsopt.geo import CurveSurfaceDistance, LpCurveCurvature, CurveCurveDistance
@@ -325,8 +324,8 @@ class ALTests(unittest.TestCase):
                                         assert sum(Jls).J() < LENGTH_TARGET + eps
                                         assert Jlink.J() == 0
                                         print(Jforce.J(), Jtorque.J())
-                                        coil_forces = [coil_force(c, coils) for c in base_coils]
-                                        coil_torques = [coil_torque(c, coils) for c in base_coils]
+                                        coil_forces = [c.force(coils) for c in base_coils]
+                                        coil_torques = [c.torque(coils) for c in base_coils]
                                         print([np.max(np.abs(coil_forces[i])) for i in range(len(coil_forces))])
                                         print([np.max(np.abs(coil_torques[i])) for i in range(len(coil_torques))])
                                         assert np.all([np.max(np.abs(coil_forces[i])) < (1 + eps) * FORCE_THRESHOLD * 1e6 for i in range(len(coil_forces))])
