@@ -63,6 +63,7 @@ dependencies = [
     "f90nml",
     "pyevtk",
     "matplotlib"
+    "threadpoolctl"
 ]
 dynamic = ["version"]
 
