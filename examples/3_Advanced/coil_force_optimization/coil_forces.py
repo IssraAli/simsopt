@@ -80,8 +80,8 @@ MSC_THRESHOLD = 5
 MSC_WEIGHT = 1e-6
 
 # Weight for forces and total vacuum energy
-FORCE_WEIGHT = Weight(1e-26)
-B2Energy_WEIGHT = Weight(1e-10)
+FORCE_WEIGHT = Weight(1e-2)  # (MN/m)^4 units
+B2Energy_WEIGHT = Weight(1e-4)  
 
 # Number of iterations to perform:
 MAXITER = 50 if in_github_actions else 400

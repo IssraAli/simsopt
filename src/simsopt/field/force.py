@@ -208,7 +208,7 @@ def b2energy_pure(gammas, gammadashs, currents, downsample, regularizations):
         J = \frac{1}{2}\sum_{i,j}I_iL_{ij}I_j
 
     where :math:`L_{ij}` is the coil inductance matrix (positive definite),
-    and :math:`I_i` is the current in the ith coil. The units of the objective function are Joules.
+    and :math:`I_i` is the current in the ith coil. The units of the objective function are MJ (megajoules).
 
     Args:
         gammas (array, shape (m,n,3)): 
@@ -231,14 +231,14 @@ def b2energy_pure(gammas, gammadashs, currents, downsample, regularizations):
             Array of regularizations coming from finite cross-section for all m coils.
 
     Returns:
-        float: Value of the objective function.
+        float: Value of the objective function in MJ (megajoules).
     """
     Ii_Ij = (currents[:, None] * currents[None, :])
     Lij = _coil_coil_inductances_pure(
         gammas, gammadashs, downsample, regularizations
     )
     U = 0.5 * (jnp.sum(Ii_Ij * Lij))
-    return U
+    return U / 1e6  # Convert from Joules to MJ
 
 
 class B2Energy(Optimizable):
@@ -251,7 +251,7 @@ class B2Energy(Optimizable):
         J = \frac{1}{2}\sum_{i,j}I_i L_{ij} I_j
 
     where :math:`L_{ij}` is the coil inductance matrix (positive definite),
-    and :math:`I_i` is the current in the ith coil. The units of the objective function are Joules.
+    and :math:`I_i` is the current in the ith coil. The units of the objective function are MJ (megajoules).
 
     Args:
         coils_to_target (list of Coil, shape (m,)): 
@@ -557,7 +557,7 @@ def squared_mean_force_pure(gammas, gammas2, gammadashs, gammadashs2, currents,
 
     where :math:`\frac{d\vec{F}_i}{d\ell_i}` is the Lorentz force per unit length, 
     :math:`L_i` is the total coil length,
-    and :math:`\ell_i` is arclength along the ith coil. The units of the objective function are (N/m)^2.
+    and :math:`\ell_i` is arclength along the ith coil. The units of the objective function are (MN/m)^2, where MN = meganewtons.
 
     The coils are allowed to have different numbers of quadrature points, but for the purposes of
     jax speed, the coils are downsampled here to have the same number of quadrature points.
@@ -648,8 +648,11 @@ def squared_mean_force_pure(gammas, gammas2, gammadashs, gammadashs2, currents,
     mean_forces = vmap(mean_force_group1, in_axes=(0, 0, 0, 0, 0))(
         jnp.arange(n1), gammas, tangents, gammadash_norms, currents
     )
-    summ = jnp.sum(jnp.linalg.norm(mean_forces * 1e-6, axis=-1) ** 2)
-    return summ * 1e-14
+    # mean_forces is computed without mu_0/(4*pi) factor in B_mutual, so we need to multiply by (mu_0/(4*pi))^2 = 1e-14
+    # Then convert from (N/m)^2 to (MN/m)^2 by dividing by (1e6)^2 = 1e12
+    # Net factor: 1e-14 / 1e12 = 1e-26  
+    mean_forces_squared = jnp.sum(jnp.linalg.norm(mean_forces, axis=-1) ** 2)
+    return mean_forces_squared * 1e-26
 
 
 class SquaredMeanForce(Optimizable):
@@ -664,7 +667,7 @@ class SquaredMeanForce(Optimizable):
 
     where :math:`\frac{d\vec{F}_i}{d\ell_i}` is the Lorentz force per unit length, 
     :math:`L_i` is the total coil length,
-    and :math:`\ell_i` is arclength along the ith coil. The units of the objective function are (N/m)^2.
+    and :math:`\ell_i` is arclength along the ith coil. The units of the objective function are (MN/m)^2, where MN = meganewtons.
     
     This class assumes there are two distinct lists of coils,
     which may have different finite-build parameters. In order to avoid buildup of optimizable 
@@ -795,7 +798,7 @@ def lp_force_pure(
     gammas, gammas2, gammadashs, gammadashs2, gammadashdashs,
     quadpoints, currents, currents2, regularizations, p, threshold, downsample=1
 ):
-    """
+    r"""
     Computes the Lp force objective by summing over a set of m coils, 
     where each coil receives force from all coils (including itself and m' coils in a separate set).
     This version allows each coil to have its own quadrature points array.
@@ -810,7 +813,7 @@ def lp_force_pure(
     :math:`L_i` is the total coil length,
     and :math:`dF_0/d\ell_i` is a threshold force at the ith coil.
 
-    The units of the objective function are (N/m)^p.
+    The units of the objective function are (MN/m)^p, where MN = meganewtons.
 
     Args:
         gammas (array, shape (m,n,3)): 
@@ -832,7 +835,7 @@ def lp_force_pure(
         p (float):
             Exponent for the Lp force objective.
         threshold (float):
-            Threshold force for the coils receiving force.
+            Threshold force per unit length in units of MN/m (meganewtons per meter).
         downsample (int): 
             Factor by which to downsample the quadrature points 
             by skipping through the array by a factor of ``downsample``,
@@ -912,14 +915,17 @@ def lp_force_pure(
     def per_coil_obj_group1(i, gamma_i, tangent_i, B_self_i, current_i):
         def force_at_point(idx):
             F = current_i * (mutual_B_field_group1(i, gamma_i[idx]) * 1e-7 + B_self_i[idx])
-            return jnp.linalg.norm(jnp.cross(tangent_i[idx], F))
+            # Force per unit length is in N/m, convert to MN/m
+            force_per_unit_length_N_per_m = jnp.linalg.norm(jnp.cross(tangent_i[idx], F))
+            return force_per_unit_length_N_per_m / 1e6  # Convert to MN/m
         return vmap(force_at_point)(jnp.arange(npts1))
 
     obj1 = vmap(per_coil_obj_group1, in_axes=(0, 0, 0, 0, 0))(
         jnp.arange(n1), gammas, tangents, B_self, currents
     )
 
-    return (jnp.sum(jnp.sum(jnp.maximum(obj1 * 1e-6 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1) * (1. / p)
+    # obj1 is now in MN/m, threshold is in MN/m
+    return (jnp.sum(jnp.sum(jnp.maximum(obj1 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1) * (1. / p)
 
 
 class LpCurveForce(Optimizable):
@@ -937,7 +943,7 @@ class LpCurveForce(Optimizable):
     :math:`L_i` is the total coil length,
     and :math:`dF_0/d\ell_i` is a threshold force at the ith coil.
 
-    The units of the objective function are (N/m)^p.
+    The units of the objective function are (MN/m)^p, where MN = meganewtons.
 
     This class assumes there are two distinct lists of coils,
     which may have different finite-build parameters. In order to avoid buildup of optimizable 
@@ -952,7 +958,7 @@ class LpCurveForce(Optimizable):
             List of coils that provide forces on the first set of coils but that
             we do not care about optimizing their forces. 
         p (float): Power of the objective function.
-        threshold (float): Threshold for the objective function.
+        threshold (float): Threshold force per unit length in units of MN/m (meganewtons per meter).
         downsample (int): 
             Factor by which to downsample the quadrature points 
             by skipping through the array by a factor of ``downsample``,
@@ -1095,9 +1101,9 @@ def lp_torque_pure(gammas, gammas2, gammadashs, gammadashs2, gammadashdashs,
     where :math:`\frac{d\vec{T}_i}{d\ell_i}` is the Lorentz torque per unit length,  
     :math:`d\ell_i` is the arclength along the ith coil,
     :math:`L_i` is the total coil length,
-    and :math:`dT_0/d\ell_i` is a threshold torque at the ith coil.
+    and :math:`dT_0/d\ell_i` is a threshold torque per unit length at the ith coil.
 
-    The units of the objective function are (N)^p.
+    The units of the objective function are (MN)^p, where MN = meganewtons.
 
     Args:
         gammas (array, shape (m,n,3)): Array of coil positions.
@@ -1110,7 +1116,7 @@ def lp_torque_pure(gammas, gammas2, gammadashs, gammadashs2, gammadashdashs,
         currents2 (array, shape (m',)): Array of coil currents.
         regularizations (array, shape (m,)): Array of coil regularizations.
         p (float): Power of the objective function.
-        threshold (float): Threshold for the objective function.
+        threshold (float): Threshold torque per unit length in units of MN (meganewtons).
         downsample (int): 
             Factor by which to downsample the quadrature points 
             by skipping through the array by a factor of ``downsample``,
@@ -1197,14 +1203,17 @@ def lp_torque_pure(gammas, gammas2, gammadashs, gammadashs2, gammadashdashs,
             B_mutual = mutual_B_field_group1(i, gamma_i[idx])
             F = current_i * jnp.cross(tangent_i[idx], B_mutual + B_self_i[idx])
             tau = jnp.cross(gamma_i[idx] - center_i, F)
-            return jnp.linalg.norm(tau)
+            # Torque per unit length is in N, convert to MN
+            torque_per_unit_length_N = jnp.linalg.norm(tau)
+            return torque_per_unit_length_N / 1e6  # Convert to MN
         return vmap(torque_at_point)(jnp.arange(npts1))
 
     obj1 = vmap(per_coil_obj_group1, in_axes=(0, 0, 0, 0, 0, 0))(
         jnp.arange(n1), gammas, centers, tangents, B_self, currents
     )
 
-    return jnp.sum(jnp.sum(jnp.maximum(obj1 * 1e-6 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1 * (1. / p)
+    # obj1 is now in MN, threshold is in MN
+    return jnp.sum(jnp.sum(jnp.maximum(obj1 - threshold, 0) ** p * gammadash_norms[:, :, 0])) / npts1 * (1. / p)
 
 
 class LpCurveTorque(Optimizable):
@@ -1220,9 +1229,9 @@ class LpCurveTorque(Optimizable):
     where :math:`\frac{d\vec{T}_i}{d\ell_i}` is the Lorentz torque per unit length,  
     :math:`d\ell_i` is the arclength along the ith coil,
     :math:`L_i` is the total coil length,
-    and :math:`dT_0/d\ell_i` is a threshold torque at the ith coil.
+    and :math:`dT_0/d\ell_i` is a threshold torque per unit length at the ith coil.
 
-    The units of the objective function are (N)^p.
+    The units of the objective function are (MN)^p, where MN = meganewtons.
 
     This class assumes there are two distinct lists of coils,
     which may have different finite-build parameters. In order to avoid buildup of optimizable 
@@ -1235,7 +1244,7 @@ class LpCurveTorque(Optimizable):
         source_coils (list of Coil, shape (m',)): List of coils that provide torques on the first set of coils but that
             we do not care about optimizing their torques. 
         p (float): Power of the objective function.
-        threshold (float): Threshold for the objective function.
+        threshold (float): Threshold torque per unit length in units of MN (meganewtons).
         downsample (int): 
             Factor by which to downsample the quadrature points 
             by skipping through the array by a factor of ``downsample``,
@@ -1367,7 +1376,7 @@ class LpCurveTorque(Optimizable):
 
 
 def squared_mean_torque(gammas, gammas2, gammadashs, gammadashs2, currents, currents2, downsample):
-    """
+    r"""
     Compute the squared mean torque on a set of m coils with varying quadrature points 
     (downsampled to n quadrature points) due to themselves and another set of m' coils 
     with varying quadrature points (downsampled to n quadrature points).
@@ -1381,7 +1390,7 @@ def squared_mean_torque(gammas, gammas2, gammadashs, gammadashs2, currents, curr
     :math:`d\ell_i` is the arclength along the ith coil,
     :math:`L_i` is the total coil length.
 
-    The units of the objective function are (N)^2.
+    The units of the objective function are (MN)^2, where MN = meganewtons.
 
     Args:
         gammas (array, shape (m,n,3)): Array of coil positions in coil set 1.
@@ -1475,8 +1484,11 @@ def squared_mean_torque(gammas, gammas2, gammadashs, gammadashs2, currents, curr
     mean_torques = vmap(mean_torque_group1, in_axes=(0, 0, 0, 0, 0))(
         jnp.arange(n1), gammas, gammadashs, centers, currents
     )
-    summ = jnp.sum(jnp.linalg.norm(mean_torques * 1e-6, axis=-1) ** 2)
-    return summ * 1e-14
+    # mean_torques is computed without mu_0/(4*pi) factor in B_mutual, so we need to multiply by (mu_0/(4*pi))^2 = 1e-14
+    # Then convert from (N)^2 to (MN)^2 by dividing by (1e6)^2 = 1e12
+    # Net factor: 1e-14 / 1e12 = 1e-26
+    mean_torques_squared = jnp.sum(jnp.linalg.norm(mean_torques, axis=-1) ** 2)
+    return mean_torques_squared * 1e-26
 
 
 class SquaredMeanTorque(Optimizable):
@@ -1493,7 +1505,7 @@ class SquaredMeanTorque(Optimizable):
     :math:`d\ell_i` is the arclength along the ith coil,
     :math:`L_i` is the total coil length.
 
-    The units of the objective function are (N)^2.
+    The units of the objective function are (MN)^2, where MN = meganewtons.
     
     This class assumes there are two distinct lists of coils,
     which may have different finite-build parameters. In order to avoid buildup of optimizable 
