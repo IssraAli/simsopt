@@ -115,7 +115,7 @@ CC_THRESHOLD = 0.1
 CS_THRESHOLD = 0.15
 MSC_THRESHOLD = 5
 CURVATURE_THRESHOLD = 5
-FORCE_THRESHOLD = 0.009 
+FORCE_THRESHOLD = 0.009  # In units of MN/m
 ncoils = 4
 # Define the output directory   
 OUT_DIR = (f"./output_paper/qa_ncoils{ncoils}_curvature{CURVATURE_THRESHOLD}_msc{MSC_THRESHOLD}_" + \

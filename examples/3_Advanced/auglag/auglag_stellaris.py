@@ -51,7 +51,7 @@ from simsopt.objectives import SquaredFlux, QuadraticPenalty
 CC_THRESHOLD = 0.7 #initially with 1.0
 CS_THRESHOLD = 1.3
 LENGTH_TARGET = 145 # initially with 138
-FORCE_THRESHOLD = 0.5  # units of MN/m
+FORCE_THRESHOLD = 0.5  # In units of MN/m
 FLUX_THRESHOLD = 1e-15 # initially with 1e-6
 ncoils_choice = 6
 CURVATURE_THRESHOLD = 1.6 #1.573 for the 5 coil solution 1.573 * (ncoils_choice / 6.0) ** 2

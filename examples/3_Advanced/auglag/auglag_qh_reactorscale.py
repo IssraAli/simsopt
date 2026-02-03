@@ -91,7 +91,7 @@ CC_THRESHOLD = 0.8
 CS_THRESHOLD = 1 
 CURVATURE_THRESHOLD = 1 
 MSC_THRESHOLD = 0.1 
-FORCE_THRESHOLD = 10 # units of MN/m
+FORCE_THRESHOLD = 10  # In units of MN/m
 
 # Define the number of coils, rotation order, and non-planar base curves
 R0 = s.x[0]

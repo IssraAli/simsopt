@@ -6,7 +6,7 @@ initiation.py
 This script initiates a large set of coil optimizations
 using SIMSOPT. The force objective can be specified 
 and the optimization will randomly sample the parameter space
-within some range. This range should be set in optimization_tools.py. 
+within some range.
 The outputs are stored in the ./output/QA/B2Energy/ directory. 
 
 Here is a slurm script that can be used to run the script in batch mode:
