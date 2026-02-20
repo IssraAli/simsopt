@@ -105,7 +105,7 @@ for i, key in enumerate(metric_keys):
     
     # Define labels for the bars
     run_labels = [f'{j}' for j in range(1, NUM_RUNS + 1)]
-    x_labels = run_labels + [f'AL']
+    x_labels = run_labels + ['AL']
     
     # Define values for the bars
     y_values = list(metric_values)

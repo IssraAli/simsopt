@@ -39,7 +39,7 @@ from scipy.optimize import minimize
 import numpy as np
 import os
 from simsopt.objectives import SquaredFlux
-from simsopt.objectives import QuadraticPenalty, Weight
+from simsopt.objectives import QuadraticPenalty
 from simsopt.geo import SurfaceRZFourier
 from simsopt.geo import LinkingNumber, create_equally_spaced_curves
 from simsopt.geo import CurveLength, CurveCurveDistance, \
@@ -115,9 +115,9 @@ def rand(min, max):
 num_runs = 20
 
 for i in range(num_runs):
-    print(f"\n################################################################################")
+    print("\n################################################################################")
     print(f"### Starting Optimization Run {i + 1}/{num_runs} ###")
-    print(f"################################################################################\n")
+    print("################################################################################\n")
 
     # Threshold and weight for the coil-to-coil distance penalty in the objective function:
     CC_THRESHOLD = 0.1
