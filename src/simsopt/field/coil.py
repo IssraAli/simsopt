@@ -1,6 +1,7 @@
 from math import pi
 import numpy as np
-
+from jax import vjp
+from simsopt.geo.jit import jit
 from simsopt._core.optimizable import Optimizable
 from simsopt._core.derivative import Derivative
 from simsopt.geo.curvexyzfourier import CurveXYZFourier
@@ -8,7 +9,7 @@ from simsopt.geo.curve import RotatedCurve
 import simsoptpp as sopp
 
 __all__ = ['Coil', 'RegularizedCoil', 'CircularRegularizedCoil', 'RectangularRegularizedCoil',
-           'Current', 'coils_via_symmetries',
+           'Current', 'coils_via_symmetries', 'PSCArray',
            'load_coils_from_makegrid_file',
            'apply_symmetries_to_currents', 'apply_symmetries_to_curves',
            'coils_to_makegrid', 'coils_to_focus', 'coils_to_vtk'
@@ -22,10 +23,9 @@ class Coil(sopp.Coil, Optimizable):
     This class combines a :class:`~simsopt.geo.curve.Curve` and a :class:`Current` object, and 
     is used as input for :class:`~simsopt.field.biotsavart.BiotSavart` field calculations. 
 
-    Parameters
-    ----------
-    curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
-    current (Current) : The current object describing the electric current in the coil.
+    Args:
+        curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
+        current (Current) : The current object describing the electric current in the coil.
     """
 
     def __init__(self, curve, current):
@@ -36,18 +36,20 @@ class Coil(sopp.Coil, Optimizable):
 
     def vjp(self, v_gamma, v_gammadash, v_current):
         r"""
-        Compute the Jacobian-vector product of the coil.
+        Compute the vector-Jacobian product,
 
         .. math::
-            \frac{\partial \mathbf{B}}{\partial \mathbf{x}} = \frac{\partial \mathbf{B}}{\partial \mathbf{\gamma}} \frac{\partial \mathbf{\gamma}}{\partial \mathbf{x}} + \frac{\partial \mathbf{B}}{\partial \mathbf{\gammadash}} \frac{\partial \mathbf{\gammadash}}{\partial \mathbf{x}} + \frac{\partial \mathbf{B}}{\partial \mathbf{I}} \frac{\partial \mathbf{I}}{\partial \mathbf{x}}
+            \frac{\partial \mathbf{\gamma}}{\partial \mathbf{x}}^T \mathbf{v}_\gamma + \frac{\partial \mathbf{\gamma'}}{\partial \mathbf{x}}^T \mathbf{v}_{\gamma'} + \frac{\partial \mathbf{I}}{\partial \mathbf{x}}^T \mathbf{v}_I
+
+        where :math:`\mathbf{x}` are the degrees of freedom of the coil.
 
         Args:
-            v_gamma (array) : The vector to multiply the Jacobian with.
-            v_gammadash (array) : The vector to multiply the Jacobian with.
-            v_current (array) : The vector to multiply the Jacobian with.
+            v_gamma (array, shape (n, 3)) : Vector w.r.t. :math:`\gamma`; same shape as curve gamma.
+            v_gammadash (array, shape (n, 3)) : Vector w.r.t. :math:`\gamma'`; same shape as curve gammadash.
+            v_current (array, shape (1,)) : Vector w.r.t. coil current (scalar).
 
         Returns:
-            The Jacobian-vector product of the coil.
+            The vector-Jacobian product of the coil.
         """
         return self.curve.dgamma_by_dcoeff_vjp(v_gamma) \
             + self.curve.dgammadash_by_dcoeff_vjp(v_gammadash) \
@@ -70,11 +72,10 @@ class RegularizedCoil(Coil):
     A coil with a model for its cross section. This cross section is used to compute the
     forces and torques on the coil.
     
-    Parameters
-    ----------
-    curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
-    current (Current) : The current object describing the electric current in the coil.
-    regularization (float) : The regularization parameter for the coil cross section.
+    Args:
+        curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
+        current (Current) : The current object describing the electric current in the coil.
+        regularization (float) : The regularization parameter for the coil cross section.
     """
     def __init__(self, curve, current, regularization):
         self.regularization = regularization
@@ -105,9 +106,8 @@ class RegularizedCoil(Coil):
     def B_regularized(self):
         """Calculate the regularized field on this coil following the Landreman and Hurwitz method.
         
-        Returns
-        -------
-        array (shape (n,3)): The regularized field on the coil.
+        Returns:
+            array (shape (n,3)): The regularized field on the coil.
         """
         from .selffield import B_regularized_pure
         return B_regularized_pure(
@@ -123,9 +123,8 @@ class RegularizedCoil(Coil):
         """
         Compute the self-force per unit length of this coil, in Newtons/meter.
         
-        Returns
-        -------
-        array (shape (n,3)): Array of self-force per unit length.
+        Returns:
+            array (shape (n,3)): Array of self-force per unit length.
         """
         I = self.current.get_value()
         gammadash = self.curve.gammadash()
@@ -235,11 +234,10 @@ class CircularRegularizedCoil(RegularizedCoil):
     A coil with a circular cross section. The regularization parameter is computed
     from the radius during initialization.
     
-    Parameters
-    ----------
-    curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
-    current (Current) : The current object describing the electric current in the coil.
-    a (float) : The radius of the circular cross-section.
+    Args:
+        curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
+        current (Current) : The current object describing the electric current in the coil.
+        a (float) : The radius of the circular cross-section.
     """
     def __init__(self, curve, current, a):
         from .selffield import regularization_circ
@@ -253,12 +251,11 @@ class RectangularRegularizedCoil(RegularizedCoil):
     A coil with a rectangular cross section. The regularization parameter is computed
     from the width and height during initialization.
     
-    Parameters
-    ----------
-    curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
-    current (Current) : The current object describing the electric current in the coil.
-    a (float) : The width of the rectangular cross-section.
-    b (float) : The height of the rectangular cross-section.
+    Args:
+        curve (simsopt.geo.curve.Curve) : The geometric curve describing the coil shape.
+        current (Current) : The current object describing the electric current in the coil.
+        a (float) : The width of the rectangular cross-section.
+        b (float) : The height of the rectangular cross-section.
     """
     def __init__(self, curve, current, a, b):
         from .selffield import regularization_rect
@@ -385,7 +382,7 @@ class Current(sopp.Current, CurrentBase):
         Compute the Jacobian-vector product of the current function.
 
         Args:
-            v_current (array) : The vector to multiply the Jacobian with.
+            v_current (array, shape (1,)) : The vector to multiply the Jacobian with.
 
         Returns:
             The Jacobian-vector product of the current function.
@@ -428,7 +425,7 @@ class ScaledCurrent(sopp.CurrentBase, CurrentBase):
         Compute the Jacobian-vector product of the current function.
 
         Args:
-            v_current (array) : The vector to multiply the Jacobian with.
+            v_current (array, shape (1,)) : The vector to multiply the Jacobian with.
 
         Returns:
             The Jacobian-vector product of the current function.
@@ -444,16 +441,49 @@ class ScaledCurrent(sopp.CurrentBase, CurrentBase):
         """
         return self.scale * self.current_to_scale.get_value()
 
+    def get_dofs(self):
+        """
+        Get the degrees of freedom for the scaled current.
+        Returns the scaled DOFs from the underlying current.
+
+        Returns:
+            Array of DOFs (scaled by the scale factor).
+        """
+        return np.array([self.scale * self.current_to_scale.get_dofs()[0]])
+
+    def set_dofs(self, dofs):
+        """
+        Set the degrees of freedom for the scaled current.
+        This sets the underlying current's DOFs by dividing by the scale factor.
+
+        Args:
+            dofs: Array-like object containing the DOF values (should be a single-element array
+                  or scalar representing the desired scaled current value).
+        """
+        dofs = np.asarray(dofs)
+        # Handle scalar (0-dimensional array) or 1-dimensional array
+        if dofs.ndim == 0:
+            # Scalar value
+            dof_value = float(dofs)
+        else:
+            # Array - ensure it has exactly one element
+            dofs = np.atleast_1d(dofs)
+            if len(dofs) != 1:
+                raise ValueError(f"ScaledCurrent.set_dofs expects a single DOF, got {len(dofs)}")
+            dof_value = float(dofs[0])
+        # Divide by scale to get the underlying current value
+        underlying_dofs = np.array([dof_value / self.scale])
+        self.current_to_scale.set_dofs(underlying_dofs)
+
 class CurrentSum(sopp.CurrentBase, CurrentBase):
     """
     Represents the sum of two :mod:`Current` objects.
 
     Used to enforce current constraints or combine currents in optimization.
 
-    Parameters
-    ----------
-    current_a (CurrentBase) : First current object.
-    current_b (CurrentBase) : Second current object.
+    Args:
+        current_a (CurrentBase) : First current object.
+        current_b (CurrentBase) : Second current object.
     """
 
     def __init__(self, current_a, current_b):
@@ -467,7 +497,7 @@ class CurrentSum(sopp.CurrentBase, CurrentBase):
         Compute the Jacobian-vector product of the current function.
 
         Args:
-            v_current (array) : The vector to multiply the Jacobian with.
+            v_current (array, shape (1,)) : The vector to multiply the Jacobian with.
 
         Returns:
             The Jacobian-vector product of the current function.
@@ -493,15 +523,13 @@ def apply_symmetries_to_curves(base_curves, nfp, stellsym):
     applying rotations and flipping corresponding to ``nfp`` fold rotational
     symmetry and optionally stellarator symmetry.
 
-    Parameters
-    ----------
-    base_curves (list) : List of base curves to replicate.
-    nfp (int) : Number of field periods (rotational symmetry).
-    stellsym (bool) : Whether to apply stellarator symmetry (flipping).
+    Args:
+        base_curves (list) : List of base curves to replicate.
+        nfp (int) : Number of field periods (rotational symmetry).
+        stellsym (bool) : Whether to apply stellarator symmetry (flipping).
 
-    Returns
-    -------
-    curves (list) : List of curves with symmetries applied.
+    Returns:
+        curves (list) : List of curves with symmetries applied.
     """
     flip_list = [False, True] if stellsym else [False]
     curves = []
@@ -524,19 +552,13 @@ def apply_symmetries_to_currents(base_currents, nfp, stellsym):
     :mod:`Current` objects obtained by copying (for ``nfp`` rotations) and
     sign-flipping (optionally for stellarator symmetry).
 
-    Parameters
-    ----------
-    base_currents : list of Current
-        List of base current objects to replicate.
-    nfp : int
-        Number of field periods (rotational symmetry).
-    stellsym : bool
-        Whether to apply stellarator symmetry (sign flip).
+    Args:
+        base_currents (list of Current) : List of base current objects to replicate.
+        nfp (int) : Number of field periods (rotational symmetry).
+        stellsym (bool) : Whether to apply stellarator symmetry (sign flip).
 
-    Returns
-    -------
-    currents : list of Current
-        List of current objects with symmetries applied.
+    Returns:
+        currents (list of Current) : List of current objects with symmetries applied.
     """
     flip_list = [False, True] if stellsym else [False]
     currents = []
@@ -588,10 +610,13 @@ def coils_to_vtk(coils, filename, close=False, extra_data=None):
         print("Warning: coils_to_vtk will not save forces and torques for coils that "
               "do not have a model for their cross section. Please use the RegularizedCoil class.")
     else:    
+        # First, get forces/torques for all coils to determine actual point counts
+        # This handles cases where coils have different numbers of quadrature points
+        coil_forces_list = []
+        coil_torques_list = []
         net_forces = np.zeros((len(coils), 3))
         net_torques = np.zeros((len(coils), 3))
-        coil_forces = np.zeros((data.shape[0], 3))
-        coil_torques = np.zeros((data.shape[0], 3))
+        
         for i, c in enumerate(coils):
             # get the pointwise forces and torques for the current coil
             coil_force_temp = c.force(coils)
@@ -606,8 +631,28 @@ def coils_to_vtk(coils, filename, close=False, extra_data=None):
             if close:
                 coil_force_temp = np.vstack((coil_force_temp, coil_force_temp[0, :]))
                 coil_torque_temp = np.vstack((coil_torque_temp, coil_torque_temp[0, :]))
-            coil_forces[i * ppl[i]: (i + 1) * ppl[i], :] = coil_force_temp
-            coil_torques[i * ppl[i]: (i + 1) * ppl[i], :] = coil_torque_temp
+            
+            coil_forces_list.append(coil_force_temp)
+            coil_torques_list.append(coil_torque_temp)
+        
+        # Recalculate ppl based on actual force array shapes
+        ppl_actual = np.asarray([f.shape[0] for f in coil_forces_list])
+        
+        # Recalculate data array if point counts changed
+        if not np.array_equal(ppl, ppl_actual):
+            ppl = ppl_actual
+            data = np.concatenate([i*np.ones((ppl[i], )) for i in range(len(curves))])
+            # Recalculate current data with correct point counts
+            coil_data = np.zeros(data.shape)
+            for i in range(len(currents)):
+                coil_data[i * ppl[i]: (i + 1) * ppl[i]] = currents[i]
+            coil_data = np.ascontiguousarray(coil_data)
+            pointData['I'] = coil_data
+            pointData['I_mag'] = contig(np.abs(coil_data))
+        
+        # Now concatenate all forces and torques
+        coil_forces = np.vstack(coil_forces_list)
+        coil_torques = np.vstack(coil_torques_list)
 
         # copy force and torque data over to pointwise data on a coil curve
         coil_data = np.zeros((data.shape[0], 3))
@@ -649,24 +694,15 @@ def coils_via_symmetries(curves, currents, nfp, stellsym, regularizations=None):
     for computing e.g. forces and torques on the coil. Format is e.g.
     regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
 
-    Parameters
-    ----------
-    curves (list, shape (n_coils,)) : list of Curve
-        List of base curves.
-    currents (list, shape (n_coils,)) : list of Current
-        List of base current objects.
-    nfp (int) : int
-        Number of field periods (rotational symmetry).
-    stellsym (bool) : bool
-        Whether to apply stellarator symmetry.
-    regularizations (np.array, shape (n_coils,), optional):
-        The regularization objects for the coils representing the finite coil cross section.
+    Args:
+        curves (list, shape (n_coils,)) : List of base curves.
+        currents (list, shape (n_coils,)) : List of base current objects.
+        nfp (int) : Number of field periods (rotational symmetry).
+        stellsym (bool) : Whether to apply stellarator symmetry.
+        regularizations (np.array, shape (n_coils,), optional): The regularization objects for the coils representing the finite coil cross section.
 
-    Returns
-    -------
-    coils (list) : list of Coil or RegularizedCoil objects
-        List of Coil or RegularizedCoil objects with symmetries applied. If regularizations are provided, 
-        then RegularizedCoil objects are returned.
+    Returns:
+        coils (list) : List of Coil or RegularizedCoil objects with symmetries applied. If regularizations are provided, then RegularizedCoil objects are returned.
     """
 
     assert len(curves) == len(currents)
@@ -689,20 +725,14 @@ def load_coils_from_makegrid_file(filename, order, ppp=20, group_names=None, reg
     The format is described at
     https://princetonuniversity.github.io/STELLOPT/MAKEGRID
 
-    Parameters
-    ----------
-    filename (str):
-        Path to the MAKEGRID input file.
-    order (int):
-        Maximum mode number in the Fourier expansion.
-    ppp (int, optional):
-        Points per period for quadrature (default: 20).
-    group_names (list of str or str or None, optional):
-        If provided, only load coils in these groups.
+    Args:
+        filename (str) : Path to the MAKEGRID input file.
+        order (int) : Maximum mode number in the Fourier expansion.
+        ppp (int, optional) : Points per period for quadrature (default: 20).
+        group_names (list of str or str or None, optional) : If provided, only load coils in these groups.
 
-    Returns
-    -------
-    coils (list) : List of Coil objects loaded from the file.
+    Returns:
+        coils (list) : List of Coil objects loaded from the file.
     """
 
     if isinstance(group_names, str):
@@ -744,20 +774,13 @@ def coils_to_makegrid(filename, curves, currents, groups=None, nfp=1, stellsym=F
     The output can be used by MAKEGRID and FOCUS. The format is described at
     https://princetonuniversity.github.io/STELLOPT/MAKEGRID
 
-    Parameters
-    ----------
-    filename (str):
-        Name of the file to write.
-    curves (list) : list of Curve objects.
-        List of Curve objects.
-    currents (list) : list of Current objects.
-        List of current objects.
-    groups (list or None, optional):
-        Coil current group. Coils in the same group are assembled together.
-    nfp (int, optional):
-        Number of field periods (default: 1).
-    stellsym (bool, optional):
-        Whether to apply stellarator symmetry (default: False).
+    Args:
+        filename (str): Name of the file to write.
+        curves (list) : list of Curve objects.
+        currents (list) : list of Current objects.
+        groups (list or None, optional): Coil current group. Coils in the same group are assembled together.
+        nfp (int, optional): Number of field periods (default: 1).
+        stellsym (bool, optional): Whether to apply stellarator symmetry (default: False).
     """
 
     assert len(curves) == len(currents)
@@ -798,22 +821,14 @@ def coils_to_focus(filename, curves, currents, nfp=1, stellsym=False, Ifree=Fals
     The output can be used by FOCUS. The format is described at
     https://princetonuniversity.github.io/FOCUS/rdcoils.pdf
 
-    Parameters
-    ----------
-    filename (str):
-        Name of the file to write.
-    curves (list) : list of CurveXYZFourier
-        List of CurveXYZFourier objects.
-    currents (list) : list of Current
-        List of current objects.
-    nfp (int, optional):
-        Number of field periods (default: 1).
-    stellsym (bool, optional):
-        Whether to apply stellarator symmetry (default: False).
-    Ifree (bool, optional):
-        Whether the coil current is free (default: False).
-    Lfree (bool, optional):
-        Whether the coil geometry is free (default: False).
+    Args:
+        filename (str) : Name of the file to write.
+        curves (list) : list of CurveXYZFourier objects.
+        currents (list) : list of Current objects.
+        nfp (int, optional) : Number of field periods (default: 1).
+        stellsym (bool, optional) : Whether to apply stellarator symmetry (default: False).
+        Ifree (bool, optional) : Whether the coil current is free (default: False).
+        Lfree (bool, optional) : Whether the coil geometry is free (default: False).
     """
     from simsopt.geo import CurveLength
 
@@ -856,3 +871,172 @@ def coils_to_focus(filename, curves, currents, nfp=1, stellsym=False, Ifree=Fals
                 f.write('\n')
         f.write('\n')
     return
+
+class PSCArray():
+    """    
+    A class that represents an array of passive superconducting
+    coils (PSCs). PSCs have quite a complicated structure, so custom
+    derivative terms are needed, that depend on all the coils
+    and currents in the PSCs and the TFs.
+
+    Args:
+        base_psc_curves (list of Curve objects) : List of base curves for the PSCs.
+        coils_TF (list of Coil or RegularizedCoil objects) : List of coils for the TFs.
+        eval_points (array) : Evaluation points for the Bfield.
+        regularizations (list of Regularization objects) : List of regularization objects for the PSCs.
+        nfp (int) : Number of field periods.
+        stellsym (bool) : Whether to apply stellarator symmetry.
+        downsample (int) : Downsample factor for the evaluation points.
+
+    Returns:
+        PSCArray object.
+    """
+    def __init__(self, base_psc_curves, coils_TF, eval_points, regularizations, nfp=1, stellsym=False, downsample=1):
+        from .force import _induced_currents_pure
+        from .biotsavart import BiotSavart
+        self.base_psc_curves = base_psc_curves  # not the symmetrized ones
+        self.regularizations = []
+        for _ in range(nfp):
+            for _ in range(1 + stellsym):
+                self.regularizations.extend(regularizations)
+        self.regularizations = np.array(self.regularizations)
+        self.nfp = nfp
+        self.stellsym = stellsym
+    
+        # Get the symmetrized curves
+        psc_curves = apply_symmetries_to_curves(base_psc_curves, nfp, stellsym)
+
+        self.coils_TF = coils_TF
+        ncoils = len(psc_curves)
+        self.biot_savart_TF = BiotSavart(coils_TF)
+
+        # eval_points is assumed to be where you want to evaluate the Bfield during optimization
+        # e.g. on the surface of the plasma. This needs to be saved since the TF Bfield
+        # gets evaluated on the PSC curves during the calculations.
+        self.eval_points = eval_points
+        self.downsample = downsample
+
+        # Uses jacrev since # of inputs >> # of outputs
+        args = {"static_argnums": (5,)}
+        self.I_jax = jit(
+            lambda gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample:
+            _induced_currents_pure(gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, self.regularizations),
+            **args
+        )
+        self.dI_dgammas_vjp = jit(
+            lambda gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, v:
+            vjp(self.I_jax, gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample)[1](v)[0],
+            **args
+        )
+        self.dI_dgammadashs_vjp = jit(
+            lambda gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, v:
+            vjp(self.I_jax, gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample)[1](v)[1],
+            **args
+        )
+        self.dI_dgammasTF_vjp = jit(
+            lambda gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, v:
+            vjp(self.I_jax, gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample)[1](v)[2],
+            **args
+            )
+        self.dI_dgammadashsTF_vjp = jit(
+            lambda gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, v:
+            vjp(self.I_jax, gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample)[1](v)[3],
+            **args
+        )
+        self.dI_dcurrentsTF_vjp = jit(
+            lambda gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, v:
+            vjp(self.I_jax, gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample)[1](v)[4],
+            **args
+        )
+
+        gammas = np.array([c.gamma() for c in psc_curves])
+        gammadashs = np.array([c.gammadash() for c in psc_curves])
+        gammas_TF = np.array([c.curve.gamma() for c in self.coils_TF])
+        gammadashs_TF = np.array([c.curve.gammadash() for c in self.coils_TF])
+        currents_TF = np.array([c.current.get_value() for c in self.coils_TF])
+        args = [
+            gammas,
+            gammadashs,
+            gammas_TF,
+            gammadashs_TF,
+            currents_TF,
+            self.downsample
+        ]
+        currents = self.I_jax(*args)
+        psc_currents = [Current(currents[i] * 1e-6) * 1e6 for i in range(ncoils)]
+        self.base_psc_currents = psc_currents[:ncoils // (int(stellsym) + 1) // nfp]
+        [c.fix_all() for c in self.base_psc_currents]  # Fix all the current dofs which are fake anyways
+        self.coils = coils_via_symmetries(self.base_psc_curves, self.base_psc_currents, nfp, stellsym, regularizations=regularizations)
+        self.psc_curves = [c.curve for c in self.coils]
+        self.biot_savart = BiotSavart(self.coils, self)
+        self.biot_savart_total = self.biot_savart + self.biot_savart_TF
+        self.biot_savart_total.set_points(self.eval_points)
+        # Optimizable.__init__(self, depends_on=[self.coils, self.coils_TF])
+
+    def vjp_setup(self, v_currents):
+        """
+        Setup the vjp for the PSCArray object.
+
+        Args:
+            v_currents (array) : Vector to multiply the Jacobian with.
+
+        Returns:
+            The vector-Jacobian product of the PSCArray object.
+        """
+        gammas = np.array([c.gamma() for c in self.psc_curves])
+        gammadashs = np.array([c.gammadash() for c in self.psc_curves])
+        gammas_TF = np.array([c.curve.gamma() for c in self.coils_TF])
+        gammadashs_TF = np.array([c.curve.gammadash() for c in self.coils_TF])
+        currents_TF = np.array([c.current.get_value() for c in self.coils_TF])
+        args = [
+            gammas,
+            gammadashs,
+            gammas_TF,
+            gammadashs_TF,
+            currents_TF,
+            self.downsample
+        ]
+        dJ_dgammas = self.dI_dgammas_vjp(*args, v_currents)
+        dJ_dgammadashs = self.dI_dgammadashs_vjp(*args, v_currents)
+        dJ_dgammas2 = self.dI_dgammasTF_vjp(*args, v_currents)
+        dJ_dgammadashs2 = self.dI_dgammadashsTF_vjp(*args, v_currents)
+        dJ_dcurrents2 = self.dI_dcurrentsTF_vjp(*args, v_currents)
+        vjp_psc = [c.dgamma_by_dcoeff_vjp(dJ_dgammas[i]) + c.dgammadash_by_dcoeff_vjp(dJ_dgammadashs[i]) for i, c in enumerate(self.psc_curves)]
+        vjp_TF = [c.vjp(dJ_dgammas2[i], dJ_dgammadashs2[i], dJ_dcurrents2[i]) for i, c in enumerate(self.coils_TF)]
+
+        # Appears essential to reset the children of the coils, curves and currents
+        # to avoid the optimizable graph growing extremely large when # of coils > 10 or so
+        # for c in (self.coils + self.coils_TF):
+        #     c._children = set()
+        #     c.curve._children = set()
+        #     c.current._children = set()
+        return sum(vjp_psc + vjp_TF)
+
+    def recompute_currents(self):
+        """
+        Recompute the currents in the PSCArray object.
+        """
+        gammas = np.array([c.gamma() for c in self.psc_curves])
+        gammadashs = np.array([c.gammadash() for c in self.psc_curves])
+        gammas_TF = np.array([c.curve.gamma() for c in self.coils_TF])
+        gammadashs_TF = np.array([c.curve.gammadash() for c in self.coils_TF])
+        currents_TF = np.array([c.current.get_value() for c in self.coils_TF])
+        args = [
+            gammas,
+            gammadashs,
+            gammas_TF,
+            gammadashs_TF,
+            currents_TF,
+            self.downsample
+        ]
+        currents = self.I_jax(*args)
+        for i, c in enumerate(self.coils):
+            c.current.set_dofs(currents[i])
+
+        # Appears essential to reset the children of the coils, curves and currents
+        # to avoid the optimizable graph growing extremely large when # of coils > 10 or so
+        # for c in (self.coils + self.coils_TF):
+        #     c._children = set()
+        #     c.curve._children = set()
+        #     c.current._children = set()                                                                                                                             
+                                                                                                              

@@ -774,14 +774,18 @@ def continuation_vacuum_stage_II_optimizations(
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QA/optimizations/continuation/"
         if INPUT_FILE is None:
-            INPUT_FILE = "./inputs/input.LandremanPaul2021_QA"
+            # Default to test files directory
+            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QA")
     elif config == "QH":
         if INPUT_DIR is None:
             INPUT_DIR = "./output/QH/optimizations/"
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QH/optimizations/continuation/"
         if INPUT_FILE is None:
-            INPUT_FILE = "./inputs/input.LandremanPaul2021_QH_magwell_R0=1"
+            # Default to test files directory
+            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QH_magwell_R0=1")
     else:
         raise ValueError(f"Invalid configuration: {config}")
     if FORCE_OBJ is None:
@@ -912,12 +916,16 @@ def initial_vacuum_stage_II_optimizations(N=10000,
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QA/optimizations/"
         if INPUT_FILE is None:
-            INPUT_FILE = "./inputs/input.LandremanPaul2021_QA"
+            # Default to test files directory
+            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QA")
     elif config == "QH":
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QH/optimizations/"
         if INPUT_FILE is None:
-            INPUT_FILE = "./inputs/input.LandremanPaul2021_QH_magwell_R0=1"
+            # Default to test files directory
+            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QH_magwell_R0=1")
     else:
         raise ValueError(f"Invalid configuration: {config}")
 
@@ -1061,12 +1069,16 @@ def vacuum_stage_II_optimization(
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QA/optimizations/"
         if INPUT_FILE is None:
-            INPUT_FILE = "./inputs/input.LandremanPaul2021_QA"
+            # Default to test files directory
+            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QA")
     elif config == "QH":
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QH/optimizations/"
         if INPUT_FILE is None:
-            INPUT_FILE = "./inputs/input.LandremanPaul2021_QH_magwell_R0=1"
+            # Default to test files directory
+            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QH_magwell_R0=1")
     else:
         raise ValueError(f"Invalid configuration: {config}. Must be 'QA' or 'QH'.")
 
@@ -1460,9 +1472,6 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
                 if min_val == max_val:
                     if min_val == 0:
                         plt.xlim(-0.1, 0.1)
-                    else:
-                        plt.xlim(min_val - 0.1 * abs(min_val), 
-                                max_val + 0.1 * abs(max_val))
                 else:
                     plt.xlim(min_val - 0.1 * abs(min_val), 
                             max_val + 0.1 * abs(max_val))
