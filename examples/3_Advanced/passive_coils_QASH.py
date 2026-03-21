@@ -235,15 +235,127 @@ ncoils = len(base_curves)
 print('Num dipole coils = ', ncoils)
 print('R0 = ', base_curves[0].x[0])
 
+# Compute plasma flux through PSC coils via B_plasma surface integral.
+# This self-consistently includes B_plasma in the PSC induced current calculation.
+plasma_flux = None
+try:
+    import virtual_casing as vc_module
+    from simsopt.geo import apply_symmetries_to_curves
+    if not in_github_actions:
+        print("Computing B_plasma flux through PSC coils via surface integral...")
+        from simsopt.mhd import Vmec
+        from simsopt.mhd.vmec_diagnostics import B_cartesian
+
+        vmec = Vmec(str(filename))
+        vmec.run()
+        nfp_vmec = vmec.wout.nfp
+        stellsym_vmec = not bool(vmec.wout.lasym)
+
+        vc_src = vc_src_nphi
+        surf_vc = SurfaceRZFourier.from_nphi_ntheta(
+            mpol=vmec.wout.mpol, ntor=vmec.wout.ntor, nfp=nfp_vmec,
+            nphi=vc_src, ntheta=vc_src, range="half period" if stellsym_vmec else "field period",
+        )
+        for jmn in range(vmec.wout.mnmax):
+            surf_vc.set_rc(int(vmec.wout.xm[jmn]), int(vmec.wout.xn[jmn] / nfp_vmec), vmec.wout.rmnc[jmn, -1])
+            surf_vc.set_zs(int(vmec.wout.xm[jmn]), int(vmec.wout.xn[jmn] / nfp_vmec), vmec.wout.zmns[jmn, -1])
+
+        Bxyz = B_cartesian(vmec, nphi=vc_src, ntheta=vc_src,
+                           range="half period" if stellsym_vmec else "field period")
+        gamma_vc = surf_vc.gamma()
+        gamma1d = np.zeros(vc_src * vc_src * 3)
+        B1d = np.zeros(vc_src * vc_src * 3)
+        for jxyz in range(3):
+            gamma1d[jxyz * vc_src * vc_src: (jxyz + 1) * vc_src * vc_src] = gamma_vc[:, :, jxyz].flatten(order="C")
+            B1d[jxyz * vc_src * vc_src: (jxyz + 1) * vc_src * vc_src] = Bxyz[jxyz].flatten(order="C")
+
+        vcasing = vc_module.VirtualCasing()
+        vcasing.setup(6, nfp_vmec, stellsym_vmec, vc_src, vc_src, gamma1d.tolist(), vc_src, vc_src, vc_src, vc_src)
+
+        psc_curves_sym = apply_symmetries_to_curves(base_curves, s.nfp, s.stellsym)
+
+        n_radial, n_angular = 20, 40
+        all_disk_points = []
+        disk_normals = []
+        disk_weights_list = []
+        coil_n_pts = []
+
+        for curve in psc_curves_sym:
+            gamma_c = curve.gamma()
+            gammadash_c = curve.gammadash()
+            n_quad = gamma_c.shape[0]
+            centroid = np.mean(gamma_c, axis=0)
+            area_vec = np.zeros(3)
+            for j in range(n_quad):
+                area_vec += np.cross(gamma_c[j] - centroid, gammadash_c[j])
+            area_vec /= n_quad
+            area_mag = np.linalg.norm(area_vec)
+            disk_normal = area_vec / area_mag if area_mag > 0 else np.array([0., 0., 1.])
+            radii = np.linalg.norm(gamma_c - centroid, axis=1)
+            R_coil = np.max(radii) * 1.05
+            e1 = np.array([1., 0., 0.])
+            if abs(np.dot(e1, disk_normal)) > 0.9:
+                e1 = np.array([0., 1., 0.])
+            e1 = e1 - np.dot(e1, disk_normal) * disk_normal
+            e1 /= np.linalg.norm(e1)
+            e2 = np.cross(disk_normal, e1)
+            dr = R_coil / n_radial
+            pts = []
+            wts = []
+            for ir in range(n_radial):
+                r = R_coil * (ir + 0.5) / n_radial
+                dA = 2 * np.pi * r * dr / n_angular
+                for ia in range(n_angular):
+                    theta = 2 * np.pi * ia / n_angular
+                    pts.append(centroid + r * (np.cos(theta) * e1 + np.sin(theta) * e2))
+                    wts.append(dA)
+            pts = np.array(pts)
+            wts = np.array(wts)
+            all_disk_points.append(pts)
+            disk_normals.append(disk_normal)
+            disk_weights_list.append(wts)
+            coil_n_pts.append(pts.shape[0])
+
+        all_points = np.concatenate(all_disk_points, axis=0)
+        n_total = all_points.shape[0]
+        Xt1d = np.zeros(3 * n_total)
+        for k in range(3):
+            Xt1d[k * n_total: (k + 1) * n_total] = all_points[:, k]
+
+        B_result = np.array(vcasing.compute_internal_B_offsurf(B1d.tolist(), Xt1d.tolist()))
+        B_flat = np.zeros((n_total, 3))
+        for k in range(3):
+            B_flat[:, k] = B_result[k * n_total: (k + 1) * n_total]
+
+        plasma_flux = np.zeros(len(psc_curves_sym))
+        offset = 0
+        for i in range(len(psc_curves_sym)):
+            n_pts = coil_n_pts[i]
+            B_disk = B_flat[offset: offset + n_pts]
+            B_dot_n = B_disk @ disk_normals[i]
+            plasma_flux[i] = np.sum(B_dot_n * disk_weights_list[i])
+            offset += n_pts
+
+        print(f"  Plasma flux: min={plasma_flux.min():.4e}, max={plasma_flux.max():.4e}, mean={plasma_flux.mean():.4e} Wb")
+    else:
+        print("CI mode; plasma_flux=None")
+except ImportError:
+    print("virtual_casing package not available; plasma_flux=None")
+
 # Initialize the PSCArray object
 eval_points = s.gamma().reshape(-1, 3)
+psc_kwargs = dict(
+    nfp=s.nfp,
+    stellsym=s.stellsym,
+)
+if plasma_flux is not None:
+    psc_kwargs["plasma_flux"] = plasma_flux
 psc_array = PSCArray(
     base_curves, 
     coils_TF, 
     eval_points,
     regularizations=[regularization_rect(aa, bb) for _ in base_curves],
-    nfp=s.nfp, 
-    stellsym=s.stellsym
+    **psc_kwargs,
 )
 
 # Calculate average, approximate on-axis B field strength

@@ -364,16 +364,17 @@ def _coil_coil_inductances_inv_pure(gammas, gammadashs, downsample, regularizati
     return inv_L
 
 
-def _induced_currents_pure(gammas_targets, gammadashs_targets, gammas_sources, gammadashs_sources, currents_sources, downsample, regularizations):
+def _induced_currents_pure(gammas_targets, gammadashs_targets, gammas_sources, gammadashs_sources, currents_sources, downsample, regularizations, extra_flux=None):
     """
     Pure function for computing the induced currents in a set of m passive coils with n quadrature points
     due to a set of m' source coils with n' quadrature points (and themselves). 
 
     .. math::
-        I = -L^{-1} \Psi
+        I = -L^{-1} (\\Psi_{TF} + \\Psi_{extra})
 
-    where :math:`L` is the coil inductance matrix, :math:`\Psi` is the net flux through 
-    the passive coils due to the source coils,
+    where :math:`L` is the coil inductance matrix, :math:`\Psi_{TF}` is the net flux through 
+    the passive coils due to the source (TF) coils, :math:`\Psi_{extra}` is any additional
+    constant flux (e.g. from the plasma field via virtual casing),
     and :math:`I` is the induced currents in the passive coils. 
     The units of the induced currents are Amperes.
 
@@ -402,11 +403,17 @@ def _induced_currents_pure(gammas_targets, gammadashs_targets, gammas_sources, g
             Array of regularizations coming from finite cross-section for all m coils. The choices
             for each coil are regularization_circ and regularization_rect, although each coil can 
             have different size and shape cross-sections in this list of regularization terms.
+        extra_flux (array, shape (m,), optional): 
+            Additional constant flux through each passive coil (e.g. from the plasma
+            field B_plasma). Defaults to zero if not provided.
 
     Returns:
         array (shape (m,)): Array of induced currents.
     """
-    return -_coil_coil_inductances_inv_pure(gammas_targets, gammadashs_targets, downsample, regularizations) @ _net_fluxes_pure(gammas_targets, gammadashs_targets, gammas_sources, gammadashs_sources, currents_sources, downsample)
+    Psi_TF = _net_fluxes_pure(gammas_targets, gammadashs_targets, gammas_sources, gammadashs_sources, currents_sources, downsample)
+    if extra_flux is not None:
+        Psi_TF = Psi_TF + extra_flux
+    return -_coil_coil_inductances_inv_pure(gammas_targets, gammadashs_targets, downsample, regularizations) @ Psi_TF
 
 
 def b2energy_pure(gammas, gammadashs, currents, downsample, regularizations):

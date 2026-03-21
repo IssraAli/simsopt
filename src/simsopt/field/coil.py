@@ -1,5 +1,6 @@
 from math import pi
 import numpy as np
+import jax.numpy as jnp
 from jax import vjp
 from simsopt.geo.jit import jit
 from simsopt._core.optimizable import Optimizable
@@ -887,11 +888,16 @@ class PSCArray():
         nfp (int) : Number of field periods.
         stellsym (bool) : Whether to apply stellarator symmetry.
         downsample (int) : Downsample factor for the evaluation points.
+        plasma_flux (array, shape (m,), optional) : Additional constant flux through
+            each passive coil from the plasma field (B_plasma), in Weber.
+            Computed from the virtual casing vector potential via Stokes' theorem.
+            This is a constant during optimization and does not contribute gradients
+            with respect to TF degrees of freedom.
 
     Returns:
         PSCArray object.
     """
-    def __init__(self, base_psc_curves, coils_TF, eval_points, regularizations, nfp=1, stellsym=False, downsample=1):
+    def __init__(self, base_psc_curves, coils_TF, eval_points, regularizations, nfp=1, stellsym=False, downsample=1, plasma_flux=None):
         from .force import _induced_currents_pure
         from .biotsavart import BiotSavart
         self.base_psc_curves = base_psc_curves  # not the symmetrized ones
@@ -910,6 +916,11 @@ class PSCArray():
         ncoils = len(psc_curves)
         self.biot_savart_TF = BiotSavart(coils_TF)
 
+        if plasma_flux is not None:
+            self.plasma_flux = jnp.array(plasma_flux)
+        else:
+            self.plasma_flux = jnp.zeros(ncoils)
+
         # eval_points is assumed to be where you want to evaluate the Bfield during optimization
         # e.g. on the surface of the plasma. This needs to be saved since the TF Bfield
         # gets evaluated on the PSC curves during the calculations.
@@ -920,7 +931,7 @@ class PSCArray():
         args = {"static_argnums": (5,)}
         self.I_jax = jit(
             lambda gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample:
-            _induced_currents_pure(gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, self.regularizations),
+            _induced_currents_pure(gammas, gammadashs, gammas_TF, gammadashs_TF, currents_TF, downsample, self.regularizations, self.plasma_flux),
             **args
         )
         self.dI_dgammas_vjp = jit(
