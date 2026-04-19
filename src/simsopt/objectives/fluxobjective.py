@@ -41,6 +41,7 @@ class SquaredFlux(Optimizable):
     Args:
         surface: A :obj:`simsopt.geo.surface.Surface` object on which to compute the flux
         field: A :obj:`simsopt.field.magneticfield.MagneticField` for which to compute the flux.
+            May include :class:`~simsopt.field.psc_bulk.PassiveBulkField` in a :class:`~simsopt.field.magneticfield.MagneticFieldSum`.
         target: A ``nphi x ntheta`` numpy array containing target values for the flux. Here 
           ``nphi`` and ``ntheta`` correspond to the number of quadrature points on `surface` 
           in ``phi`` and ``theta`` direction.

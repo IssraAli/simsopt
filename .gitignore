@@ -54,6 +54,27 @@ spec*.sp.h5
 # examples
 examples/VMEC/
 examples/*.log
+examples/**/*.vtu
+examples/**/*.vts
+examples/**/*.pvd
+examples/**/*_out/
+examples/**/*_optimization_out/
+
+# Passive-bulk / coil optimisation artifacts left in repo root by examples
+/*.vtu
+/*.vts
+/*.pvd
+/coils_init.vtu
+/test_coil.vtu
+/passive_bulks_out/
+/passive_bulks_optimization_out/
+/passive_bulks_winding_surface_optimization_out/
+/passive_bulks_cylindrical_grid_optimization_out/
+/test_output/
+
+# Taylor-test / timing plots produced by examples
+/taylor_errors*.png
+/objective_runtimes_semilogy*.png
 
 # Sphinx related files
 docs/build/
