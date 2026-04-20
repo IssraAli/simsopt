@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import warnings
 from functools import partial
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import jax
 
@@ -76,8 +76,12 @@ __all__ = [
     "shell_inductance_matrix_jax_blockwise",
     "shell_loading_vector_pure",
     "shell_solve_linear_pure",
+    "shell_solve_prefactored_pure",
+    "shell_cholesky_pure",
+    "shell_eigenfloor_cholesky_pure",
     "shell_solve_eigenfloor_pure",
     "shell_biot_savart_pure",
+    "shell_normal_field_basis_matrix",
     "null_space_projection_matrix",
     "mu0_over_4pi",
 ]
@@ -385,6 +389,229 @@ def shell_inductance_matrix_blockwise(
     return L
 
 
+def _shell_inductance_matrix_symmetric_reduced_jax(
+    K_per_puck: List[np.ndarray],
+    pts_per_puck: List[np.ndarray],
+    weights_per_puck: List[np.ndarray],
+    base_indices: np.ndarray,
+    base_reps: np.ndarray,
+    signs: np.ndarray,
+    G: int,
+    delta_reg: float,
+    adaptive_self_reg: bool,
+) -> np.ndarray:
+    """Batched-JAX symmetry-reduced ``L_base`` (homogeneous pucks only).
+
+    Processes ``(i_base, j_rep)`` pairs in chunks of :data:`_PAIR_BATCH_SIZE`
+    through :func:`_jax_pair_batch_blocks`, then scatters with
+    ``sigma_j * G`` on the host (same algebra as the NumPy loop).
+    """
+    n_all = len(K_per_puck)
+    n_base = int(base_reps.size)
+    nd_per = int(K_per_puck[int(base_reps[0])].shape[1])
+    K = np.stack(K_per_puck, axis=0)
+    pts = np.stack(pts_per_puck, axis=0)
+    w = np.stack(weights_per_puck, axis=0)
+    base_idx_np = np.asarray(base_indices, dtype=np.intp)
+    signs = np.asarray(signs, dtype=np.intp)
+    base_reps = np.asarray(base_reps, dtype=np.intp)
+
+    n_pairs = n_base * n_all
+    i_idx_all = np.repeat(base_reps, n_all)
+    j_idx_all = np.tile(np.arange(n_all, dtype=np.intp), n_base)
+    row_base = np.repeat(np.arange(n_base, dtype=np.intp) * nd_per, n_all)
+    col_base = base_idx_np[j_idx_all] * np.intp(nd_per)
+    scale = (float(G) * signs[j_idx_all].astype(np.float64))
+
+    L_base = np.zeros((n_base * nd_per, n_base * nd_per))
+    dreg = jnp.asarray(float(delta_reg))
+    blocks_all = np.empty((n_pairs, nd_per, nd_per), dtype=np.float64)
+
+    for start in range(0, n_pairs, _PAIR_BATCH_SIZE):
+        stop = min(start + _PAIR_BATCH_SIZE, n_pairs)
+        i_idx = i_idx_all[start:stop]
+        j_idx = j_idx_all[start:stop]
+        Ki = jnp.asarray(K[i_idx])
+        Kj = jnp.asarray(K[j_idx])
+        pts_i = jnp.asarray(pts[i_idx])
+        pts_j = jnp.asarray(pts[j_idx])
+        w_i = jnp.asarray(w[i_idx])
+        w_j = jnp.asarray(w[j_idx])
+        blocks_all[start:stop] = np.asarray(
+            _jax_pair_batch_blocks(
+                Ki,
+                Kj,
+                pts_i,
+                pts_j,
+                w_i,
+                w_j,
+                dreg,
+                adaptive_self_reg=adaptive_self_reg,
+            )
+        )
+
+    for ri, ci, s, blk in zip(row_base, col_base, scale, blocks_all):
+        L_base[ri : ri + nd_per, ci : ci + nd_per] += s * blk
+    return L_base
+
+
+def shell_inductance_matrix_symmetric_reduced(
+    K_per_puck: List[np.ndarray],
+    pts_per_puck: List[np.ndarray],
+    weights_per_puck: List[np.ndarray],
+    base_indices: "list | np.ndarray",
+    delta_reg: float = 1e-8,
+    adaptive_self_reg: bool = False,
+    replica_signs: "list | np.ndarray | None" = None,
+) -> np.ndarray:
+    """
+    Symmetry-reduced shell inductance matrix under translation/rotation invariance.
+
+    When the TF background and puck layout share a discrete symmetry group
+    :math:`G` (e.g. :math:`n_{fp}` rotational + stellarator reflection) the
+    induced modal coefficients :math:`\\beta` on replica :math:`r` of a
+    base puck satisfy :math:`\\beta^{(r)} = \\sigma_r \\beta^{(\\text{base})}`
+    with :math:`\\sigma_r \\in \\{+1, -1\\}` (pure rotations give
+    :math:`\\sigma = +1`, stellsym images give :math:`\\sigma = -1`).
+    The kernel :math:`1/|r-r'|` is :math:`G`-invariant so the full solve
+
+    .. math::
+        L_{all}\\,\\beta_{all} = f_{all}
+
+    folds row-wise over orbits into the base-DOF system
+
+    .. math::
+        L_{base}\\,\\beta_{base} = f_{base},\\qquad
+        L_{base}[a,b] = |G|\\sum_{s \\in \\text{orbit}(b)}
+        \\sigma_{i_{\\rm rep}(a)}\\,\\sigma_s\\,
+        L_{all}[i_{\\rm rep}(a), s].
+
+    This function requires that every ``base_reps[a]`` is a
+    ``sigma = +1`` replica (the caller enforces this at rebuild time),
+    in which case the :math:`\\sigma_{i_{\\rm rep}}` factor is always
+    ``+1`` and only the inner :math:`\\sigma_s` weighting remains.
+
+    Args:
+        K_per_puck: ``n_all`` per-puck basis arrays of shape ``(nq, nd, 3)``.
+        pts_per_puck: ``n_all`` per-puck global-frame quadrature points
+            ``(nq, 3)``.
+        weights_per_puck: ``n_all`` per-puck quadrature weights ``(nq,)``.
+        base_indices: Integer array of length ``n_all`` mapping each replica
+            to its base puck (values in ``[0, n_base)``).  Must satisfy
+            ``n_all = n_base * |G|`` with equal orbit sizes.
+        delta_reg: Uniform regularization used when
+            ``adaptive_self_reg=False``; ignored otherwise.
+        adaptive_self_reg: See :func:`shell_inductance_matrix_blockwise`.
+        replica_signs: Optional ``(n_all,)`` array of :math:`\\sigma_r`
+            in :math:`\\{+1, -1\\}`.  When ``None`` (default) all signs
+            are ``+1`` (rotation-only symmetry).  When provided, every
+            ``base_reps[a]`` must carry sign ``+1``.
+
+    Returns:
+        Symmetric ``L_base`` of shape ``(n_base * nd, n_base * nd)``.
+    """
+    base_indices = np.asarray(base_indices, dtype=int)
+    n_all = len(K_per_puck)
+    if n_all == 0:
+        return np.zeros((0, 0))
+    if base_indices.size != n_all:
+        raise ValueError(
+            "base_indices must have length n_all = " f"{n_all}; got {base_indices.size}"
+        )
+    n_base = int(base_indices.max()) + 1
+    # Uniform orbit-size check (required for the |G| prefactor derivation).
+    orbit_sizes = np.bincount(base_indices, minlength=n_base)
+    if not np.all(orbit_sizes == orbit_sizes[0]):
+        raise ValueError(
+            "shell_inductance_matrix_symmetric_reduced requires equal-size "
+            f"orbits; got sizes {orbit_sizes.tolist()}."
+        )
+    G = int(orbit_sizes[0])
+
+    if replica_signs is None:
+        signs = np.ones(n_all, dtype=int)
+    else:
+        signs = np.asarray(replica_signs, dtype=int)
+        if signs.size != n_all:
+            raise ValueError(
+                "replica_signs must have length n_all = "
+                f"{n_all}; got {signs.size}"
+            )
+        if not np.all(np.isin(signs, (-1, 1))):
+            raise ValueError(
+                "replica_signs must contain only +1 / -1; "
+                f"got {np.unique(signs).tolist()}"
+            )
+
+    # First replica of each base puck (used as the left-hand index).
+    base_reps = np.zeros(n_base, dtype=int)
+    seen = np.zeros(n_base, dtype=bool)
+    for idx, bi in enumerate(base_indices):
+        if not seen[bi]:
+            base_reps[bi] = idx
+            seen[bi] = True
+
+    if not np.all(signs[base_reps] == +1):
+        bad = [int(r) for r in base_reps if signs[r] != +1]
+        raise ValueError(
+            "shell_inductance_matrix_symmetric_reduced requires every "
+            "base_reps entry to be a pure-rotation replica "
+            f"(sigma = +1); got stellsym-image replicas at {bad}"
+        )
+
+    nd_per = K_per_puck[base_reps[0]].shape[1]
+    nq_pers = {arr.shape[0] for arr in K_per_puck}
+    nd_pers = {arr.shape[1] for arr in K_per_puck}
+    homogeneous = len(nq_pers) == 1 and len(nd_pers) == 1
+    if homogeneous:
+        L_base = _shell_inductance_matrix_symmetric_reduced_jax(
+            K_per_puck,
+            pts_per_puck,
+            weights_per_puck,
+            base_indices,
+            base_reps,
+            signs,
+            G,
+            float(delta_reg),
+            adaptive_self_reg,
+        )
+    else:
+        L_base = np.zeros((n_base * nd_per, n_base * nd_per))
+
+        for i_base in range(n_base):
+            i_rep = int(base_reps[i_base])
+            K_i = K_per_puck[i_rep]
+            pts_i = pts_per_puck[i_rep]
+            w_i = weights_per_puck[i_rep]
+            # sigma_{i_rep} is guaranteed to be +1 by the check above.
+            if adaptive_self_reg:
+                delta_i = _SELF_REG_COEFF * np.sqrt(w_i)
+            for j_rep in range(n_all):
+                j_base = int(base_indices[j_rep])
+                sigma_j = int(signs[j_rep])
+                K_j = K_per_puck[j_rep]
+                pts_j = pts_per_puck[j_rep]
+                w_j = weights_per_puck[j_rep]
+                r = pts_i[:, None, :] - pts_j[None, :, :]
+                if adaptive_self_reg:
+                    delta_j = _SELF_REG_COEFF * np.sqrt(w_j)
+                    delta_pair = 0.5 * (delta_i[:, None] + delta_j[None, :])
+                    dist = np.sqrt(np.sum(r**2, axis=-1) + delta_pair**2)
+                else:
+                    dist = np.sqrt(np.sum(r**2, axis=-1) + delta_reg**2)
+                dot = np.einsum("iax,jbx->ijab", K_i, K_j)
+                kernel = dot / dist[..., None, None]
+                block = MU0_OVER_4PI * np.einsum("ijab,i,j->ab", kernel, w_i, w_j)
+                ri = i_base * nd_per
+                rj = j_base * nd_per
+                L_base[ri : ri + nd_per, rj : rj + nd_per] += sigma_j * G * block
+
+    # Analytical symmetry guard (the folded matrix is symmetric in exact
+    # arithmetic; floating-point roundoff can break ``eigh`` otherwise).
+    L_base = 0.5 * (L_base + L_base.T)
+    return L_base
+
+
 def _shell_inductance_matrix_blockwise_batched(
     K_per_puck: List[np.ndarray],
     pts_per_puck: List[np.ndarray],
@@ -608,8 +835,8 @@ def shell_loading_vector_pure(
     the puck interior.
     Every downstream caller (``_beta_from_tf_body``,
     ``_beta_from_bn_body``, ``_beta_eigenfloor_from_bn_body``,
-    ``_beta_from_tf_eigenfloor_body``, ``_B_eval_full_body``,
-    ``_vjp_tf_only_analytic``) picks this sign up automatically.
+    ``_B_eval_full_body``, ``_vjp_tf_only_analytic``) picks this sign up
+    automatically.
 
     Args:
         phi_values: shape ``(n_quad, n_dof)``.
@@ -625,6 +852,31 @@ def shell_loading_vector_pure(
     return -jnp.sum(phi_values * (w * Bn)[:, None], axis=0)
 
 
+def shell_cholesky_pure(
+    L: jnp.ndarray,
+    jitter: float = 1e-10,
+) -> jnp.ndarray:
+    """Lower Cholesky factor ``C`` with ``C @ C.T = L + jitter * I``.
+
+    Matches the stabilization used in :func:`shell_solve_linear_pure`.
+    """
+    L = jnp.asarray(L)
+    n = L.shape[0]
+    Ls = L + jitter * jnp.eye(n, dtype=L.dtype)
+    return jnp.linalg.cholesky(Ls)
+
+
+def shell_solve_prefactored_pure(
+    chol: jnp.ndarray,
+    f: jnp.ndarray,
+) -> jnp.ndarray:
+    """Solve ``L @ x = f`` given a lower Cholesky factor of ``L``."""
+    chol = jnp.asarray(chol)
+    f = jnp.asarray(f)
+    y = jscp.linalg.solve_triangular(chol, f, lower=True)
+    return jscp.linalg.solve_triangular(chol.T, y, lower=False)
+
+
 def shell_solve_linear_pure(
     L: jnp.ndarray,
     f: jnp.ndarray,
@@ -633,10 +885,28 @@ def shell_solve_linear_pure(
     """Solve ``L @ beta = f`` with Cholesky (symmetric positive definite)."""
     L = jnp.asarray(L)
     f = jnp.asarray(f)
-    Ls = L + jitter * jnp.eye(L.shape[0])
-    C = jnp.linalg.cholesky(Ls)
+    C = shell_cholesky_pure(L, jitter=jitter)
     y = jscp.linalg.solve_triangular(C, f, lower=True)
     return jscp.linalg.solve_triangular(C.T, y, lower=False)
+
+
+def shell_eigenfloor_cholesky_pure(
+    L: jnp.ndarray,
+    threshold: float = 1e-10,
+    jitter: float = 1e-10,
+) -> jnp.ndarray:
+    """Cholesky factor of the eigenvalue-floored SPD matrix used in
+    :func:`shell_solve_eigenfloor_pure`.
+    """
+    L = jnp.asarray(L)
+    lam, V = jnp.linalg.eigh(L)
+    max_abs = jnp.max(jnp.abs(lam))
+    floor = threshold * max_abs
+    lam_floor = jnp.maximum(lam, floor)
+    L_reg = (V * lam_floor[None, :]) @ V.T
+    n = L.shape[0]
+    L_reg = L_reg + jitter * jnp.eye(n, dtype=L.dtype)
+    return jnp.linalg.cholesky(L_reg)
 
 
 def shell_solve_eigenfloor_pure(
@@ -732,3 +1002,230 @@ def project_reduced_system(
 def expand_beta_reduced(alpha: jnp.ndarray, Q: jnp.ndarray) -> jnp.ndarray:
     """``beta = Q @ alpha``."""
     return Q @ alpha
+
+
+# ---------------------------------------------------------------------------
+# Stacked (block-diagonal) variants of the loading vector and Biot-Savart
+# evaluator.  These avoid materializing the dense monolithic
+# ``K_basis(nq_total, n_dof_total, 3)`` and ``phi_mat(nq_total, n_dof_total)``
+# arrays used by the older interfaces; instead every per-puck block lives in
+# a stacked array of shape ``(n_pucks, nq_per, nd_per, ...)``.  In the typical
+# case where all pucks share the same basis resolution (``m_fourier``,
+# ``l_zernike``, ``k_chebyshev``, ``n_rho``, ``n_phi``, ``n_z``) this gives a
+# ~``n_pucks``-fold memory reduction on the basis tables while producing
+# bit-identical outputs up to floating-point roundoff.
+# ---------------------------------------------------------------------------
+
+
+def shell_loading_vector_stacked_pure(
+    phi_stack: jnp.ndarray,
+    w_stack: jnp.ndarray,
+    B_normal: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    Block-diagonal version of :func:`shell_loading_vector_pure`.
+
+    Computes :math:`f_a = -\\int_\\Sigma \\Phi_a B_n^{TF}\\,dS` by summing
+    per-puck contributions without materialising the full-width
+    ``phi_values`` matrix.
+
+    Args:
+        phi_stack: ``(n_pucks, nq_per, nd_per)`` per-puck basis evaluations.
+        w_stack: ``(n_pucks, nq_per)`` per-puck quadrature weights.
+        B_normal: ``(n_pucks * nq_per,)`` flat background (TF) normal field,
+            in the same puck-major ordering as the stacked arrays.
+
+    Returns:
+        ``f`` of shape ``(n_pucks * nd_per,)`` in the same ordering the dense
+        path produces (consecutive puck DOFs laid out puck-major).
+    """
+    phi_stack = jnp.asarray(phi_stack)
+    w_stack = jnp.asarray(w_stack)
+    Bn = jnp.asarray(B_normal)
+    n_pucks, nq_per, _ = phi_stack.shape
+    Bn_s = Bn.reshape(n_pucks, nq_per)
+    f_per_puck = -jnp.einsum("pqa,pq->pa", phi_stack, w_stack * Bn_s)
+    return f_per_puck.reshape(-1)
+
+
+def shell_biot_savart_stacked_pure(
+    K_stack: jnp.ndarray,
+    quad_points: jnp.ndarray,
+    quad_weights: jnp.ndarray,
+    beta: jnp.ndarray,
+    eval_points: jnp.ndarray,
+    eps: float = 1e-8,
+    accumulate_dtype: Optional[jnp.dtype] = None,
+) -> jnp.ndarray:
+    """
+    Block-diagonal version of :func:`shell_biot_savart_pure`.
+
+    Assembles the sheet current
+    :math:`\\mathbf K(\\mathbf x') = \\sum_a \\beta_a \\mathbf K_a(\\mathbf x')`
+    per puck from the stacked basis ``K_stack`` (avoiding the dense
+    block-diagonal ``(nq_total, n_dof_total, 3)`` array) before evaluating
+
+    .. math::
+        \\mathbf B(\\mathbf x) = \\frac{\\mu_0}{4\\pi} \\int_\\Sigma
+        \\frac{\\mathbf K(\\mathbf x') \\times (\\mathbf x - \\mathbf x')}
+        {|\\mathbf x - \\mathbf x'|^3}\\, dS'.
+
+    Args:
+        K_stack: ``(n_pucks, nq_per, nd_per, 3)`` per-puck basis currents.
+        quad_points: ``(n_pucks * nq_per, 3)`` flat quadrature points in the
+            global frame, puck-major ordering.
+        quad_weights: ``(n_pucks * nq_per,)`` flat quadrature weights.
+        beta: ``(n_pucks * nd_per,)`` flat modal coefficients, puck-major.
+        eval_points: ``(n_eval, 3)`` evaluation points.
+        eps: Squared-distance softening applied inside the sum for numerical
+            stability near source points.
+        accumulate_dtype: If ``jnp.float32``, compute intermediates in
+            single precision and cast the result back to float64 (default
+            ``None`` keeps float64 throughout).
+
+    Returns:
+        ``B`` of shape ``(n_eval, 3)`` in tesla.
+    """
+    K_stack = jnp.asarray(K_stack)
+    quad_points = jnp.asarray(quad_points)
+    w = jnp.asarray(quad_weights)
+    beta = jnp.asarray(beta)
+    eval_points = jnp.asarray(eval_points)
+    acc = jnp.float64 if accumulate_dtype is None else accumulate_dtype
+    K_stack = K_stack.astype(acc)
+    quad_points = quad_points.astype(acc)
+    w = w.astype(acc)
+    beta = beta.astype(acc)
+    eval_points = eval_points.astype(acc)
+    n_pucks, nq_per, nd_per, _ = K_stack.shape
+    beta_s = beta.reshape(n_pucks, nd_per)
+    K_vec_stack = jnp.einsum("pqak,pa->pqk", K_stack, beta_s)
+    K = K_vec_stack.reshape(-1, 3)
+    eps_acc = jnp.asarray(eps, dtype=acc)
+
+    def B_at(x: jnp.ndarray) -> jnp.ndarray:
+        r = x[None, :] - quad_points
+        rn = jnp.sqrt(jnp.sum(r**2, axis=-1) + eps_acc**2)
+        integrand = jnp.cross(K, r) / (rn[:, None] ** 3)
+        out = MU0_OVER_4PI * jnp.sum(integrand * w[:, None], axis=0)
+        return out.astype(jnp.float64)
+
+    return jax.vmap(B_at)(eval_points)
+
+
+def shell_normal_field_basis_matrix(
+    K_basis: np.ndarray,
+    quad_points: np.ndarray,
+    quad_weights: np.ndarray,
+    normals: np.ndarray,
+    *,
+    delta_reg: float = 1e-6,
+    adaptive_self_reg: bool = True,
+    inset_frac: float = 1.0,
+) -> np.ndarray:
+    r"""Per-basis normal magnetic field on (an inset of) the shell.
+
+    Assembles the dense matrix
+
+    .. math::
+
+        H_{qa} \;=\; \hat{\mathbf n}(\mathbf x_q) \cdot
+        \mathbf B^{(a)}(\mathbf y_q)
+        \;=\; \frac{\mu_0}{4\pi} \sum_{q'} w_{q'}\,
+        \frac{\bigl(\hat{\mathbf n}(\mathbf x_q)\times
+        \mathbf r_{q q'}\bigr)\cdot\mathbf K_a(\mathbf x_{q'})}
+        {\bigl(|\mathbf r_{q q'}|^2 + \delta_{q q'}^2\bigr)^{3/2}},
+
+    where :math:`\mathbf r_{q q'} = \mathbf y_q - \mathbf x_{q'}` and
+    the observer point :math:`\mathbf y_q = \mathbf x_q - \varepsilon_q
+    \hat{\mathbf n}(\mathbf x_q)` is displaced inward from the shell
+    quadrature node by ``inset_frac *`` (a half-cell length).  The
+    inset is mandatory because the naive :math:`\mathbf y_q=\mathbf x_q`
+    evaluation has a :math:`1/r^3` self-singularity at :math:`q=q'`
+    whose :math:`\sqrt{r^2+\delta^2}`-regularized value biases
+    :math:`B_n^{(a)}(\mathbf x_q)` away from its principal-value limit
+    on the sheet.  The prefactor :data:`_SELF_REG_COEFF` was derived for
+    the *Gram* (energy-form) self-integral and is not analytically
+    correct for the pointwise-B self-integral; displacing the observer
+    inward by roughly half a cell width sidesteps the issue while
+    converging to the inside-boundary limit of :math:`B_n` (which, by
+    :math:`B_n` continuity across a current sheet, equals the shell
+    limit we want to drive to zero).
+
+    :math:`\delta_{q q'}` follows the same convention as
+    :func:`shell_inductance_matrix_blockwise`: when
+    ``adaptive_self_reg=True`` it is the symmetric mean of the
+    per-cell effective patch radii
+    :math:`\delta_k = (3\pi^{3/2}/8)\sqrt{w_k}` (:data:`_SELF_REG_COEFF`),
+    otherwise it is the uniform scalar ``delta_reg``.
+
+    This matrix is the discrete "shell normal-field operator" and is the
+    building block of the L\ :sup:`2`-residual (regcoil-style) weak form
+
+    .. math::
+
+        \min_\beta \;\; \|B_n^{TF} + H\beta\|_{L^2(\Sigma)}^2
+        \quad\Longleftrightarrow\quad
+        \underbrace{H^{\!\top}\mathrm{diag}(w)\,H}_{M}\,\beta
+        \;=\; -\,\underbrace{H^{\!\top}\mathrm{diag}(w)\,B_n^{TF}}_{-g},
+
+    which enforces the Meissner condition :math:`B_n^{tot} = 0` on the
+    shell in the integrated-squared sense rather than only in the
+    Galerkin sense projected onto the scalar-potential basis (the weak
+    form used by :func:`shell_inductance_matrix_blockwise` and
+    :func:`shell_loading_vector_pure`).  The energy form recovers the
+    dipole moment correctly but leaves a systematic residual in higher
+    multipoles; the :math:`H`-form drives the full normal-field residual
+    monotonically to zero as the basis is refined.
+
+    Args:
+        K_basis: ``(n_quad, n_dof, 3)`` block-diagonal per-puck sheet
+            currents (same layout as the monolithic ``K_basis`` used by
+            :func:`shell_biot_savart_pure`).
+        quad_points: ``(n_quad, 3)`` shell quadrature points in the
+            global frame.
+        quad_weights: ``(n_quad,)`` quadrature weights.
+        normals: ``(n_quad, 3)`` outward unit normals at ``quad_points``.
+        delta_reg: Legacy uniform regularization radius
+            :math:`\delta`, used when ``adaptive_self_reg=False``.
+        adaptive_self_reg: When ``True`` (default), use per-cell
+            adaptive regularization matching
+            :func:`shell_inductance_matrix_blockwise`.
+        inset_frac: Inward displacement of the observer as a fraction of
+            :math:`\sqrt{w_q / \pi}` (the effective half-cell radius).
+            Default ``1.0`` gives one half-cell inward, which is small
+            enough not to corrupt near-shell accuracy and large enough
+            to keep the self-block non-singular.  Pass ``0.0`` to
+            recover the strictly on-shell evaluation (biased self-
+            integral; retained for regression testing).
+
+    Returns:
+        ``H`` of shape ``(n_quad, n_dof)`` in tesla.
+    """
+    K_basis = np.asarray(K_basis, dtype=float)
+    pts = np.asarray(quad_points, dtype=float)
+    w = np.asarray(quad_weights, dtype=float)
+    n_hat = np.asarray(normals, dtype=float)
+    n_quad = pts.shape[0]
+    if K_basis.shape[0] != n_quad or K_basis.shape[-1] != 3:
+        raise ValueError(
+            f"K_basis shape {K_basis.shape} inconsistent with "
+            f"quad_points {pts.shape}"
+        )
+    eps_obs = float(inset_frac) * np.sqrt(w / np.pi)
+    obs = pts - eps_obs[:, None] * n_hat
+    if adaptive_self_reg:
+        delta = _SELF_REG_COEFF * np.sqrt(w)
+        delta_pair = 0.5 * (delta[:, None] + delta[None, :])
+    else:
+        delta_pair = float(delta_reg)
+    r = obs[:, None, :] - pts[None, :, :]
+    r2 = np.sum(r * r, axis=-1)
+    rho3 = (r2 + delta_pair**2) ** 1.5
+    # n_hat . (K_a x r) = (r x n_hat) . K_a  (cyclic scalar triple product);
+    # compute ``rxn`` so each (q, q') kernel element is a 3-vector dotted
+    # with K at the source point.
+    rxn = np.cross(r, n_hat[:, None, :], axis=-1)
+    kernel = rxn / rho3[..., None]
+    H = MU0_OVER_4PI * np.einsum("qpx,pax,p->qa", kernel, K_basis, w)
+    return H

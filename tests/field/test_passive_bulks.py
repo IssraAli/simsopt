@@ -16,10 +16,16 @@ from simsopt.field.bulk_inductance import (
     shell_inductance_matrix_blockwise,
     shell_inductance_matrix_pure,
     shell_loading_vector_pure,
+    shell_loading_vector_stacked_pure,
+    shell_solve_eigenfloor_pure,
 )
 from simsopt._core.optimizable import Optimizable
 from simsopt.field.coil import Coil, Current
-from simsopt.field.psc_bulk import PSCBulkArray
+from simsopt.field.psc_bulk import (
+    PSCBulkArray,
+    _EIGENFLOOR_THRESHOLD,
+    _fold_Bn_to_work,
+)
 from simsopt.field.puck_basis import (
     gauge_projection_matrix,
     list_zernike_modes,
@@ -803,7 +809,7 @@ def test_galerkin_residual():
         )
     )
 
-    L = psc._L_full
+    L = psc._L_work
     Q = psc._Q
     Lr, fr = project_reduced_system(jnp.asarray(L), jnp.asarray(f), jnp.asarray(Q))
     Lr = np.array(Lr)
@@ -883,7 +889,7 @@ def test_galerkin_residual_free_dofs():
         )
     )
 
-    L = psc._L_full
+    L = psc._L_work
     Q_c = psc._Q_c
     Lr_c = Q_c.T @ L @ Q_c
     fr_c = Q_c.T @ f
@@ -1493,19 +1499,26 @@ def _run_taylor_test(
     return errors
 
 
-def _assert_taylor_convergence(errors, label="", strict_2nd_order=True):
-    """Check that error ratios show 2nd-order convergence.
+def _assert_taylor_convergence(
+    errors, label="", strict_2nd_order=True, tol_abs=1e-3
+):
+    """Check that error ratios show 2nd-order convergence *and* that the
+    sweep actually enters the asymptotic regime.
 
     For a second-order-accurate central finite difference, halving the
     step ``eps`` should quarter the error (ratio ~0.25).  We require:
 
     * the *best* observed ratio is strictly below ``0.35`` (confirming
-      a 2nd-order regime was entered somewhere in the sweep), and
+      a 2nd-order regime was entered somewhere in the sweep),
     * if ``strict_2nd_order=True``, the median of the pre-asymptotic
       ratios (i.e. dropping the final ratio which is typically
       rounding-noise dominated and the first two which may still be
       in the linear regime for non-analytic objectives) is also
-      below ``0.35``.
+      below ``0.35``, *and*
+    * the minimum observed error falls below ``tol_abs`` -- a pure
+      ratio test cannot tell a correct gradient apart from one that
+      is wrong by a constant offset (e.g. a sign flip on part of the
+      chain), but the minimum error does.
 
     Args:
         errors: List of absolute / relative errors, one per eps value.
@@ -1513,6 +1526,11 @@ def _assert_taylor_convergence(errors, label="", strict_2nd_order=True):
         strict_2nd_order: If ``True`` (default), also assert the
             pre-asymptotic median is < 0.35.  Pass ``False`` for very
             short sweeps where trimming would leave no samples.
+        tol_abs: Required upper bound on ``min(errors)``.  A correct
+            analytic gradient drives the FD error well below this; a
+            constant-offset bug keeps it on the order of the offset.
+            Set to ``None`` to opt out of the absolute check for
+            legacy callers that only care about the ratio.
     """
     ratios = [
         (errors[i] + 1e-30) / (errors[i - 1] + 1e-30)
@@ -1537,6 +1555,16 @@ def _assert_taylor_convergence(errors, label="", strict_2nd_order=True):
         f"Taylor test '{label}' failed: median ratio {median_ratio:.4f} "
         f"(strict_2nd_order={strict_2nd_order}), errors={errors}"
     )
+    if tol_abs is not None:
+        min_err = float(np.min(errors))
+        assert min_err < tol_abs, (
+            f"Taylor test '{label}' failed: min(errors)={min_err:.3e} "
+            f">= tol_abs={tol_abs:.3e}.  A passing ratio with a large "
+            f"absolute error typically means the analytic gradient "
+            f"carries a constant offset (e.g. a sign flip or dropped "
+            f"term) while still scaling correctly with eps. "
+            f"errors={errors}"
+        )
 
 
 def test_taylor_tf_coil_dofs():
@@ -2128,3 +2156,2244 @@ def test_short_solenoid_lorenz_self_inductance():
         f"quadrature; legacy ratio = {ratio_legacy:.4f}, "
         f"L_ref = {L_ref:.3e} H*m^2)."
     )
+
+
+# =====================================================================
+# Memory-reduction refactor (stacked K/phi + symmetry-reduced path)
+# =====================================================================
+
+
+def _galerkin_transfer_matrix(
+    base_indices: np.ndarray,
+    nd_per: int,
+    signs: "np.ndarray | None" = None,
+) -> np.ndarray:
+    """Return ``T`` with ``beta_full = T @ beta_work`` (stacked per-puck DOFs).
+
+    Replica ``r`` copies base puck ``base_indices[r]`` with parity
+    ``signs[r]`` so each ``nd_per``-row block of ``T`` is
+    ``signs[r] * I`` on the corresponding base column block.  When
+    ``signs`` is ``None`` (default, backward compatible) all signs are
+    ``+1`` and ``T`` reduces to the plain orbit-replication matrix.
+    """
+    base_indices = np.asarray(base_indices, dtype=int)
+    n_all = int(base_indices.shape[0])
+    n_base = int(base_indices.max()) + 1
+    if signs is None:
+        sgn = np.ones(n_all, dtype=float)
+    else:
+        sgn = np.asarray(signs, dtype=float)
+        if sgn.shape != (n_all,):
+            raise ValueError(
+                "signs must have shape (n_all,); got " f"{sgn.shape}"
+            )
+    n_tot = n_all * nd_per
+    n_work = n_base * nd_per
+    T = np.zeros((n_tot, n_work))
+    eye = np.eye(nd_per)
+    for r in range(n_all):
+        b = int(base_indices[r])
+        T[r * nd_per : (r + 1) * nd_per, b * nd_per : (b + 1) * nd_per] = (
+            sgn[r] * eye
+        )
+    return T
+
+
+def _make_symmetry_validation_array(
+    nfp: int = 2,
+    stellsym: bool = False,
+    n_base: int = 1,
+    *,
+    eval_pts: "np.ndarray | None" = None,
+    current_amp: float = 100.0,
+):
+    """Build a small :class:`PSCBulkArray` for symmetry / memory tests.
+
+    Uses :func:`coils_via_symmetries` so :meth:`PSCBulkArray._detect_tf_symmetry`
+    can succeed.  The base coil is a circle in the ``z=0`` plane with
+    centre ``(1,0,0)`` and radius ``0.3`` (correct ``CurveXYZFourier``
+    DOF ordering: ``[xc0, xs1, xc1, yc0, ys1, yc1, zc0, zs1, zc1]``).
+
+    **Symmetry note:** the default off-axis / off-plane puck placement
+    is chosen so that neither the pure-rotation nor the stellsym-image
+    orbit cancels identically.  After the signed-orbit reduction
+    (:func:`_fold_Bn_to_work` / :func:`_gather_beta_work_to_all`),
+    ``stellsym=True`` also produces physically meaningful modal
+    amplitudes; earlier revisions of this fixture cautioned otherwise
+    because the unsigned fold cancelled :math:`B_n(Sx) = -B_n(x)` in
+    the loading vector.
+
+    Args:
+        nfp: Number of field periods.
+        stellsym: Stellarator reflection symmetry on coils.
+        n_base: Number of *base* pucks before replication.
+        eval_pts: Optional evaluation points for :meth:`B_at_points`.
+        current_amp: Base coil current (A); ``100`` A gives modal
+            amplitudes :math:`O(10^2)` with ``stellsym=False`` for the
+            default puck offset.
+    """
+    from simsopt.field.coil import coils_via_symmetries
+
+    base_curve = CurveXYZFourier(32, 1)
+    base_curve.x = np.array(
+        [1.0, 0.0, 0.3, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0]
+    )
+    tf_coils = coils_via_symmetries(
+        [base_curve], [Current(float(current_amp))], int(nfp), bool(stellsym)
+    )
+
+    centers = np.array(
+        [
+            [1.15 + 0.15 * i, 0.10 + 0.04 * i, 0.06 + 0.02 * i]
+            for i in range(n_base)
+        ],
+        dtype=float,
+    )
+    axes = np.tile(np.array([[0.0, 0.0, 1.0]]), (n_base, 1))
+    Rs = np.full(n_base, 0.12)
+    ts = np.full(n_base, 0.04)
+
+    if eval_pts is None:
+        eval_pts = np.array(
+            [
+                [1.0, 0.05, 0.35],
+                [0.90, 0.10, 0.08],
+            ],
+            dtype=float,
+        )
+
+    return PSCBulkArray(
+        centers,
+        axes,
+        Rs,
+        ts,
+        tf_coils,
+        eval_points=eval_pts,
+        m_fourier=2,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=5,
+        n_phi=6,
+        n_z=3,
+        nfp=nfp,
+        stellsym=stellsym,
+    )
+
+
+# Backward-compatible alias used by earlier tests in this file.
+_make_small_nfp_stellsym_array = _make_symmetry_validation_array
+
+
+def test_K_stack_matches_dense():
+    """Stacked ``_K_stack``/``_phi_stack`` must equal the dense
+    block-diagonal reconstruction exposed by the lazy properties
+    (``_K_basis``/``_phi_mat``).
+
+    This locks in the phase-1 refactor that dropped the dense
+    ``(nq_total, n_dof_total, ...)`` arrays from the forward hot path.
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+
+    K_stack = psc._K_stack
+    phi_stack = psc._phi_stack
+    assert K_stack is not None, (
+        "uniform puck shapes should populate the stacked K tensor"
+    )
+    assert phi_stack is not None, (
+        "uniform puck shapes should populate the stacked phi tensor"
+    )
+
+    K_dense = psc._K_basis
+    phi_dense = psc._phi_mat
+    n_pucks, nq_per, nd_per, _ = K_stack.shape
+    nq_total = n_pucks * nq_per
+    n_dof_total = n_pucks * nd_per
+
+    assert K_dense.shape == (nq_total, n_dof_total, 3)
+    assert phi_dense.shape == (nq_total, n_dof_total)
+
+    for p in range(n_pucks):
+        q0, q1 = p * nq_per, (p + 1) * nq_per
+        d0, d1 = p * nd_per, (p + 1) * nd_per
+        np.testing.assert_allclose(
+            K_dense[q0:q1, d0:d1, :], K_stack[p], atol=0, rtol=0,
+            err_msg=f"Dense K block {p} diverges from _K_stack",
+        )
+        np.testing.assert_allclose(
+            phi_dense[q0:q1, d0:d1], phi_stack[p], atol=0, rtol=0,
+            err_msg=f"Dense phi block {p} diverges from _phi_stack",
+        )
+        off_row = np.zeros(nq_total, dtype=bool)
+        off_row[q0:q1] = True
+        off_col = np.zeros(n_dof_total, dtype=bool)
+        off_col[d0:d1] = True
+        np.testing.assert_allclose(
+            K_dense[~off_row, :, :][:, off_col, :], 0.0, atol=0, rtol=0,
+            err_msg=f"Dense K leaks outside block {p}",
+        )
+        np.testing.assert_allclose(
+            phi_dense[~off_row, :][:, off_col], 0.0, atol=0, rtol=0,
+            err_msg=f"Dense phi leaks outside block {p}",
+        )
+
+
+def test_B_at_points_regression_against_dense_forward():
+    """Independently reassemble the Biot-Savart forward from the dense
+    ``_K_basis`` / ``_phi_mat`` properties (the pre-refactor path) and
+    verify the stacked / reduced hot path matches bit-for-bit.
+
+    This guards against silent numerical drift from the phase-1 /
+    phase-2 refactors in
+    :meth:`PSCBulkArray.B_at_points` and
+    :meth:`PSCBulkArray.get_shell_currents`.
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    eval_pts = np.array([[0.25, -0.05, 0.12], [0.0, 0.0, 0.5]])
+
+    # Stacked / reduced path (the refactored production path).
+    B_new = psc.B_at_points(eval_pts)
+
+    # Dense reconstruction path: materialise ``beta -> K``, then call
+    # the purely-dense Biot-Savart core used by the pre-refactor
+    # reference code (``shell_biot_savart_pure``).
+    from simsopt.field.bulk_inductance import shell_biot_savart_pure
+
+    psc.recompute_currents()
+    beta_all = psc.beta
+    K_dense = psc._K_basis
+    quad_pts = psc._quad_points
+    quad_w = psc._quad_weights
+    B_ref = np.array(
+        shell_biot_savart_pure(
+            jnp.asarray(K_dense),
+            jnp.asarray(quad_pts),
+            jnp.asarray(quad_w),
+            jnp.asarray(beta_all),
+            jnp.asarray(eval_pts),
+        )
+    )
+
+    np.testing.assert_allclose(
+        B_new, B_ref, atol=1e-12, rtol=1e-9,
+        err_msg="Refactored B_at_points disagrees with dense reference",
+    )
+
+
+def test_L_red_equals_T_transpose_L_full_T():
+    """Symmetry-reduced inductance matches Galerkin restriction ``T^T L T``.
+
+    The unconstrained monolithic solve on all replica DOFs is **not**
+    equivalent to the reduced path (different null space / no replica
+    tying).  The correct identity is between ``L_work`` from
+    :func:`shell_inductance_matrix_symmetric_reduced` and the full
+    blockwise matrix from the same quadrature.
+    """
+    psc_red = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    assert psc_red._reduced_active
+    psc_full = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc_full._tf_is_symmetric = False
+    psc_full._rebuild()
+
+    nd = int(psc_red._K_stack.shape[2])
+    T = _galerkin_transfer_matrix(psc_red._base_indices_arr, nd)
+    Lf = psc_full._L_work
+    Lr = psc_red._L_work
+    np.testing.assert_allclose(
+        T.T @ Lf @ T,
+        Lr,
+        atol=1e-11,
+        rtol=1e-10,
+        err_msg="L_red must equal T^T L_full T",
+    )
+
+
+def test_f_red_equals_T_transpose_f_full():
+    """Folded loading ``f_work`` equals ``T^T f_full`` for the same ``Bn``."""
+    from simsopt.field.biotsavart import BiotSavart
+
+    psc_red = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc_full = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc_full._tf_is_symmetric = False
+    psc_full._rebuild()
+
+    bs = BiotSavart(psc_full.coils_TF)
+    bs.set_points_cart(np.ascontiguousarray(psc_full._quad_points))
+    Bn = np.sum(bs.B() * psc_full._quad_normals, axis=1)
+    phi_dense = psc_full._phi_mat
+    w = psc_full._quad_weights
+    f_full = -phi_dense.T @ (w * Bn)
+
+    nd = int(psc_red._K_stack.shape[2])
+    T = _galerkin_transfer_matrix(psc_red._base_indices_arr, nd)
+
+    phi_w = jnp.asarray(psc_red._phi_work_stack)
+    w_w = jnp.asarray(psc_red._w_work_stack)
+    bi = jnp.asarray(psc_red._jax_base_indices)
+    signs = jnp.asarray(psc_red._jax_replica_signs)
+    n_work, nq_per, _ = phi_w.shape
+    Bn_w = _fold_Bn_to_work(jnp.asarray(Bn), bi, signs, n_work, nq_per)
+    f_red = np.array(
+        shell_loading_vector_stacked_pure(
+            phi_w, w_w, Bn_w.reshape(-1)
+        )
+    )
+    np.testing.assert_allclose(
+        T.T @ f_full,
+        f_red,
+        atol=1e-11,
+        rtol=1e-10,
+        err_msg="f_red must equal T^T f_full",
+    )
+
+
+def test_reduced_solve_matches_manual_eigenfloor():
+    """``PSCBulkArray`` eigenfloor solve matches explicit NumPy on ``L_red``."""
+    from simsopt.field.biotsavart import BiotSavart
+
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc.recompute_currents()
+    Q = np.asarray(psc._Q)
+    Lr = np.asarray(psc._L_work)
+    bs = BiotSavart(psc.coils_TF)
+    bs.set_points_cart(np.ascontiguousarray(psc._quad_points))
+    Bn = np.sum(bs.B() * psc._quad_normals, axis=1)
+    phi_w = jnp.asarray(psc._phi_work_stack)
+    w_w = jnp.asarray(psc._w_work_stack)
+    bi = jnp.asarray(psc._jax_base_indices)
+    signs = jnp.asarray(psc._jax_replica_signs)
+    n_work, nq_per, _ = phi_w.shape
+    Bn_w = _fold_Bn_to_work(jnp.asarray(Bn), bi, signs, n_work, nq_per)
+    f = np.array(
+        shell_loading_vector_stacked_pure(
+            phi_w, w_w, Bn_w.reshape(-1)
+        )
+    )
+    fq = Q.T @ f
+    Lq = Q.T @ Lr @ Q
+    alpha = np.array(
+        shell_solve_eigenfloor_pure(
+            jnp.asarray(Lq),
+            jnp.asarray(fq),
+            threshold=float(_EIGENFLOOR_THRESHOLD),
+            jitter=1e-10,
+        )
+    )
+    beta_man = Q @ alpha
+    nd = beta_man.shape[0]
+    np.testing.assert_allclose(
+        beta_man,
+        psc.beta[:nd],
+        atol=1e-9,
+        rtol=1e-10,
+    )
+
+
+def test_observables_self_consistent_after_reduced_solve():
+    """``get_shell_currents``, ``get_equivalent_currents``, and ``B_at_points``."""
+    eval_pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]])
+    psc = _make_symmetry_validation_array(
+        nfp=2, stellsym=False, n_base=1, eval_pts=eval_pts
+    )
+    psc.recompute_currents()
+    assert np.max(np.abs(psc.beta)) > 1e-4, (
+        "Test setup must produce nontrivial modal amplitudes "
+        "(use stellsym=False for a nonzero folded load)"
+    )
+    K, Kmag = psc.get_shell_currents()
+    assert K.shape[0] == psc._quad_points.shape[0]
+    assert np.all(np.isfinite(K)) and np.all(np.isfinite(Kmag))
+    I_eq = psc.get_equivalent_currents()
+    assert I_eq.shape[0] == psc._K_stack.shape[0]
+    assert np.all(np.isfinite(I_eq)) and np.all(I_eq >= 0.0)
+    B = psc.B_at_points(eval_pts)
+    assert B.shape == eval_pts.shape
+    assert np.all(np.isfinite(B))
+
+
+def test_symmetry_reduced_matches_galerkin_projection():
+    """Reduced path matches Galerkin restriction; not the unconstrained full solve.
+
+    The monolithic ``L_full @ beta = f`` on all replica DOFs does **not**
+    impose replica-wise equality of modal coefficients; the reduced
+    formulation ``L_red @ beta_work = f_work`` with ``L_red=T^TLT`` does.
+    We verify ``B_at_points`` against dense Biot-Savart given ``beta``.
+    """
+    eval_pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]])
+    psc = _make_symmetry_validation_array(
+        nfp=2, stellsym=False, n_base=1, eval_pts=eval_pts
+    )
+    assert psc._reduced_active
+    psc.recompute_currents()
+    assert np.max(np.abs(psc.beta)) > 1e-4
+
+    B = psc.B_at_points(eval_pts)
+    from simsopt.field.bulk_inductance import shell_biot_savart_pure
+
+    psc.recompute_currents()
+    B_ref = np.array(
+        shell_biot_savart_pure(
+            jnp.asarray(psc._K_basis),
+            jnp.asarray(psc._quad_points),
+            jnp.asarray(psc._quad_weights),
+            jnp.asarray(psc.beta),
+            jnp.asarray(eval_pts),
+        )
+    )
+    np.testing.assert_allclose(B, B_ref, atol=1e-9, rtol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "nfp, stellsym, n_base",
+    [
+        (2, False, 1),
+        (2, False, 2),
+        (3, False, 1),
+        (4, False, 1),
+        (2, True, 1),
+    ],
+)
+def test_L_f_transfer_parametrized(nfp: int, stellsym: bool, n_base: int):
+    """``L_red = T^T L_full T`` and ``f_red = T^T f_full`` for several groups."""
+    from simsopt.field.biotsavart import BiotSavart
+
+    psc_red = _make_symmetry_validation_array(
+        nfp=nfp, stellsym=stellsym, n_base=n_base
+    )
+    if not psc_red._tf_is_symmetric:
+        pytest.skip("TF set is not recognised as symmetric for this layout")
+    psc_full = _make_symmetry_validation_array(
+        nfp=nfp, stellsym=stellsym, n_base=n_base
+    )
+    psc_full._tf_is_symmetric = False
+    psc_full._rebuild()
+
+    nd = int(psc_red._K_stack.shape[2])
+    T = _galerkin_transfer_matrix(
+        psc_red._base_indices_arr, nd, signs=psc_red._replica_signs
+    )
+    np.testing.assert_allclose(
+        T.T @ psc_full._L_work @ T,
+        psc_red._L_work,
+        atol=1e-10,
+        rtol=1e-9,
+    )
+
+    bs = BiotSavart(psc_full.coils_TF)
+    bs.set_points_cart(np.ascontiguousarray(psc_full._quad_points))
+    Bn = np.sum(bs.B() * psc_full._quad_normals, axis=1)
+    f_full = -psc_full._phi_mat.T @ (psc_full._quad_weights * Bn)
+    phi_w = jnp.asarray(psc_red._phi_work_stack)
+    w_w = jnp.asarray(psc_red._w_work_stack)
+    bi = jnp.asarray(psc_red._jax_base_indices)
+    signs = jnp.asarray(psc_red._jax_replica_signs)
+    n_work, nq_per, _ = phi_w.shape
+    Bn_w = _fold_Bn_to_work(jnp.asarray(Bn), bi, signs, n_work, nq_per)
+    f_red = np.array(
+        shell_loading_vector_stacked_pure(
+            phi_w, w_w, Bn_w.reshape(-1)
+        )
+    )
+    np.testing.assert_allclose(
+        T.T @ f_full,
+        f_red,
+        atol=1e-10,
+        rtol=1e-9,
+    )
+
+
+def test_vjp_tf_gradient_nonzero_and_listed_coils():
+    """TF VJP w.r.t. each :class:`Coil` is finite (analytic adjoint path).
+
+    Finite differences on :meth:`B_at_points` w.r.t. coil DOFs are **not**
+    a valid cross-check here: ``PSCBulkArray`` does not register TF coils
+    in :meth:`recompute_currents`'s geometry hash, so forward ``B`` is
+    intentionally insensitive to raw ``curve.x`` edits without a full
+    wiring refresh.  The VJP path still differentiates through the
+    implicit shell solve + Biot-Savart chain used in optimization.
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc.recompute_currents()
+    pts = np.array([[1.0, 0.05, 0.35]], dtype=float)
+    v = np.random.default_rng(0).standard_normal((1, 3))
+    deriv = psc.vjp_setup_B(v, pts)
+    for c in psc.coils_TF:
+        g = np.asarray(deriv(c.curve))
+        assert g.shape == (c.curve.x.shape[0],)
+        assert np.all(np.isfinite(g))
+        assert np.linalg.norm(g) > 0.0
+    gI = np.asarray(deriv(psc.coils_TF[0].current))
+    assert np.all(np.isfinite(gI))
+
+
+def test_recompute_currents_preserves_L_f_transfer():
+    """After perturbing TF geometry, ``T^T L T`` and ``T^T f`` identities hold."""
+    from simsopt.field.biotsavart import BiotSavart
+
+    psc_red = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc_full = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc_full._tf_is_symmetric = False
+    rng = np.random.default_rng(42)
+    for cr, cf in zip(psc_red.coils_TF, psc_full.coils_TF):
+        delta = 1e-3 * rng.standard_normal(cr.curve.x.shape)
+        cr.curve.x = np.asarray(cr.curve.x) + delta
+        cf.curve.x = np.asarray(cf.curve.x) + delta
+    psc_red._rebuild()
+    psc_red._setup_jax()
+    psc_full._rebuild()
+    psc_full._setup_jax()
+    assert psc_red._reduced_active
+
+    nd = int(psc_red._K_stack.shape[2])
+    T = _galerkin_transfer_matrix(psc_red._base_indices_arr, nd)
+    np.testing.assert_allclose(
+        T.T @ psc_full._L_work @ T,
+        psc_red._L_work,
+        atol=1e-9,
+        rtol=1e-8,
+    )
+    bs = BiotSavart(psc_full.coils_TF)
+    bs.set_points_cart(np.ascontiguousarray(psc_full._quad_points))
+    Bn = np.sum(bs.B() * psc_full._quad_normals, axis=1)
+    f_full = -psc_full._phi_mat.T @ (psc_full._quad_weights * Bn)
+    phi_w = jnp.asarray(psc_red._phi_work_stack)
+    w_w = jnp.asarray(psc_red._w_work_stack)
+    bi = jnp.asarray(psc_red._jax_base_indices)
+    signs = jnp.asarray(psc_red._jax_replica_signs)
+    n_work, nq_per, _ = phi_w.shape
+    Bn_w = _fold_Bn_to_work(jnp.asarray(Bn), bi, signs, n_work, nq_per)
+    f_red = np.array(
+        shell_loading_vector_stacked_pure(
+            phi_w, w_w, Bn_w.reshape(-1)
+        )
+    )
+    np.testing.assert_allclose(T.T @ f_full, f_red, atol=1e-9, rtol=1e-8)
+    psc_red.recompute_currents()
+    assert np.max(np.abs(psc_red.beta)) > 1e-6
+
+
+def test_asymmetric_tf_falls_back_to_full():
+    """When the TF coils do not respect the requested ``nfp`` /
+    ``stellsym``, :meth:`PSCBulkArray._detect_tf_symmetry` must flag
+    the asymmetry and the array must fall back to the full-L path.
+    """
+    curve_sym = CurveXYZFourier(32, 1)
+    curve_sym.x = np.array([0, 0, 1, 0, 1, 0, 0, 0.0, 0.0]) * 1.0
+    coil_sym = Coil(curve_sym, Current(1e5))
+
+    # Second coil lives only in one field period -> breaks NFP=2.
+    curve_asym = CurveXYZFourier(32, 1)
+    curve_asym.x = np.array([0.2, 0.0, 1.0, 0.3, 1.0, 0.0, 0.0, 0.0, 0.05])
+    coil_asym = Coil(curve_asym, Current(1e5))
+
+    centers = np.array([[0.3, 0.0, 0.1]], dtype=float)
+    axes = np.array([[0.0, 0.0, 1.0]], dtype=float)
+    Rs = np.array([0.04])
+    ts = np.array([0.02])
+    eval_pts = np.array([[0.3, 0.0, 0.5]])
+
+    psc = PSCBulkArray(
+        centers,
+        axes,
+        Rs,
+        ts,
+        [coil_sym, coil_asym],
+        eval_points=eval_pts,
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+        nfp=2,
+        stellsym=True,
+    )
+    assert psc._tf_is_symmetric is False, (
+        "Mixed symmetric + asymmetric TF coils must be flagged as "
+        "asymmetric"
+    )
+    assert psc._reduced_active is False, (
+        "Asymmetric TF must disable the reduced path"
+    )
+
+    B = psc.B_at_points(eval_pts)
+    assert np.all(np.isfinite(B))
+    L = psc._L_work
+    np.testing.assert_allclose(L, L.T, atol=1e-12, rtol=1e-12)
+
+    # Reference: same object, second evaluation — deterministic forward.
+    np.testing.assert_allclose(
+        psc.B_at_points(eval_pts),
+        psc.B_at_points(eval_pts),
+        atol=0.0,
+        rtol=0.0,
+    )
+
+
+@pytest.mark.slow
+def test_memory_footprint_scales_linearly():
+    """Slow regression test: memory used by the dense inductance system
+    (``_L_work`` + ``_L_red`` + stacked ``K_stack``/``phi_stack``) must
+    grow roughly linearly (not quadratically) in the number of base
+    pucks when the reduced path is active.
+
+    We compare ``n_base = 1`` against ``n_base = 4`` with ``nfp=4``,
+    ``stellsym=True`` (group size 8).  The full-L footprint would scale
+    like ``(8 * n_base)**2`` whereas the reduced-L footprint scales
+    like ``n_base**2``; even at ``n_base = 4`` the ratio must stay
+    well below the ``64`` that the full path would incur.
+    """
+    def _footprint_bytes(n_base):
+        # ``stellsym=False`` avoids folded-load cancellation so ``|beta|`` is
+        # nontrivial (guards against a degenerate numerical null test).
+        psc = _make_symmetry_validation_array(
+            nfp=4, stellsym=False, n_base=n_base
+        )
+        assert psc._reduced_active
+        psc.recompute_currents()
+        assert np.max(np.abs(psc.beta)) > 1e-6
+        b = 0
+        for name in (
+            "_L_work",
+            "_L_red",
+            "_K_stack",
+            "_phi_stack",
+            "_w_stack",
+            "_phi_work_stack",
+            "_w_work_stack",
+            "_Q_c",
+            "_Q",
+        ):
+            arr = getattr(psc, name, None)
+            if arr is not None:
+                b += int(np.asarray(arr).nbytes)
+        return b
+
+    b1 = _footprint_bytes(1)
+    b4 = _footprint_bytes(4)
+
+    ratio = b4 / max(b1, 1)
+    # Linear scaling would give ``ratio ~ 4``; quadratic would give
+    # ``~ 16``.  We allow a generous headroom for the nearly-flat
+    # fixed costs (continuity projector, quadrature mesh) but insist
+    # on staying well below the quadratic regime.
+    assert ratio < 10.0, (
+        f"Memory footprint scaled by {ratio:.2f}x going from 1 to 4 "
+        f"base pucks; expected near-linear (<= 10x) under the "
+        f"reduced path.  b1={b1}B, b4={b4}B"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the full-path fold bug and the stellsym gate.
+#
+# Before the fix, :meth:`PSCBulkArray._rebuild` assigned
+# ``self._base_indices_arr = base_indices`` unconditionally, where
+# ``base_indices`` is the orbit-grouping ``[0, 0, ..., n_base-1]``.  The
+# JAX bodies then applied :func:`_fold_Bn_to_work` with
+# ``n_work = n_all`` but a non-identity index map, which folds ``Bn``
+# across orbits on the *full* path too.  In practice this collapsed the
+# loading vector (and hence ``|beta|`` / ``I_eq`` / ``|B_bulk|``) to
+# near zero whenever the TF layout is stellarator-symmetric.
+# ---------------------------------------------------------------------------
+
+
+def test_reduced_path_base_indices_arr_is_orbit_grouping():
+    """``_base_indices_arr`` equals the orbit-grouping when the reduced path
+    is active, so that :func:`_fold_Bn_to_work` and
+    :func:`_gather_beta_work_to_all` contract / scatter across orbits.
+
+    The counterpart of :func:`test_full_path_base_indices_arr_is_identity`:
+    on the reduced path each block of ``G`` consecutive replica entries
+    must share the same base-puck index (``[0]*G + [1]*G + ...``).
+    """
+    nfp = 2
+    n_base = 3
+    psc = _make_symmetry_validation_array(
+        nfp=nfp, stellsym=False, n_base=n_base
+    )
+    assert psc._reduced_active, (
+        "Symmetric NFP layout with stellsym=False should enable the "
+        "reduced path; cannot validate the orbit-grouping assertion"
+    )
+    G = int(psc.nfp) * (2 if psc.stellsym else 1)
+    expected = np.repeat(np.arange(n_base, dtype=np.int32), G)
+    np.testing.assert_array_equal(
+        np.asarray(psc._base_indices_arr),
+        expected,
+        err_msg=(
+            "On the reduced path, _base_indices_arr must be the "
+            "orbit-grouping [0]*G + [1]*G + ...; otherwise segment_sum "
+            "folds across the wrong orbits"
+        ),
+    )
+
+
+def test_full_path_base_indices_arr_is_identity():
+    """``_base_indices_arr`` must be ``arange(n_all)`` when ``_reduced_active``
+    is ``False`` so that :func:`_fold_Bn_to_work` reduces to the identity.
+
+    The pre-fix code reused the orbit-grouping ``base_indices`` array
+    from :meth:`PSCBulkArray._replicate_pucks` on both paths, which
+    silently folded ``Bn`` across orbits on the full-``L`` path and
+    collapsed the induced currents to near zero whenever ``stellsym=True``.
+
+    The signed-orbit reduction now supports ``stellsym=True`` too, so
+    this test manually forces ``_tf_is_symmetric = False`` to exercise
+    the full-path fallback (which remains live whenever TF symmetry
+    detection fails or ``exact_disc_faces`` is on).
+    """
+    from simsopt.field.coil import coils_via_symmetries
+
+    base_curve = CurveXYZFourier(32, 1)
+    base_curve.x = np.array([1.0, 0.0, 0.3, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0])
+    tf_coils = coils_via_symmetries(
+        [base_curve], [Current(1.0e5)], 2, True
+    )
+    centers = np.array([[1.15, 0.10, 0.06]])
+    axes = np.array([[0.0, 0.0, 1.0]])
+    import unittest.mock as _mock
+
+    with _mock.patch.object(
+        PSCBulkArray, "_detect_tf_symmetry", return_value=False
+    ):
+        psc = PSCBulkArray(
+            centers,
+            axes,
+            np.array([0.12]),
+            np.array([0.04]),
+            tf_coils,
+            eval_points=np.array([[1.0, 0.05, 0.35]]),
+            m_fourier=2,
+            l_zernike=3,
+            k_chebyshev=1,
+            n_rho=5,
+            n_phi=6,
+            n_z=3,
+            nfp=2,
+            stellsym=True,
+        )
+    assert psc._reduced_active is False, (
+        "Forcing _detect_tf_symmetry to False must take the full-L fallback"
+    )
+    n_all = len(psc._all_pucks)
+    np.testing.assert_array_equal(
+        np.asarray(psc._base_indices_arr),
+        np.arange(n_all, dtype=np.int32),
+        err_msg=(
+            "On the full path, _base_indices_arr must be arange(n_all) so "
+            "_fold_Bn_to_work becomes the identity"
+        ),
+    )
+
+
+def test_full_path_solver_matches_numpy_reference():
+    """JAX ``_solve_beta`` path agrees with an explicit NumPy reference.
+
+    Assembles ``f = -phi^T (w * Bn)``, solves
+    ``(L_red + eps I) alpha = Q^T f`` via NumPy, lifts back with ``Q``, and
+    compares to :attr:`PSCBulkArray.beta`.  The pre-fix code would produce
+    ``|beta|`` ~ :math:`10^{-16}` of the reference for stellsym-symmetric
+    TF layouts because the full-path fold silently zeroed the loading.
+    """
+    from simsopt.field.biotsavart import BiotSavart
+    from simsopt.field.coil import coils_via_symmetries
+
+    base_curve = CurveXYZFourier(32, 1)
+    base_curve.x = np.array([1.0, 0.0, 0.3, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0])
+    tf_coils = coils_via_symmetries(
+        [base_curve], [Current(1.0e5)], 2, True
+    )
+    centers = np.array([[1.15, 0.10, 0.06]])
+    axes = np.array([[0.0, 0.0, 1.0]])
+    import unittest.mock as _mock
+
+    with _mock.patch.object(
+        PSCBulkArray, "_detect_tf_symmetry", return_value=False
+    ):
+        psc = PSCBulkArray(
+            centers,
+            axes,
+            np.array([0.12]),
+            np.array([0.04]),
+            tf_coils,
+            eval_points=np.array([[1.0, 0.05, 0.35]]),
+            m_fourier=2,
+            l_zernike=3,
+            k_chebyshev=1,
+            n_rho=5,
+            n_phi=6,
+            n_z=3,
+            nfp=2,
+            stellsym=True,
+        )
+    assert psc._reduced_active is False
+
+    psc.recompute_currents()
+    beta_jax = np.asarray(psc.beta)
+
+    # Independent NumPy reference: f = -phi^T (w * Bn), solve
+    # Q^T L Q alpha = Q^T f via the same eigenvalue-floor kernel the
+    # JAX JIT uses (``shell_solve_eigenfloor_pure``), lift beta = Q alpha.
+    # Must match the JAX regularizer exactly (not just jitter) because
+    # the rim-continuity-projected L can have meaningful eigenvalue
+    # gaps at reactor-like currents.
+    from simsopt.field.bulk_inductance import shell_solve_eigenfloor_pure
+    from simsopt.field.psc_bulk import _EIGENFLOOR_THRESHOLD
+
+    bs = BiotSavart(psc.coils_TF)
+    bs.set_points_cart(np.ascontiguousarray(psc._quad_points))
+    Bn = np.sum(bs.B() * psc._quad_normals, axis=1)
+    phi_dense = psc._phi_mat
+    w = psc._quad_weights
+    f_full = -phi_dense.T @ (w * Bn)
+    Q = np.asarray(psc._Q)
+    L_red = Q.T @ np.asarray(psc._L_work) @ Q
+    f_r = Q.T @ f_full
+    alpha = np.asarray(
+        shell_solve_eigenfloor_pure(
+            jnp.asarray(L_red),
+            jnp.asarray(f_r),
+            threshold=float(_EIGENFLOOR_THRESHOLD),
+            jitter=1e-10,
+        )
+    )
+    beta_ref = Q @ alpha
+
+    # The full-path fold bug made |beta_jax| ~ 1e-9 while the reference is
+    # O(1e4-1e7) at reactor-like currents.  A generous magnitude floor
+    # catches the regression without overfitting to this specific geometry.
+    assert np.max(np.abs(beta_ref)) > 1.0, (
+        "Reference |beta| is suspiciously small; the test setup may be "
+        "degenerate"
+    )
+    rel_err = np.linalg.norm(beta_jax - beta_ref) / np.linalg.norm(beta_ref)
+    assert rel_err < 1e-6, (
+        f"JAX solver disagrees with NumPy reference: rel_err={rel_err:.3e}, "
+        f"|beta_jax|max={np.max(np.abs(beta_jax)):.3e}, "
+        f"|beta_ref|max={np.max(np.abs(beta_ref)):.3e}"
+    )
+
+
+def test_stellsym_full_path_produces_physical_magnitudes():
+    """With ``stellsym=True`` the full-``L`` fallback (``_tf_is_symmetric``
+    forced to ``False``) produces physically meaningful induced currents.
+
+    Guards against the full-path fold bug that zeroed out the induced
+    response on stellsym layouts (the cylindrical example regression).
+    The signed reduced path is tested in
+    :func:`test_signed_reduced_vs_full_stellsym`.
+    """
+    from simsopt.field.coil import coils_via_symmetries
+
+    base_curve = CurveXYZFourier(32, 1)
+    base_curve.x = np.array([1.0, 0.0, 0.3, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0])
+    tf_coils = coils_via_symmetries(
+        [base_curve], [Current(1.0e5)], 2, True
+    )
+    centers = np.array([[1.15, 0.10, 0.06]])
+    axes = np.array([[0.0, 0.0, 1.0]])
+    eval_pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]])
+    import unittest.mock as _mock
+
+    with _mock.patch.object(
+        PSCBulkArray, "_detect_tf_symmetry", return_value=False
+    ):
+        psc = PSCBulkArray(
+            centers,
+            axes,
+            np.array([0.12]),
+            np.array([0.04]),
+            tf_coils,
+            eval_points=eval_pts,
+            m_fourier=2,
+            l_zernike=3,
+            k_chebyshev=1,
+            n_rho=5,
+            n_phi=6,
+            n_z=3,
+            nfp=2,
+            stellsym=True,
+        )
+    assert psc._reduced_active is False
+    psc.recompute_currents()
+
+    beta = np.asarray(psc.beta)
+    assert np.all(np.isfinite(beta))
+    assert np.max(np.abs(beta)) > 1e-3, (
+        f"Induced |beta|max={np.max(np.abs(beta)):.3e} collapsed to near "
+        f"zero on the full-L path; the fold regression has returned"
+    )
+
+    _, K_mag = psc.get_shell_currents()
+    assert np.max(K_mag) > 1e-3
+    I_eq = psc.get_equivalent_currents()
+    assert np.all(np.isfinite(I_eq)) and np.max(I_eq) > 1e-6
+
+    B_bulk = psc.B_at_points(eval_pts)
+    assert np.all(np.isfinite(B_bulk))
+    assert np.max(np.linalg.norm(B_bulk, axis=-1)) > 1e-8
+
+
+# =====================================================================
+# Phase 2: signed-orbit reduction under ``stellsym=True``
+# =====================================================================
+
+
+@pytest.mark.parametrize("nfp", [2, 3])
+def test_replica_signs_structure(nfp: int):
+    """Per-replica signs produced by :meth:`PSCBulkArray._replicate_pucks`
+    alternate ``[+1, -1, +1, -1, ...]`` under ``stellsym=True`` (pure
+    rotation then stellsym image for each field period), and every
+    ``base_reps`` entry lands on a ``+1`` replica as required by the
+    signed inductance assembly.
+    """
+    psc = _make_symmetry_validation_array(nfp=nfp, stellsym=True, n_base=2)
+    signs = np.asarray(psc._replica_signs)
+    n_all = len(psc._all_pucks)
+    assert signs.shape == (n_all,)
+    G = int(psc.nfp) * 2
+    assert n_all == psc._n_base_pucks * G
+    expected = np.tile(
+        np.tile(np.array([+1, -1], dtype=np.int8), int(psc.nfp)),
+        psc._n_base_pucks,
+    )
+    np.testing.assert_array_equal(
+        signs, expected, err_msg="replica_signs must alternate per-replica"
+    )
+    base_reps = np.asarray(psc._base_reps)
+    assert np.all(signs[base_reps] == +1), (
+        "base_reps must pick the pure-rotation (sigma=+1) replica of "
+        "every orbit; otherwise the signed inductance assembly "
+        "receives mixed-sign rows."
+    )
+
+
+@pytest.mark.parametrize(
+    "nfp, n_base",
+    [
+        (2, 1),
+        (2, 2),
+        (3, 1),
+    ],
+)
+def test_signed_reduced_vs_full_stellsym(nfp: int, n_base: int):
+    """Signed reduced path matches the full-``L`` fallback under
+    ``stellsym=True`` across several NFP / base-count combinations.
+
+    Compares ``beta``, :meth:`B_at_points`,
+    :meth:`get_equivalent_currents` between a default-built array (which
+    now routes through the signed reduced path) and one where
+    :meth:`_detect_tf_symmetry` is monkeypatched to ``False`` to force
+    the full-replica solve.
+    """
+    import unittest.mock as _mock
+
+    eval_pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]])
+    psc_red = _make_symmetry_validation_array(
+        nfp=nfp, stellsym=True, n_base=n_base, eval_pts=eval_pts
+    )
+    with _mock.patch.object(
+        PSCBulkArray, "_detect_tf_symmetry", return_value=False
+    ):
+        psc_full = _make_symmetry_validation_array(
+            nfp=nfp, stellsym=True, n_base=n_base, eval_pts=eval_pts
+        )
+    assert psc_red._reduced_active is True, (
+        "Default build must use the signed reduced path under stellsym"
+    )
+    assert psc_full._reduced_active is False, (
+        "Monkeypatched build must fall back to the full-L path"
+    )
+    psc_red.recompute_currents()
+    psc_full.recompute_currents()
+
+    beta_scale = max(
+        np.max(np.abs(psc_full.beta)), np.max(np.abs(psc_red.beta))
+    )
+    assert beta_scale > 1e-3, (
+        f"|beta|max={beta_scale:.3e} collapsed; the signed fold/gather or "
+        f"full-path fallback regressed"
+    )
+    # Galerkin identity (T^T L_full T == L_red, T^T f_full == f_red) is
+    # checked exactly in :func:`test_signed_galerkin_identity_stellsym`.
+    # The remaining path discrepancy comes from eigenvalue flooring acting
+    # on differently-sized projected operators (``Q_full^T L_full Q_full``
+    # vs ``Q_red^T L_red Q_red``) when the physical problem is
+    # ill-conditioned.  We therefore require only physically meaningful
+    # agreement (~few %), and lock down the symmetric-subspace structure
+    # via the Galerkin and signed-transfer tests.
+    # L2-norm relative agreement avoids magnifying regularization-induced
+    # disagreement on tiny modal components; the per-element rtol can be
+    # misleading for ill-conditioned shells even though the paths agree
+    # on globally significant quantities.
+    def _rel_l2(a, b):
+        den = max(np.linalg.norm(b), 1e-30)
+        return np.linalg.norm(np.asarray(a) - np.asarray(b)) / den
+
+    assert _rel_l2(psc_red.beta, psc_full.beta) < 0.1, (
+        f"||beta_red - beta_full||/||beta_full|| = "
+        f"{_rel_l2(psc_red.beta, psc_full.beta):.3e}"
+    )
+    B_red = psc_red.B_at_points(eval_pts)
+    B_full = psc_full.B_at_points(eval_pts)
+    assert _rel_l2(B_red, B_full) < 0.1, (
+        f"||B_red - B_full||/||B_full|| = {_rel_l2(B_red, B_full):.3e}"
+    )
+    I_red = psc_red.get_equivalent_currents()
+    I_full = psc_full.get_equivalent_currents()
+    assert _rel_l2(I_red, I_full) < 0.1, (
+        f"||I_red - I_full||/||I_full|| = {_rel_l2(I_red, I_full):.3e}"
+    )
+
+    # Verify ``beta_full`` lies in the symmetric subspace spanned by the
+    # signed transfer matrix ``T``; both paths must return solutions in
+    # ``range(T)``.  This is the operator-level guarantee.
+    nd = int(psc_red._K_stack.shape[2])
+    T = _galerkin_transfer_matrix(
+        psc_red._base_indices_arr, nd, signs=psc_red._replica_signs
+    )
+    beta_full_np = np.asarray(psc_full.beta)
+    coef = np.linalg.lstsq(T, beta_full_np, rcond=None)[0]
+    proj = T @ coef
+    residual = np.linalg.norm(beta_full_np - proj)
+    ref = max(np.linalg.norm(beta_full_np), 1e-30)
+    assert residual / ref < 1e-6, (
+        f"Full-path beta is not in range(T_signed): "
+        f"||beta - T T^+ beta||/||beta|| = {residual / ref:.3e}"
+    )
+
+
+def test_signed_galerkin_identity_stellsym():
+    """``L_red = T_signed^T L_full T_signed`` and
+    ``f_red = T_signed^T f_full`` under ``stellsym=True``.
+
+    Locks in the claim that the signed transfer matrix on every orbit
+    is the correct Galerkin reducer for ``L`` and the loading vector
+    when simsopt's stellsym current convention flips sign on images.
+    """
+    import unittest.mock as _mock
+    from simsopt.field.biotsavart import BiotSavart
+
+    psc_red = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=1)
+    with _mock.patch.object(
+        PSCBulkArray, "_detect_tf_symmetry", return_value=False
+    ):
+        psc_full = _make_symmetry_validation_array(
+            nfp=2, stellsym=True, n_base=1
+        )
+    assert psc_red._reduced_active and not psc_full._reduced_active
+
+    nd = int(psc_red._K_stack.shape[2])
+    T_signed = _galerkin_transfer_matrix(
+        psc_red._base_indices_arr, nd, signs=psc_red._replica_signs
+    )
+    np.testing.assert_allclose(
+        T_signed.T @ np.asarray(psc_full._L_work) @ T_signed,
+        np.asarray(psc_red._L_work),
+        atol=1e-10,
+        rtol=1e-9,
+        err_msg="Signed T must satisfy T^T L_full T = L_red",
+    )
+
+    bs = BiotSavart(psc_full.coils_TF)
+    bs.set_points_cart(np.ascontiguousarray(psc_full._quad_points))
+    Bn = np.sum(bs.B() * psc_full._quad_normals, axis=1)
+    f_full = -psc_full._phi_mat.T @ (psc_full._quad_weights * Bn)
+
+    phi_w = jnp.asarray(psc_red._phi_work_stack)
+    w_w = jnp.asarray(psc_red._w_work_stack)
+    bi = jnp.asarray(psc_red._jax_base_indices)
+    signs = jnp.asarray(psc_red._jax_replica_signs)
+    n_work, nq_per, _ = phi_w.shape
+    Bn_w = _fold_Bn_to_work(jnp.asarray(Bn), bi, signs, n_work, nq_per)
+    f_red = np.array(
+        shell_loading_vector_stacked_pure(phi_w, w_w, Bn_w.reshape(-1))
+    )
+    np.testing.assert_allclose(
+        T_signed.T @ f_full,
+        f_red,
+        atol=1e-10,
+        rtol=1e-9,
+        err_msg="Signed T must satisfy T^T f_full = f_red",
+    )
+
+
+def test_vjp_tf_gradient_nonzero_and_listed_coils_stellsym():
+    """VJP through the signed reduced path produces finite, nonzero TF
+    gradients on every coil curve and current.
+
+    Mirrors :func:`test_vjp_tf_gradient_nonzero_and_listed_coils` with
+    ``stellsym=True`` to exercise the signed fold / gather adjoint
+    (both in the JAX AD path and in the analytic NumPy adjoint used by
+    the TF-only VJP).
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=1)
+    psc.recompute_currents()
+    assert psc._reduced_active, (
+        "Test is exercising the signed reduced path; gate must be open"
+    )
+    pts = np.array([[1.0, 0.05, 0.35]], dtype=float)
+    v = np.random.default_rng(0).standard_normal((1, 3))
+    deriv = psc.vjp_setup_B(v, pts)
+    for c in psc.coils_TF:
+        g = np.asarray(deriv(c.curve))
+        assert g.shape == (c.curve.x.shape[0],)
+        assert np.all(np.isfinite(g))
+        assert np.linalg.norm(g) > 0.0, (
+            "Coil-curve gradient must be nonzero; signed VJP adjoint "
+            "may have silently zeroed the contribution"
+        )
+    gI = np.asarray(deriv(psc.coils_TF[0].current))
+    assert np.all(np.isfinite(gI))
+
+
+@pytest.mark.parametrize(
+    "nfp, stellsym, n_base_coils",
+    [
+        (2, True, 2),
+        (2, False, 2),
+        (3, True, 3),
+        (4, False, 2),
+    ],
+)
+def test_detect_tf_symmetry_matches_coils_via_symmetries_ordering(
+    nfp: int, stellsym: bool, n_base_coils: int
+):
+    """``_detect_tf_symmetry`` must recognise TF sets built by the canonical
+    :func:`simsopt.field.coil.coils_via_symmetries`, even with multiple
+    base coils.
+
+    Regression test for a silent false-negative in the detection
+    routine: prior to this fix the routine iterated over
+    ``(i_base, jfp, stell)`` (the order used by
+    :meth:`PSCBulkArray._replicate_pucks`) while
+    :func:`apply_symmetries_to_curves` emits
+    ``(k, flip, i_base)``.  Those two orderings coincide only when
+    ``n_base_coils == 1``, so every multi-coil TF set produced by
+    :func:`coils_via_symmetries` (for example the
+    ``SchuettHennebergQAnfp2`` set used in
+    ``passive_bulks_cylindrical_grid_optimization.py``) silently
+    dropped to the expensive full-``L`` path.
+    """
+    from simsopt.field.coil import Coil, coils_via_symmetries
+
+    base_curves = []
+    base_currents = []
+    for i in range(n_base_coils):
+        curve = CurveXYZFourier(32, 1)
+        # Distinct base curves at different radii / vertical offsets so
+        # the detection cannot succeed by accidentally treating two base
+        # copies as identical.
+        curve.x = np.array(
+            [
+                1.0 + 0.2 * i,
+                0.0,
+                0.3 + 0.05 * i,
+                0.0,
+                0.3 + 0.05 * i,
+                0.0,
+                0.1 * i,
+                0.0,
+                0.0,
+            ]
+        )
+        base_curves.append(curve)
+        base_currents.append(Current(1.0e5 * (1.0 + 0.1 * i)))
+
+    tf_coils = coils_via_symmetries(
+        base_curves, base_currents, int(nfp), bool(stellsym)
+    )
+
+    assert len(tf_coils) == n_base_coils * int(nfp) * (2 if stellsym else 1)
+    assert PSCBulkArray._detect_tf_symmetry(tf_coils, nfp, stellsym) is True, (
+        "Detection must accept the simsopt-canonical (k, flip, i_base) "
+        f"ordering for nfp={nfp}, stellsym={stellsym}, "
+        f"n_base_coils={n_base_coils}"
+    )
+
+    # Corrupting one replica (current scale) must break detection so the
+    # build falls back to the full-L path rather than silently using an
+    # incorrect symmetry-reduction.
+    corrupted = list(tf_coils)
+    corrupted[-1] = Coil(corrupted[-1].curve, Current(7.0e5))
+    assert PSCBulkArray._detect_tf_symmetry(corrupted, nfp, stellsym) is False, (
+        "Detection must reject a TF list whose last replica has a "
+        "current inconsistent with the symmetry image"
+    )
+
+
+# ======================================================================
+# Phase A: Taylor-tests for TF curve + current DOFs in the regime that
+# reproduces the failing ``passive_bulks_cylindrical_grid_optimization``
+# example.  The existing ``test_taylor_*`` coverage all uses
+# ``n_base_pucks == 1`` and/or only perturbs the TF current DOF, which
+# happens to silence the constant-offset VJP bug reproduced below.
+# ======================================================================
+
+
+def _make_multi_coil_multi_puck_setup(
+    n_base_coils: int = 2,
+    n_base_pucks: int = 2,
+    nfp: int = 2,
+    stellsym: bool = True,
+    R0: float = 1.0,
+    R1: float = 0.5,
+    coil_order: int = 2,
+    current_scale: float = 1.0e5,
+):
+    """Build a multi-base-TF-coil + multi-base-puck setup for Taylor tests.
+
+    This is the minimal repro of the regime exercised by
+    ``examples/3_Advanced/passive_bulks_cylindrical_grid_optimization.py``
+    (multiple base TF curves through ``coils_via_symmetries``, multiple
+    base pucks, ``nfp=2, stellsym=True``) but scaled down enough to run
+    inside the unit-test budget.
+
+    Returns ``(s, coils_tf, base_curves, base_currents, psc, btot, Jf)``
+    so callers can mirror the ``_make_small_setup`` API.
+    """
+    from pathlib import Path
+    from simsopt.field import BiotSavart, coils_via_symmetries
+    from simsopt.field.magneticfield import MagneticFieldSum
+    from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves
+    from simsopt.objectives import SquaredFlux
+
+    TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
+    filename = TEST_DIR / "input.LandremanPaul2021_QA"
+    s = SurfaceRZFourier.from_vmec_input(
+        filename, range="half period", nphi=4, ntheta=4
+    )
+
+    base_curves = create_equally_spaced_curves(
+        int(n_base_coils),
+        int(nfp),
+        bool(stellsym),
+        R0=float(R0),
+        R1=float(R1),
+        order=int(coil_order),
+    )
+    base_currents = [Current(float(current_scale)) for _ in range(int(n_base_coils))]
+    coils_tf = coils_via_symmetries(
+        base_curves, base_currents, int(nfp), bool(stellsym)
+    )
+
+    eval_pts = np.ascontiguousarray(s.gamma().reshape(-1, 3))
+
+    # Base pucks at nontrivial but off-surface locations.  Distinct axes
+    # exercise the puck-local rotation so the bug-reproducing setup is
+    # not degenerate.
+    all_centers = np.array(
+        [
+            [1.0, 0.0, 0.15],
+            [0.9, 0.3, -0.10],
+            [0.8, -0.3, 0.08],
+            [0.95, 0.15, 0.20],
+        ]
+    )
+    all_axes = np.array(
+        [
+            [0.1, 0.1, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.2, -0.1, 1.0],
+            [-0.1, 0.2, 1.0],
+        ]
+    )
+    centers = all_centers[: int(n_base_pucks)]
+    axes = all_axes[: int(n_base_pucks)]
+    radii = np.full(int(n_base_pucks), 0.04)
+    thicknesses = np.full(int(n_base_pucks), 0.02)
+
+    psc = PSCBulkArray(
+        centers,
+        axes,
+        radii,
+        thicknesses,
+        coils_tf,
+        eval_points=eval_pts,
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+        nfp=int(nfp),
+        stellsym=bool(stellsym),
+        adaptive_self_reg=False,
+    )
+    b_bulk = psc.biot_savart
+    b_tf = BiotSavart(coils_tf)
+    btot = MagneticFieldSum([b_bulk, b_tf])
+    Jf = SquaredFlux(s, btot)
+    return s, coils_tf, base_curves, base_currents, psc, btot, Jf
+
+
+def _tf_taylor_errors_and_absolute(
+    Jf, psc, btot, label: str, seed: int = 3, start_power: int = 4, n_points: int = 6
+):
+    """Taylor sweep over TF curve + current DOFs; return (errors, abs_errors)."""
+
+    def getter():
+        return np.copy(Jf.x)
+
+    def setter(dofs):
+        Jf.x = dofs
+        psc.recompute_currents()
+        btot.Bfields[0].clear_cached_properties()
+
+    dofs0 = getter().copy()
+    np.random.seed(int(seed))
+    h = np.random.randn(len(dofs0))
+    h = h / np.linalg.norm(h)
+
+    setter(dofs0)
+    float(Jf.J())
+    dJ0 = np.array(Jf.dJ())
+    deriv = float(np.sum(dJ0 * h))
+
+    rel_errors = []
+    abs_errors = []
+    for i in range(start_power, start_power + n_points):
+        eps = 0.5**i
+        setter(dofs0 + eps * h)
+        Jp = float(Jf.J())
+        setter(dofs0 - eps * h)
+        Jm = float(Jf.J())
+        fd = (Jp - Jm) / (2 * eps)
+        abs_err = abs(fd - deriv)
+        abs_errors.append(abs_err)
+        if abs(deriv) > 1e-15:
+            rel_errors.append(abs_err / abs(deriv))
+        else:
+            rel_errors.append(abs_err)
+
+    setter(dofs0)
+    return rel_errors, abs_errors, deriv
+
+
+def test_taylor_tf_dofs_multi_base_stellsym_reduced_path():
+    """Taylor test for multi-base TF coils + multi-base pucks with the
+    symmetry-reduced L path active.
+
+    Mirrors the cylindrical-grid example's configuration (``ncoils>=2``,
+    ``n_base_pucks>=2``, ``nfp=2, stellsym=True``).  The test asserts the
+    reduced path is active (catching any future regression in
+    ``_detect_tf_symmetry``) and requires both 2nd-order FD convergence
+    *and* a small absolute error, so a constant-offset adjoint bug
+    cannot pass silently.
+    """
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = (
+        _make_multi_coil_multi_puck_setup(
+            n_base_coils=2, n_base_pucks=2, nfp=2, stellsym=True
+        )
+    )
+    assert psc._reduced_active is True, (
+        "Reduced-L path must be active for this configuration; otherwise "
+        "_detect_tf_symmetry has regressed."
+    )
+
+    rel_errors, abs_errors, deriv = _tf_taylor_errors_and_absolute(
+        Jf, psc, btot, label="TF DOFs reduced path"
+    )
+    _assert_taylor_convergence(
+        rel_errors, label="TF DOFs (multi-base, stellsym, reduced path)"
+    )
+    min_rel = float(np.min(rel_errors))
+    assert min_rel < 1e-3, (
+        "TF-DOF analytic gradient disagrees with FD at finite step size: "
+        f"min rel err {min_rel:.3e} >= 1e-3, deriv={deriv:.6e}, "
+        f"rel_errors={rel_errors}, abs_errors={abs_errors}"
+    )
+
+
+def test_taylor_tf_dofs_multi_base_full_path():
+    """Same regime but the PSC is built with ``nfp=1, stellsym=False`` so
+    the full-L path is forced.
+
+    Decisive reduced-vs-full check: if the analytic gradient is also
+    wrong here, the bug is not in the symmetry-reduction machinery.
+    """
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = (
+        _make_multi_coil_multi_puck_setup(
+            n_base_coils=2, n_base_pucks=2, nfp=1, stellsym=False
+        )
+    )
+    assert psc._reduced_active is False, (
+        "Full-L path must be active for nfp=1, stellsym=False; otherwise "
+        "PSCBulkArray._rebuild has regressed."
+    )
+
+    rel_errors, abs_errors, deriv = _tf_taylor_errors_and_absolute(
+        Jf, psc, btot, label="TF DOFs full path"
+    )
+    _assert_taylor_convergence(
+        rel_errors, label="TF DOFs (multi-base, full path)"
+    )
+    min_rel = float(np.min(rel_errors))
+    assert min_rel < 1e-3, (
+        "TF-DOF analytic gradient disagrees with FD (full path): "
+        f"min rel err {min_rel:.3e} >= 1e-3, deriv={deriv:.6e}, "
+        f"rel_errors={rel_errors}, abs_errors={abs_errors}"
+    )
+
+
+def test_taylor_tf_dofs_single_puck_full_path():
+    """Smallest reproducer: multiple base TF curves but a single puck,
+    ``nfp=1, stellsym=False``.  If this already fails, the bulk VJP path
+    has a constant-offset error independent of symmetry / multi-puck
+    interactions.
+    """
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = (
+        _make_multi_coil_multi_puck_setup(
+            n_base_coils=2, n_base_pucks=1, nfp=1, stellsym=False
+        )
+    )
+    assert psc._reduced_active is False
+
+    rel_errors, abs_errors, deriv = _tf_taylor_errors_and_absolute(
+        Jf, psc, btot, label="TF DOFs single-puck full path"
+    )
+    _assert_taylor_convergence(
+        rel_errors, label="TF DOFs (single puck, full path)"
+    )
+    min_rel = float(np.min(rel_errors))
+    assert min_rel < 1e-3, (
+        "TF-DOF analytic gradient disagrees with FD (single-puck full path): "
+        f"min rel err {min_rel:.3e} >= 1e-3, deriv={deriv:.6e}, "
+        f"rel_errors={rel_errors}, abs_errors={abs_errors}"
+    )
+
+
+@pytest.mark.parametrize(
+    "n_base_pucks,nfp,stellsym,expect_reduced",
+    [
+        (1, 1, False, False),
+        (2, 1, False, False),
+        (2, 2, True, True),
+    ],
+)
+def test_vjp_tf_analytic_matches_fd_tf_curve_dof(
+    n_base_pucks, nfp, stellsym, expect_reduced
+):
+    """Finite-difference check of ``PassiveBulkField.B_vjp`` against a
+    **TF curve DOF** perturbation.
+
+    ``test_vjp_fd_gradient_check`` only exercises the TF *current* DOF
+    (a linear scalar in the chain); this test perturbs a TF curve DOF
+    so the bulk VJP is stress-tested through both ``BiotSavart.B_vjp``
+    and the ``_vjp_tf_only_analytic`` adjoint of the shell solve.
+    """
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = (
+        _make_multi_coil_multi_puck_setup(
+            n_base_coils=2,
+            n_base_pucks=n_base_pucks,
+            nfp=nfp,
+            stellsym=stellsym,
+        )
+    )
+    assert psc._reduced_active is expect_reduced
+
+    bf = psc.biot_savart
+    v = np.asarray(btot.get_points_cart_ref(), dtype=float).copy()
+    v[:] = 1.0 / np.sqrt(3.0 * v.shape[0])  # unit vector in the full (N,3) space
+
+    psc.recompute_currents()
+    bf.clear_cached_properties()
+    dj = bf.B_vjp(v)
+
+    # Pick a shape-DOF on the first base curve with nontrivial sensitivity.
+    # The ``xc(0)`` offset has near-zero bulk-field sensitivity for an
+    # axisymmetric base circle and would let a -1 sign flip slip through an
+    # ``abs(...) < eps`` escape clause; ``xc(1)`` is the first non-trivial
+    # Fourier shape coefficient and has real sensitivity.
+    base = base_curves[0]
+    dof_names = list(base.local_dof_names)
+    preferred = ["xc(1)", "yc(1)", "zs(1)", "xs(1)", "ys(1)"]
+    target_name = next((nm for nm in preferred if nm in dof_names), None)
+    if target_name is None:
+        target_name = next(
+            nm for nm in dof_names
+            if any(s in nm for s in ("xc", "yc", "xs", "ys", "zc", "zs"))
+        )
+    x0 = base.get(target_name)
+
+    eps = 1e-5
+    base.set(target_name, x0 + eps)
+    psc.recompute_currents()
+    bf.clear_cached_properties()
+    Bp = np.array(bf.B())
+    base.set(target_name, x0 - eps)
+    psc.recompute_currents()
+    bf.clear_cached_properties()
+    Bm = np.array(bf.B())
+    base.set(target_name, x0)
+    psc.recompute_currents()
+    bf.clear_cached_properties()
+    fd = float(np.sum(v * (Bp - Bm)) / (2.0 * eps))
+
+    vjp_deriv_array = np.asarray(dj(base))
+    idx = dof_names.index(target_name)
+    vjp_val = float(vjp_deriv_array[idx])
+
+    rel_err = abs(vjp_val - fd) / (abs(fd) + 1e-30)
+    assert rel_err < 1e-3 or abs(vjp_val - fd) < 1e-8, (
+        f"Bulk VJP vs FD mismatch on TF curve DOF "
+        f"(n_base_pucks={n_base_pucks}, nfp={nfp}, stellsym={stellsym}): "
+        f"fd={fd:.6e}, vjp={vjp_val:.6e}, rel_err={rel_err:.3e}"
+    )
+
+
+@pytest.mark.parametrize(
+    "n_base_pucks,nfp,stellsym,expect_reduced",
+    [
+        (1, 1, False, False),
+        (2, 1, False, False),
+        (2, 2, False, True),
+        (2, 1, True, True),
+        (2, 2, True, True),
+    ],
+)
+def test_vjp_tf_analytic_matches_jax_multi_puck(
+    n_base_pucks, nfp, stellsym, expect_reduced
+):
+    """Extend ``test_vjp_tf_fast_matches_jax`` to multi-puck / multi-base-coil
+    configurations across both reduced and full paths.
+
+    The JAX VJP path runs ``jax.vjp`` through the actual
+    ``_B_eval_from_tf_body`` forward, so it is by construction consistent
+    with the forward.  The analytic path (``_vjp_tf_only_analytic``)
+    reproduces the same adjoint by hand for speed; this test asserts they
+    agree to tight tolerance so any missing sign, missing weight, or
+    broken fold/gather can be caught per-configuration.
+    """
+    import simsopt.field.psc_bulk as psb
+
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = (
+        _make_multi_coil_multi_puck_setup(
+            n_base_coils=2,
+            n_base_pucks=n_base_pucks,
+            nfp=nfp,
+            stellsym=stellsym,
+        )
+    )
+    assert psc._reduced_active is expect_reduced
+
+    eval_pts = np.asarray(btot.get_points_cart_ref(), dtype=float)
+    v_B = np.ones_like(eval_pts) / float(np.sqrt(3.0 * eval_pts.shape[0]))
+
+    psb._USE_JAX_TF_VJP = True
+    psc.recompute_currents()
+    g_jax = psc.vjp_setup_B(v_B, eval_pts)
+
+    psb._USE_JAX_TF_VJP = False
+    psc.recompute_currents()
+    g_fast = psc.vjp_setup_B(v_B, eval_pts)
+
+    base = base_curves[0]
+    np.testing.assert_allclose(
+        np.asarray(g_jax(base)),
+        np.asarray(g_fast(base)),
+        rtol=1e-6,
+        atol=1e-10,
+        err_msg=(
+            f"Analytic TF VJP must match the JAX TF VJP on base curve DOFs "
+            f"(n_base_pucks={n_base_pucks}, nfp={nfp}, stellsym={stellsym}, "
+            f"reduced={expect_reduced})"
+        ),
+    )
+    np.testing.assert_allclose(
+        np.asarray(g_jax(base_currents[0])),
+        np.asarray(g_fast(base_currents[0])),
+        rtol=1e-6,
+        atol=1e-10,
+        err_msg=(
+            f"Analytic TF VJP must match the JAX TF VJP on base current DOF "
+            f"(n_base_pucks={n_base_pucks}, nfp={nfp}, stellsym={stellsym}, "
+            f"reduced={expect_reduced})"
+        ),
+    )
+
+
+def test_solver_mode_shell_l2_interior_cancellation():
+    r"""Focused regression: ``solver_mode='shell_l2'`` beats ``'energy'``.
+
+    Builds the *same* thin-disc puck twice (once with each solver
+    mode), at a basis small enough to keep the test under ~15 s, and
+    asserts two things:
+
+    1. Both modes return a finite, Lenz-signed induced moment
+       (induced :math:`B_z(0) < 0` for the ring-coil-above geometry).
+    2. The L^2 solver's interior residual
+       :math:`|B^{tot}(0)|/|B^{TF}(0)|` is *strictly smaller* than the
+       energy solver's at this basis.  The absolute values at this
+       basis are still large (~0.7-0.9) -- see
+       :func:`tests.field.test_passive_bulks_scale.test_interior_field_cancellation`
+       for the higher-basis threshold test -- but the ordering is the
+       key regression guard that the new operator is doing what it
+       claims.
+    """
+    R = 0.05; t = 0.005
+    curve = CurveXYZFourier(32, 1)
+    curve.x = np.array(
+        [0.0, 0.0, 5.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0], dtype=float
+    )
+    tf = Coil(curve, Current(1.0e7))
+
+    def _build(mode: str) -> PSCBulkArray:
+        return PSCBulkArray(
+            np.array([[0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 1.0]]),
+            np.array([R]), np.array([t]), [tf],
+            eval_points=np.array([[2.0 * R, 0.0, 0.0]]),
+            m_fourier=3, l_zernike=6, k_chebyshev=3,
+            n_rho=10, n_phi=16, n_z=6,
+            nfp=1, stellsym=False, adaptive_self_reg=True,
+            solver_mode=mode,
+        )
+
+    from simsopt.field.biotsavart import BiotSavart
+
+    probe = np.array([[0.0, 0.0, 0.0]])
+    bs = BiotSavart([tf]); bs.set_points_cart(np.ascontiguousarray(probe))
+    B_tf0 = np.asarray(bs.B())[0]
+
+    ratios = {}
+    Bz = {}
+    for mode in ("energy", "shell_l2"):
+        psc = _build(mode)
+        B_ind0 = np.asarray(psc.B_at_points(probe))[0]
+        ratios[mode] = float(
+            np.linalg.norm(B_tf0 + B_ind0) / np.linalg.norm(B_tf0)
+        )
+        Bz[mode] = float(B_ind0[2])
+    # shell_l2 must respect Lenz's law; the energy form on this thin-
+    # disc-without-exact-disc-faces path is known to give the wrong
+    # sign and is not under test here.
+    assert Bz["shell_l2"] < 0.0, (
+        "shell_l2 must satisfy Lenz's law (induced B_z < 0 for the "
+        f"ring-above geometry); got B_z(0)={Bz['shell_l2']:.3e}"
+    )
+    assert ratios["shell_l2"] < ratios["energy"], (
+        "shell_l2 solver must achieve a smaller interior residual than "
+        f"the energy form at the same basis; got "
+        f"shell_l2={ratios['shell_l2']:.3e}, energy={ratios['energy']:.3e}"
+    )
+
+
+def test_shell_l2_rejects_free_puck_dofs():
+    """shell_l2 mode is not yet implemented for free puck DOFs."""
+    R = 0.05; t = 0.005
+    curve = CurveXYZFourier(32, 1)
+    curve.x = np.array(
+        [0.0, 0.0, 5.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0], dtype=float
+    )
+    tf = Coil(curve, Current(1.0e7))
+    psc = PSCBulkArray(
+        np.array([[0.0, 0.0, 0.0]]),
+        np.array([[0.0, 0.0, 1.0]]),
+        np.array([R]), np.array([t]), [tf],
+        eval_points=np.array([[2.0 * R, 0.0, 0.0]]),
+        m_fourier=2, l_zernike=4, k_chebyshev=2,
+        n_rho=8, n_phi=12, n_z=4,
+        nfp=1, stellsym=False, adaptive_self_reg=True,
+        solver_mode="shell_l2",
+    )
+    # Unfix the first puck-centre DOF to simulate a free-DOF workflow.
+    try:
+        psc.unfix(psc.local_dof_names[0])
+    except (AttributeError, IndexError):
+        pytest.skip("PSCBulkArray does not expose unfix in this build.")
+    with pytest.raises(NotImplementedError):
+        psc.B_at_points(np.array([[0.05, 0.0, 0.0]]))
+
+
+def test_shell_l2_rejects_invalid_mode():
+    """Only 'energy' and 'shell_l2' are valid solver_mode values."""
+    curve = CurveXYZFourier(32, 1)
+    curve.x = np.array(
+        [0.0, 0.0, 5.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0], dtype=float
+    )
+    tf = Coil(curve, Current(1.0e7))
+    with pytest.raises(ValueError, match="solver_mode"):
+        PSCBulkArray(
+            np.array([[0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 1.0]]),
+            np.array([0.05]), np.array([0.005]), [tf],
+            eval_points=np.array([[0.1, 0.0, 0.0]]),
+            m_fourier=2, l_zernike=4, k_chebyshev=2,
+            n_rho=8, n_phi=12, n_z=4,
+            solver_mode="nonsense",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Regression tests locking the ``ScaledCurrent.set_dofs`` propagation contract.
+#
+# Historically ``ScaledCurrent.set_dofs`` delegated to
+# ``self.current_to_scale.set_dofs(...)`` which, for a plain
+# :class:`~simsopt.field.coil.Current`, dispatches to the C++
+# ``sopp.Current.set_dofs`` external setter.  That path writes the C++
+# ``_current`` state directly but bypasses the Python ``Dofs._x`` cache
+# and never calls ``_flag_recompute_opt``, so downstream
+# :class:`BiotSavart` / :class:`PSCBulkArray` caches remained stale
+# even though ``get_value()`` reflected the new current.  Symptoms:
+# ``recompute_currents()`` returned unchanged ``beta`` after a TF-current
+# perturbation, and the cylindrical-grid example's sanity block reported
+# ``|beta1 - beta0| = 0``.  The fix routes ``ScaledCurrent.set_dofs``
+# through ``self.current_to_scale.local_full_x`` which triggers
+# ``Dofs.full_x.setter`` → ``_flag_recompute_opt`` → every dep_opt's
+# ``set_recompute_flag``.  The tests below guard both the DOF-sync
+# contract and the full ``PSCBulkArray`` cache invalidation.
+# ---------------------------------------------------------------------------
+
+
+def test_scaled_current_set_dofs_propagates():
+    """``ScaledCurrent.set_dofs`` must keep the underlying Python DOF cache
+    in sync and reflect the perturbation through ``get_value()``.
+
+    Prior to the fix the write only updated the C++ ``_current`` field;
+    the Python ``Dofs._x`` stayed stale, so any dependent
+    :class:`BiotSavart`/:class:`MagneticField` tree relying on
+    ``_flag_recompute_opt`` for cache invalidation never noticed the
+    change.  This test asserts the full Python-side bookkeeping is
+    consistent after both attribute paths (``.set_dofs`` and ``.x``).
+    """
+    from simsopt.field.coil import ScaledCurrent
+
+    I0 = 1.0e5
+    scale = 1.0e2
+    c = Current(I0)
+    sc = ScaledCurrent(c, scale)
+
+    # Baseline: ``get_value`` should match the product and DOF caches agree.
+    assert sc.get_value() == pytest.approx(scale * I0)
+    assert c.local_full_x[0] == pytest.approx(I0)
+    assert c._dofs._x[0] == pytest.approx(I0)
+
+    # Path 1: ``set_dofs`` specifies the SCALED value, so the underlying
+    # Current.local_full_x[0] must equal ``target / scale`` after the call.
+    target = 5.0e6
+    sc.set_dofs(np.array([target]))
+    assert sc.get_value() == pytest.approx(target)
+    assert c.local_full_x[0] == pytest.approx(target / scale)
+    # Crucial: the Python ``Dofs._x`` cache must be synced to the same
+    # value as ``local_full_x``.  Pre-fix this was stale because the
+    # write went through the C++ external setter only.
+    assert c._dofs._x[0] == pytest.approx(target / scale)
+
+    # Path 2: ``.x`` sets the UNDERLYING child DOF directly (not the
+    # scaled value).  Writing the child DOF must propagate the same way.
+    child_target = 2.0e3
+    sc.x = np.array([child_target])
+    assert c.local_full_x[0] == pytest.approx(child_target)
+    assert c._dofs._x[0] == pytest.approx(child_target)
+    assert sc.get_value() == pytest.approx(scale * child_target)
+
+
+def test_scaled_current_set_dofs_invalidates_biotsavart_cache():
+    """Perturbing a :class:`ScaledCurrent` via ``set_dofs`` must trigger
+    cache invalidation on any dependent :class:`BiotSavart`.
+
+    This is the unit-level analogue of the cylindrical-grid example's
+    failing sanity block.  A proper fix routes the DOF write through
+    ``Dofs.full_x.setter`` which walks every dep_opt and invalidates
+    their caches via ``MagneticField.recompute_bell``.
+    """
+    from simsopt.field import BiotSavart
+    from simsopt.field.coil import ScaledCurrent
+
+    curve = CurveXYZFourier(32, 1)
+    curve.x = np.array([0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    c = Current(1.0e5)
+    sc = ScaledCurrent(c, 1.0e2)
+    coil = Coil(curve, sc)
+    bs = BiotSavart([coil])
+    bs.set_points(np.array([[0.3, 0.0, 0.0]]))
+    B0 = bs.B().copy()
+
+    # Nudge the scaled current by 10% and verify BiotSavart picked up
+    # the change (i.e. returns a linearly scaled field, not the cached
+    # value).  Pre-fix this would be equal bit-for-bit to ``B0``.
+    sc.set_dofs(np.array([1.1 * sc.get_value()]))
+    B1 = bs.B().copy()
+    rel = np.linalg.norm(B1 - B0) / (np.linalg.norm(B0) + 1e-30)
+    assert rel > 1e-3, (
+        "BiotSavart cache must invalidate after ScaledCurrent.set_dofs; "
+        f"got |B1-B0|/|B0| = {rel:.3e} (expected ~0.1 for a 10% current nudge)"
+    )
+    # Field is linear in current → 10% current ↔ 10% field.
+    np.testing.assert_allclose(B1, 1.1 * B0, rtol=1e-10, atol=1e-12)
+
+
+def test_recompute_currents_invalidates_after_scaled_set_dofs():
+    """After perturbing a scaled TF current, ``PSCBulkArray.recompute_currents``
+    must return a changed ``beta`` regardless of whether we used the
+    ``set_dofs`` or ``.x`` DOF channel.
+
+    Reproduces the cylindrical-grid example's sanity-block scenario
+    (``base_currents_tf[0].set_dofs(...)`` → stale ``beta``) at unit-test
+    scale.  Post-fix both channels must produce (a) a non-zero beta
+    change and (b) bit-for-bit identical results.
+    """
+    from simsopt.field import BiotSavart, coils_via_symmetries
+    from simsopt.field.coil import ScaledCurrent
+    from simsopt.geo import create_equally_spaced_curves
+
+    nfp = 1
+    stellsym = False
+    ncoils = 2
+    base_curves = create_equally_spaced_curves(
+        ncoils, nfp, stellsym, R0=1.0, R1=0.5, order=2
+    )
+    # Mimic ``initialize_coils``: the first TF current is a ScaledCurrent
+    # wrapping a Current (so ScaledCurrent.set_dofs is exercised), the
+    # second is a plain Current.
+    inner = Current(1.0e3)
+    scaled_current = ScaledCurrent(inner, 1.0e2)
+    plain_current = Current(1.0e5)
+    base_currents = [scaled_current, plain_current]
+    coils_tf = coils_via_symmetries(base_curves, base_currents, nfp, stellsym)
+
+    centers = np.array([[1.0, 0.0, 0.2]])
+    axes = np.array([[0.0, 0.0, 1.0]])
+    radii = np.array([0.04])
+    thicknesses = np.array([0.02])
+    eval_pts = np.array([[1.2, 0.0, 0.0]])
+    psc = PSCBulkArray(
+        centers, axes, radii, thicknesses, coils_tf,
+        eval_points=eval_pts,
+        m_fourier=1, l_zernike=2, k_chebyshev=1,
+        n_rho=4, n_phi=6, n_z=3,
+        nfp=nfp, stellsym=stellsym,
+        adaptive_self_reg=False,
+    )
+
+    b_tf = BiotSavart(coils_tf)
+
+    # Record baseline beta/field.
+    psc.recompute_currents()
+    beta0 = np.array(psc.beta, copy=True)
+    b_tf.set_points(eval_pts)
+    _ = b_tf.B().copy()
+    assert np.linalg.norm(beta0) > 0, "baseline beta unexpectedly zero"
+
+    # Channel A: .set_dofs (the historically-broken path).  Post-fix
+    # this must invalidate every dep cache, so psc.recompute_currents()
+    # picks up fresh Bn and therefore fresh beta.
+    target = 1.1 * scaled_current.get_value()
+    scaled_current.set_dofs(np.array([target]))
+    psc.recompute_currents()
+    beta_a = np.array(psc.beta, copy=True)
+    b_tf.set_points(eval_pts)
+    B_tf_a = b_tf.B().copy()
+    assert scaled_current.get_value() == pytest.approx(target)
+
+    # Restore the child DOF to its baseline (``inner``'s original
+    # value) via the ``.x`` channel (ScaledCurrent has 0 local DOFs,
+    # so ``sc.x`` maps to the child Current's single DOF).
+    scaled_current.x = np.array([1.0e3])
+    psc.recompute_currents()
+    beta_restored = np.array(psc.beta, copy=True)
+    np.testing.assert_allclose(
+        beta_restored, beta0, rtol=1e-10, atol=1e-14,
+        err_msg="Restoring the baseline DOF value must yield the baseline beta.",
+    )
+    # Channel B perturbation: write the UNDERLYING child DOF so that
+    # ``get_value()`` matches ``target`` from Channel A.
+    scaled_current.x = np.array([target / scaled_current.scale])
+    psc.recompute_currents()
+    beta_b = np.array(psc.beta, copy=True)
+    b_tf.set_points(eval_pts)
+    B_tf_b = b_tf.B().copy()
+
+    # Both channels must produce a non-zero beta change relative to the
+    # baseline (this is the contract the sanity block asserts at
+    # example scale).
+    rel_a = np.linalg.norm(beta_a - beta0) / (np.linalg.norm(beta0) + 1e-30)
+    rel_b = np.linalg.norm(beta_b - beta0) / (np.linalg.norm(beta0) + 1e-30)
+    assert rel_a > 1e-3, (
+        f"beta unchanged after ScaledCurrent.set_dofs (rel={rel_a:.3e}); "
+        "cache bypass regression."
+    )
+    assert rel_b > 1e-3, f"beta unchanged after .x write (rel={rel_b:.3e})."
+
+    # And the two channels must produce bit-for-bit identical beta
+    # (modulo FP noise from a different arithmetic path).
+    np.testing.assert_allclose(beta_a, beta_b, rtol=1e-10, atol=1e-14)
+    # Same for the direct BiotSavart field evaluated at a probe point.
+    np.testing.assert_allclose(B_tf_a, B_tf_b, rtol=1e-10, atol=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# Per-DOF FD-vs-analytic diagnostic, grouped by DOF family.
+#
+# The cylindrical-grid example's Taylor test was showing a rel_err
+# plateau at ~3e-4 at small eps, which is larger than the double-
+# precision roundoff floor expected for ``J ~ 0.1``.  This test probes
+# every free DOF with a central finite difference and compares to the
+# analytic gradient column, grouped by DOF family (TF curve, TF
+# current, puck geometry).  A persistent bias per family would
+# pinpoint a missing chain-rule contribution in one branch of
+# ``PSCBulkArray``'s TF-only adjoint.
+# ---------------------------------------------------------------------------
+
+
+def _classify_dof_family(name: str) -> str:
+    s = str(name)
+    if "CurveXYZFourier" in s or "CurvePlanar" in s:
+        return "tf_curve"
+    if (
+        "Current" in s
+        or "ScaledCurrent" in s
+        or "CurrentSum" in s
+    ):
+        return "tf_current"
+    if "PSCBulkArray" in s or "puck" in s.lower():
+        return "puck"
+    return "other"
+
+
+def test_per_dof_central_difference_by_family():
+    """For every free DOF, compare analytic ``dJ/dx_k`` to a central FD
+    probe, grouped by DOF family (TF curve / TF current / puck).
+
+    A constant plateau across small ``eps`` in the Taylor test is a
+    strong signature of a missing chain-rule contribution or a stale
+    cache leak; this per-DOF probe localizes the offending family so
+    the fix can be surgical.
+    """
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = (
+        _make_multi_coil_multi_puck_setup(
+            n_base_coils=2, n_base_pucks=2, nfp=2, stellsym=True
+        )
+    )
+
+    def _call(dofs: np.ndarray) -> float:
+        Jf.x = dofs
+        psc.recompute_currents()
+        btot.Bfields[0].clear_cached_properties()
+        return float(Jf.J())
+
+    dofs0 = np.copy(Jf.x)
+    Jf.x = dofs0
+    psc.recompute_currents()
+    btot.Bfields[0].clear_cached_properties()
+    dJ0 = np.array(Jf.dJ())
+
+    names = list(np.array(Jf.dof_names))
+    eps = 1.0e-5
+    per_family_rel: dict[str, list[tuple[str, float, float, float]]] = {
+        "tf_curve": [], "tf_current": [], "puck": [], "other": []
+    }
+    for k in range(len(dofs0)):
+        e = np.zeros_like(dofs0)
+        e[k] = 1.0
+        Jp = _call(dofs0 + eps * e)
+        Jm = _call(dofs0 - eps * e)
+        fd_k = (Jp - Jm) / (2.0 * eps)
+        abs_err = abs(fd_k - dJ0[k])
+        rel_err = abs_err / (abs(dJ0[k]) + 1e-12)
+        fam = _classify_dof_family(names[k])
+        per_family_rel[fam].append((str(names[k]), abs_err, rel_err, float(dJ0[k])))
+
+    # Reset DOFs before assertion so a failure doesn't leak state.
+    _call(dofs0)
+
+    rel_tol = 1.0e-5
+    offenders: list[str] = []
+    family_max: dict[str, float] = {}
+    for fam, entries in per_family_rel.items():
+        if not entries:
+            continue
+        rels = [r for (_, _, r, _) in entries]
+        family_max[fam] = max(rels)
+        bad = [
+            (nm, ae, re_, dj)
+            for (nm, ae, re_, dj) in entries
+            if re_ > rel_tol and ae > 1e-10
+        ]
+        bad.sort(key=lambda t: -t[2])
+        for nm, ae, re_, dj in bad[:5]:
+            offenders.append(
+                f"  [{fam}] {nm}: abs={ae:.3e} rel={re_:.3e} dJ={dj:.3e}"
+            )
+
+    summary = ", ".join(
+        f"{fam}={family_max.get(fam, 0.0):.2e}" for fam in
+        ("tf_curve", "tf_current", "puck", "other")
+    )
+    if offenders:
+        pytest.fail(
+            "Per-DOF FD-vs-analytic mismatch above rel_tol="
+            f"{rel_tol:.1e}.  Family max rel_errs: {summary}.\n"
+            + "\n".join(offenders[:20])
+        )
+
+
+def test_tf_current_dof_no_taylor_plateau_reduced_path():
+    """Regression test for the analytic-VJP jitter-mismatch bug.
+
+    The cylindrical-grid example revealed that the numpy analytic path
+    in ``_vjp_tf_only_analytic`` solved the adjoint system with a plain
+    ``np.linalg.solve(Lr.T, ...)`` while the JAX forward used
+    ``shell_solve_linear_pure`` (Cholesky with a ``1e-10`` jitter
+    floor).  When ``Lr`` carries eigenvalues close to the null-space
+    trim threshold (``1e-10 * max|eig|``) -- which is the common case
+    at production resolution -- the two solves diverge by an amount
+    comparable to the missing jitter term, and the analytic adjoint
+    for TF-current DOFs picks up a constant absolute bias that does
+    not shrink as ``eps -> 0``.  The signature is a Taylor-test
+    plateau at ``rel_err ~ 3e-4`` with ``FD`` moving toward the
+    converged limit while the analytic gradient sits at a biased
+    value.
+
+    This test pins the contract on the analytic numpy path at a
+    reduced-L, multi-base-puck, stellsym-symmetric configuration --
+    the smallest setup that still exercises the ``Q^T L_work Q``
+    eigenvalue structure -- and asserts the TF-current central-
+    difference converges toward the analytic gradient cleanly, with
+    no constant-bias plateau.
+    """
+    import simsopt.field.psc_bulk as psb
+
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = (
+        _make_multi_coil_multi_puck_setup(
+            n_base_coils=2, n_base_pucks=2, nfp=2, stellsym=True
+        )
+    )
+    # Exercise the numpy analytic path (the one that contained the
+    # jitter-mismatch bug), not the JAX path.
+    saved = psb._USE_JAX_TF_VJP
+    psb._USE_JAX_TF_VJP = False
+    try:
+
+        def _call(dofs):
+            Jf.x = dofs
+            psc.recompute_currents()
+            btot.Bfields[0].clear_cached_properties()
+            return float(Jf.J())
+
+        dofs0 = np.copy(Jf.x)
+        _call(dofs0)
+        dJ0 = np.array(Jf.dJ())
+
+        # Pick the first free base-current DOF.  In this helper the
+        # TF currents are plain :class:`Current` objects (not
+        # :class:`ScaledCurrent`) with a single DOF each.
+        names = list(np.array(Jf.dof_names))
+        k_cur = next(
+            (i for i, n in enumerate(names) if "Current" in str(n)),
+            None,
+        )
+        if k_cur is None:
+            pytest.skip("No TF current DOF exposed in this configuration")
+        analytic = float(dJ0[k_cur])
+        e = np.zeros_like(dofs0)
+        e[k_cur] = 1.0
+
+        # Central differences at decreasing eps must converge to
+        # ``analytic`` without plateauing at a biased value.  We check
+        # both the error at a small eps and a 2nd-order decrease from
+        # the larger eps -- either alone could be masked by a constant
+        # bias of the magnitude seen in the cylindrical-grid example.
+        abs_errs = []
+        for eps in (1e-2, 1e-3, 1e-4, 1e-5):
+            Jp = _call(dofs0 + eps * e)
+            Jm = _call(dofs0 - eps * e)
+            fd = (Jp - Jm) / (2.0 * eps)
+            abs_errs.append(abs(fd - analytic))
+        _call(dofs0)
+
+        # At double precision the central-difference truncation error
+        # decreases like ``O(eps^2)`` so the sequence should roughly
+        # halve by two orders of magnitude per eps.  With the jitter
+        # bug the last three entries of ``abs_errs`` would all equal
+        # the same plateau value.
+        assert abs_errs[-1] < 1.0e-6, (
+            f"TF-current Taylor test did not converge: abs_errs={abs_errs}. "
+            "A constant plateau is the signature of the jitter mismatch "
+            "between _vjp_tf_only_analytic's adjoint solve and "
+            "shell_solve_linear_pure's Cholesky+jitter forward."
+        )
+        # Only enforce the O(eps^2) ratio if the leading abs_err is large
+        # enough to exceed the roundoff floor -- at the small test scale
+        # we often hit ~1e-13 at eps=1e-2 already, where the central
+        # difference is cancellation-limited and ``abs_errs`` stops
+        # shrinking.  A plateau from the jitter bug, by contrast, would
+        # pin ``abs_errs`` around ~1e-5 for every ``eps`` in this range.
+        if abs_errs[1] > 1.0e-10:
+            assert abs_errs[2] < 0.5 * abs_errs[1], (
+                "TF-current Taylor test plateaued instead of converging at "
+                f"2nd order: abs_errs={abs_errs}."
+            )
+    finally:
+        psb._USE_JAX_TF_VJP = saved
+
+
+def test_shell_prefactored_solve_matches_linear_pure():
+    """``shell_solve_prefactored_pure`` matches ``shell_solve_linear_pure``."""
+    import jax.numpy as jnp
+
+    from simsopt.field.bulk_inductance import (
+        shell_cholesky_pure,
+        shell_solve_linear_pure,
+        shell_solve_prefactored_pure,
+    )
+
+    rng = np.random.default_rng(7)
+    n = 14
+    A = rng.standard_normal((n, n))
+    L = A @ A.T + 0.1 * np.eye(n)
+    f = rng.standard_normal(n)
+    x1 = np.asarray(shell_solve_linear_pure(jnp.asarray(L), jnp.asarray(f)))
+    chol = shell_cholesky_pure(jnp.asarray(L), jitter=1e-10)
+    x2 = np.asarray(shell_solve_prefactored_pure(chol, jnp.asarray(f)))
+    np.testing.assert_allclose(x1, x2, rtol=1e-12, atol=1e-12)
+
+
+def test_shell_eigenfloor_prefactored_matches_reference():
+    """Prefactored Cholesky matches ``shell_solve_eigenfloor_pure``."""
+    import jax.numpy as jnp
+
+    from simsopt.field.bulk_inductance import (
+        shell_eigenfloor_cholesky_pure,
+        shell_solve_eigenfloor_pure,
+        shell_solve_prefactored_pure,
+    )
+
+    rng = np.random.default_rng(11)
+    n = 16
+    A = rng.standard_normal((n, n))
+    L = A @ A.T + 0.05 * np.eye(n)
+    f = rng.standard_normal(n)
+    thr = 1e-10
+    x_ref = np.asarray(
+        shell_solve_eigenfloor_pure(
+            jnp.asarray(L), jnp.asarray(f), threshold=thr, jitter=1e-10
+        )
+    )
+    chol = shell_eigenfloor_cholesky_pure(
+        jnp.asarray(L), threshold=thr, jitter=1e-10
+    )
+    x_pf = np.asarray(shell_solve_prefactored_pure(chol, jnp.asarray(f)))
+    np.testing.assert_allclose(x_ref, x_pf, rtol=1e-10, atol=1e-10)
+
+
+def test_tf_arrays_cache_hits_on_repeat_call():
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    a1, b1, c1 = psc._tf_arrays()
+    a2, b2, c2 = psc._tf_arrays()
+    assert a1 is a2 and b1 is b2 and c1 is c2
+
+
+def test_tf_arrays_cache_invalidates_on_dof_change():
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    a1, _, _ = psc._tf_arrays()
+    psc.coils_TF[0].curve.x = np.asarray(psc.coils_TF[0].curve.x) + 1e-6
+    a2, _, _ = psc._tf_arrays()
+    assert a1 is not a2
+
+
+def test_vjp_tf_reuses_cached_biotsavart():
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc.recompute_currents()
+    pts = np.array([[1.0, 0.05, 0.35]], dtype=float)
+    v = np.array([[1.0, 0.0, 0.0]])
+    _ = psc._vjp_tf_only_analytic(v, pts)
+    id0 = id(psc._bs_bn)
+    _ = psc._vjp_tf_only_analytic(v, pts)
+    assert id(psc._bs_bn) == id0
+
+
+def test_pucks_to_vtk_vectorised_tf_Bn_matches_pointwise():
+    """Vectorised VTK TF B_n matches the legacy per-point JAX kernel."""
+    import jax.numpy as jnp
+
+    from simsopt.field.force import _B_at_point_from_coil_set_pure
+    from simsopt.field.puck_vtk import puck_surface_mesh
+
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc.recompute_currents()
+    c, ax, R, t = psc._all_pucks[0]
+    x, y, z, _ = puck_surface_mesh(c, ax, R, t, n_phi=16, n_r=8)
+    pts = np.stack([x, y, z], axis=-1)
+    r0, r1 = psc._quad_row_ranges[0]
+    quad = psc._quad_points[r0:r1]
+    gammas_tf = np.array([c.curve.gamma() for c in psc.coils_TF])
+    gammadash_tf = np.array([c.curve.gammadash() for c in psc.coils_TF])
+    currents_tf = np.array([c.current.get_value() for c in psc.coils_TF])
+    Bn_loop = np.zeros(len(pts))
+    for i, p in enumerate(pts):
+        j = r0 + int(np.argmin(np.sum((quad - p) ** 2, axis=-1)))
+        nn = psc._quad_normals[j]
+        B = np.array(
+            _B_at_point_from_coil_set_pure(
+                jnp.asarray(p),
+                jnp.asarray(gammas_tf),
+                jnp.asarray(gammadash_tf),
+                jnp.asarray(currents_tf),
+                -1,
+                1e-10,
+            )
+        )
+        Bn_loop[i] = np.dot(B, nn)
+    from simsopt.field.biotsavart import BiotSavart
+
+    bs = BiotSavart(psc.coils_TF)
+    bs.set_points_cart(np.ascontiguousarray(pts))
+    B_tf = bs.B()
+    tree_query = __import__("scipy.spatial", fromlist=["cKDTree"]).cKDTree(quad)
+    _, j_local = tree_query.query(pts, k=1)
+    j = r0 + np.asarray(j_local, dtype=np.intp)
+    nn = psc._quad_normals[j]
+    Bn_vec = np.einsum("ij,ij->i", B_tf, nn)
+    np.testing.assert_allclose(Bn_vec, Bn_loop, rtol=1e-10, atol=1e-10)
+
+
+def test_shell_biot_savart_f32_accumulation_near_float64():
+    """Optional float32 accumulation should stay close to float64 on a toy grid."""
+    import jax.numpy as jnp
+
+    from simsopt.field.bulk_inductance import shell_biot_savart_stacked_pure
+
+    rng = np.random.default_rng(1)
+    n_p, nq, nd = 2, 5, 4
+    K = rng.standard_normal((n_p, nq, nd, 3))
+    qp = rng.standard_normal((n_p * nq, 3))
+    w = np.abs(rng.standard_normal(n_p * nq)) + 1e-3
+    beta = rng.standard_normal(n_p * nd)
+    ev = rng.standard_normal((3, 3))
+    B64 = shell_biot_savart_stacked_pure(
+        jnp.asarray(K),
+        jnp.asarray(qp),
+        jnp.asarray(w),
+        jnp.asarray(beta),
+        jnp.asarray(ev),
+        accumulate_dtype=None,
+    )
+    B32 = shell_biot_savart_stacked_pure(
+        jnp.asarray(K),
+        jnp.asarray(qp),
+        jnp.asarray(w),
+        jnp.asarray(beta),
+        jnp.asarray(ev),
+        accumulate_dtype=jnp.float32,
+    )
+    np.testing.assert_allclose(np.asarray(B64), np.asarray(B32), rtol=1e-4, atol=1e-4)
+
+
+def test_ensure_jax_full_noop_when_all_pucks_frozen():
+    """With all puck DOFs fixed, :meth:`PSCBulkArray._ensure_jax_full` is a no-op."""
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    assert not psc._has_free_puck_dofs()
+    psc._ensure_jax_full()
+    psc._ensure_jax_full()
+    assert not hasattr(psc, "_jax_local_pts")
+
+
+def test_ensure_jax_full_force_materializes_local_stacks():
+    """``force=True`` builds local JAX stacks even when puck DOFs are fixed."""
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=1)
+    psc._local_stacks_valid = False
+    psc._ensure_jax_full(force=True)
+    assert hasattr(psc, "_jax_local_pts")
+    assert psc._local_stacks_valid

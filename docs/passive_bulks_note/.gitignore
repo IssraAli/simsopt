@@ -1,0 +1,11 @@
+# LaTeX / latexmk intermediates (keep .tex, .bib, .pdf, refs)
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.toc
+__pycache__/
+*.pyc

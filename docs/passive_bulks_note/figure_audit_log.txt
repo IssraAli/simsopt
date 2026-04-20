@@ -1,0 +1,32 @@
+# Passive-bulks technical note — figure script stdout at last full refresh.
+# Regenerate by running the scripts in scripts/ (see passive_bulks_note.tex §Validation).
+
+=== Fast (2026-04-20) ===
+[audit] puck_schematic :: R=3.000000e-01  t=2.500000e-01  n_phi_mesh=8.000000e+01
+[audit] disc_quad_conv_m0_n2 :: L_self_ref=1.608495e-06  L_cross_ref=2.020813e-07  self_err_nq48=1.367899e-08  cross_err_nq48=2.619716e-16
+[audit] disc_quad_conv_m1_n3 :: L_self_ref=1.077117e-06  L_cross_ref=2.085733e-07  self_err_nq48=2.013406e-08  cross_err_nq48=1.269088e-16
+[audit] disc_quad_conv_m2_n4 :: L_self_ref=9.382888e-07  L_cross_ref=4.253263e-08  self_err_nq48=3.453304e-08  cross_err_nq48=0.000000e+00
+[audit] cyl_quad_conv_m0_k1 :: L_self_ref=2.489556e-06  err_nz48=4.272676e-08
+[audit] cyl_quad_conv_m1_k1 :: L_self_ref=1.802839e-06  err_nz48=3.716488e-08
+[audit] cyl_quad_conv_m2_k2 :: L_self_ref=2.683409e-06  err_nz48=3.495615e-07
+[audit] neumann_dz_0.05 :: M_exact=5.066022e-07  err_nphi256=5.224964e-15
+[audit] neumann_dz_0.10 :: M_exact=3.637985e-07  err_nphi256=2.910378e-15
+[audit] neumann_dz_0.20 :: M_exact=1.972969e-07  err_nphi256=1.341621e-16
+[audit] neumann_dz_0.50 :: M_exact=4.660013e-08  err_nphi256=5.680195e-16
+[audit] neumann_dz_1.00 :: M_exact=9.046159e-09  err_nphi256=5.138927e-14
+[audit] lorenz_short_solenoid :: R=3.000000e-01  rel_err_tR_1.0=9.755731e-03  rel_err_tR_0.2=6.015335e-03
+[audit] rim_continuity :: max_residual_finest=5.162125e-13
+[audit] L_spectrum :: note=0.000000e+00
+[audit] smythe_thin_disc :: B_0=1.256637e+00  m_ref_Smythe=3.600000e+04  ratio_default_tR_0.1=1.792550e+00  ratio_exact_tR_0.1=8.756873e-01
+
+=== Medium ===
+[audit] taylor_test :: min_err_tf=9.030223e-07  min_err_geom=8.104798e-07
+[audit] optimization_convergence :: J0=5.255029e-03  J_final=7.082045e-06  reduction=1.347670e-03
+[audit] pucks_rendered :: n_pucks=8.000000e+00  max_K=2.751004e+06  mean_K=4.821624e+05
+
+=== Heavy ===
+[audit] mode_convergence :: final_rel_err=1.075023e-01  ratio_0_to_1=9.553917e-01  ratio_1_to_2=1.805915e-01
+[audit] sphere_meissner :: B_0=1.256637e+00  a_eq=2.725681e-01  m_sphere=1.272345e+05  ratio_sphere_fine=5.798503e-01  mz_fine=-7.377696e+04
+
+=== Interior (fig_interior_cancellation.py) ===
+[audit] interior_cancellation :: B_0=1.256637e+00  geom_floor=1.000000e-04  ratio_energy_fine=2.677949e+00  ratio_shell_l2_fine=2.158871e-01

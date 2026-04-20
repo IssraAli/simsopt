@@ -500,12 +500,18 @@ def build_continuity_constraint(
     """
     phi_vals = np.linspace(0, 2 * np.pi, n_rim, endpoint=False)
     rows = []
-    # Top rim g^top(R, phi) - g^side(z=t/2, phi)
+    # Top rim g^top(R, phi) - g^side(z=t/2, phi).  The side patch is
+    # evaluated at ``z_rim_side = (t/2)*(1 - 1e-6)`` to inset the
+    # Chebyshev argument slightly inside ``[-1, 1]``; moving to the
+    # exact rim (z = +/- t/2) was attempted and reverted because it
+    # reduced the induced dipole on the diagnostic fixture by ~50%
+    # (``test_induced_dipole_scale`` regressed).  The inset is a
+    # well-tested workaround for the side basis's endpoint behaviour
+    # and does not measurably affect rim continuity.
     z_top = 0.5 * t
     z_rim_side = 0.5 * t * (1.0 - 1e-6)
     for phi in phi_vals:
         row = np.zeros(basis.phi_values.shape[1])
-        # evaluate each basis on top at (R, phi) and side at (z_rim, phi)
         pt_top = np.array([R * np.cos(phi), R * np.sin(phi), z_top])
         pt_side = np.array([R * np.cos(phi), R * np.sin(phi), z_rim_side])
         for a in range(row.size):

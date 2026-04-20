@@ -486,6 +486,24 @@ class ScaledCurrent(sopp.CurrentBase, CurrentBase):
         Set the degrees of freedom for the scaled current.
         This sets the underlying current's DOFs by dividing by the scale factor.
 
+        The write goes through the underlying :class:`Current`'s
+        ``local_full_x`` setter (i.e. ``Dofs.full_x``), NOT through
+        ``current_to_scale.set_dofs`` directly.  The latter would dispatch
+        to the C++ ``sopp.Current.set_dofs`` external setter, which only
+        updates the internal C++ ``_current`` state and bypasses the
+        Python ``Dofs._x`` cache plus ``_flag_recompute_opt()``.  That
+        bypass leaves stale :class:`BiotSavart` / ``MagneticField``
+        caches for every dependent field (and e.g. a
+        :class:`PSCBulkArray`'s cached ``_bs_bn`` used inside
+        ``_compute_bn_at_quads_numpy``), producing silent bugs such as
+        ``recompute_currents()`` returning unchanged ``beta`` after a
+        TF-current perturbation.  Routing through ``local_full_x``
+        triggers the canonical DOF pipeline (``full_x`` setter invokes
+        ``_flag_recompute_opt`` which in turn calls both the external
+        C++ setter on the underlying object and ``set_recompute_flag``
+        on every dependent :class:`Optimizable`), so all downstream
+        caches are invalidated.
+
         Args:
             dofs: Array-like object containing the DOF values (should be a single-element array
                   or scalar representing the desired scaled current value).
@@ -505,7 +523,9 @@ class ScaledCurrent(sopp.CurrentBase, CurrentBase):
             dof_value = float(dofs[0])
         # Divide by scale to get the underlying current value
         underlying_dofs = np.array([dof_value / self.scale])
-        self.current_to_scale.set_dofs(underlying_dofs)
+        # Route through the Optimizable DOF channel (Dofs.full_x setter)
+        # so dependent cache invalidation fires; see docstring.
+        self.current_to_scale.local_full_x = underlying_dofs
 
 
 class CurrentSum(sopp.CurrentBase, CurrentBase):

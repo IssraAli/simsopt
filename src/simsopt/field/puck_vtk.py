@@ -7,6 +7,9 @@ from __future__ import annotations
 from typing import List, Tuple
 
 import numpy as np
+from scipy.spatial import cKDTree
+
+from simsopt.field.biotsavart import BiotSavart
 
 contig = np.ascontiguousarray
 
@@ -126,35 +129,47 @@ def _sample_K_g_on_mesh(
     r0, r1 = psc_bulk._quad_row_ranges[puck_index]
     quad = psc_bulk._quad_points[r0:r1]
     beta = np.asarray(psc_bulk.beta)
-    K_all = np.sum(psc_bulk._K_basis * beta[None, :, None], axis=1)
-    g_all = psc_bulk._phi_mat @ beta
-    Bn = np.zeros(len(pts))
-    from .force import _B_at_point_from_coil_set_pure
-    import jax.numpy as jnp
-
-    gammas_tf = np.array([c.curve.gamma() for c in psc_bulk.coils_TF])
-    gammadash_tf = np.array([c.curve.gammadash() for c in psc_bulk.coils_TF])
-    currents_tf = np.array([c.current.get_value() for c in psc_bulk.coils_TF])
-    eps = 1e-10
+    # Use the stacked basis tables so we never allocate the dense
+    # (nq_total, n_dof_total, 3) / (nq_total, n_dof_total) arrays just to
+    # look up this puck's quadrature values.
+    K_stack = psc_bulk._K_stack
+    phi_stack = psc_bulk._phi_stack
+    if K_stack is None or phi_stack is None:
+        # The dense fallback that used to live here (``_K_basis`` /
+        # ``_phi_mat`` lazy reconstructions) is unreachable in practice:
+        # both lazy accessors raise ``RuntimeError`` whenever the stacks
+        # are ``None`` (i.e. under heterogeneous puck shapes), and every
+        # current factory (``cylindrical_grid_pucks``,
+        # ``winding_surface_pucks``) builds homogeneous pucks with
+        # populated stacks.  Surface the precondition loudly instead of
+        # silently attempting a dead code path.
+        raise RuntimeError(
+            "puck VTK export requires homogeneous-shape pucks with "
+            "populated _K_stack / _phi_stack; this PSCBulkArray was built "
+            "with heterogeneous pucks which are not supported."
+        )
+    n_pucks, nq_per, nd_per, _ = K_stack.shape
+    beta_s = beta.reshape(n_pucks, nd_per)
+    K_vec_stack = np.einsum("pqak,pa->pqk", K_stack, beta_s)
+    phi_vals_stack = np.einsum("pqa,pa->pq", phi_stack, beta_s)
+    K_all = K_vec_stack.reshape(n_pucks * nq_per, 3)
+    g_all = phi_vals_stack.reshape(n_pucks * nq_per)
     K_out = np.zeros_like(pts)
     g_out = np.zeros(len(pts))
-    for i, p in enumerate(pts):
-        j_local = np.argmin(np.sum((quad - p) ** 2, axis=-1))
-        j = r0 + j_local
-        K_out[i] = K_all[j]
-        g_out[i] = g_all[j]
-        nn = psc_bulk._quad_normals[j]
-        B = np.array(
-            _B_at_point_from_coil_set_pure(
-                jnp.array(p),
-                jnp.array(gammas_tf),
-                jnp.array(gammadash_tf),
-                jnp.array(currents_tf),
-                -1,
-                eps,
-            )
-        )
-        Bn[i] = np.dot(B, nn)
+    tree = cKDTree(quad)
+    _, j_local = tree.query(pts, k=1)
+    j_local = np.asarray(j_local, dtype=np.intp)
+    j = r0 + j_local
+    K_out = K_all[j]
+    g_out = g_all[j]
+    nn = psc_bulk._quad_normals[j]
+    bs_tf = getattr(psc_bulk, "_vtk_bs_tf", None)
+    if bs_tf is None:
+        bs_tf = BiotSavart(psc_bulk.coils_TF)
+        psc_bulk._vtk_bs_tf = bs_tf
+    bs_tf.set_points_cart(contig(pts))
+    B_tf = bs_tf.B()
+    Bn = np.einsum("ij,ij->i", B_tf, nn)
     return np.linalg.norm(K_out, axis=-1), K_out, Bn, g_out
 
 

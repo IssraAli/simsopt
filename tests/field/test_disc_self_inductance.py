@@ -313,7 +313,7 @@ def test_exact_disc_faces_preserves_full_L_psd():
         adaptive_self_reg=True,
     )
 
-    lam_leg = np.linalg.eigvalsh(psc._L_full)
+    lam_leg = np.linalg.eigvalsh(psc._L_work)
     lam_max_leg = max(abs(lam_leg[-1]), 1.0)
     assert lam_leg[0] > -1.0e-12 * lam_max_leg, (
         "Legacy path should give a PSD (or near-PSD) full L; got "
@@ -323,7 +323,7 @@ def test_exact_disc_faces_preserves_full_L_psd():
     psc.exact_disc_faces = True
     psc.n_radial_disc = 32
     psc._rebuild()
-    lam_ex = np.linalg.eigvalsh(psc._L_full)
+    lam_ex = np.linalg.eigvalsh(psc._L_work)
     lam_max_ex = max(abs(lam_ex[-1]), 1.0)
     assert lam_ex[0] > -1.0e-10 * lam_max_ex, (
         "exact_disc_faces path must preserve PSD of full L; got "

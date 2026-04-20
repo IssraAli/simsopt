@@ -260,6 +260,22 @@ print(f"Total pucks (after symmetrization) = {n_total_pucks}")
 print(f"Null modes removed from L: {psc_bulk.n_null_modes()}")
 print(f"Total shell DOFs: {psc_bulk._n_dof_total}, reduced: {psc_bulk._Q.shape[1]}")
 
+# ``coils_via_symmetries``-built TF sets plus a single set of base pucks
+# imply the signed symmetry-reduced inductance solve must be active; the
+# full-replica fallback is O(nfp^2 * (1+stellsym)^2) times more expensive
+# and is only expected when the TF set breaks detected symmetry.
+assert psc_bulk._tf_is_symmetric, (
+    "TF coils must be detected as symmetric to enable the reduced path"
+)
+assert psc_bulk._reduced_active, (
+    "Reduced (symmetry-folded) inductance solve must be active; got "
+    f"_reduced_active={psc_bulk._reduced_active}"
+)
+print(
+    f"Signed reduced-L path active: base dim = {psc_bulk._L_work.shape[0]}, "
+    f"full dim = {psc_bulk._n_dof_total}"
+)
+
 # ---------------------------------------------------------------------------
 # 4. Combined field and objective
 # ---------------------------------------------------------------------------
@@ -331,21 +347,30 @@ print("=" * 72)
 print("  Sanity: perturb TF current -> beta and bulk B change")
 print("=" * 72)
 # Canonical dirty-flagging pattern for passive bulks:
+#   <write new DOFs via the Optimizable DOF channel (e.g. ``opt.x = ...``
+#    or ``opt.local_full_x = ...``), NOT via the raw ``set_dofs`` C++
+#    method — the latter silently bypasses ``_flag_recompute_opt`` and
+#    leaves cached BiotSavart fields stale>.
 #   psc_bulk.recompute_currents()
 #   psc_bulk.biot_savart.invalidate()  # or btot.clear_cached_properties()
 psc_bulk.recompute_currents()
 beta0 = np.array(psc_bulk.beta)
 btot.set_points(eval_points)
 B0_bulk = b_bulk.B().copy()
-# Nudge first free current DOF if any
-cur0 = base_currents_tf[0].get_value()
-base_currents_tf[0].set_dofs(np.array([cur0 * 1.001]))
+# Nudge first free current DOF if any, via the DOF attribute setter so
+# that cache invalidation fires for every dependent BiotSavart field.
+# Note: for a :class:`ScaledCurrent`, ``.x`` is the UNDERLYING free DOF
+# (the wrapped :class:`Current`'s value, not the scaled output); a 0.1%
+# perturbation on it corresponds to a 0.1% perturbation of ``get_value()``
+# because :class:`ScaledCurrent` is linear in the child DOF.
+x_tf0 = np.array(base_currents_tf[0].x, copy=True)
+base_currents_tf[0].x = x_tf0 * 1.001
 psc_bulk.recompute_currents()
 btot.clear_cached_properties()
 beta1 = np.array(psc_bulk.beta)
 btot.set_points(eval_points)
 B1_bulk = b_bulk.B().copy()
-base_currents_tf[0].set_dofs(np.array([cur0]))
+base_currents_tf[0].x = x_tf0
 psc_bulk.recompute_currents()
 btot.clear_cached_properties()
 print(
@@ -411,9 +436,16 @@ def emit_vtk_snapshot(iteration, include_pucks=True):
 
 
 _tvtk0 = time.perf_counter()
-emit_vtk_snapshot(0)
-_WALL["t_vtk_initial"] = time.perf_counter() - _tvtk0
-print(f"  VTK initial snapshot written to {OUT_DIR}")
+if os.environ.get("VTK_INITIAL", "0") == "1":
+    emit_vtk_snapshot(0)
+    _WALL["t_vtk_initial"] = time.perf_counter() - _tvtk0
+    print(f"  VTK initial snapshot written to {OUT_DIR}")
+else:
+    _WALL["t_vtk_initial"] = 0.0
+    print(
+        "  Skipping initial VTK snapshot (set VTK_INITIAL=1 to enable; "
+        "saves wall time on iterative runs)"
+    )
 
 # ---------------------------------------------------------------------------
 # 8. Taylor test (gradient validation)
@@ -564,6 +596,18 @@ else:
     I_eq = _equivalent_currents_per_puck(psc_bulk)
 print(f"  I_equivalent per puck (A): min={I_eq.min():.2e}, max={I_eq.max():.2e}")
 print(f"  I_equivalent (first 10): {I_eq[:10]}")
+
+# Regression guard: the signed symmetry-reduced path must produce
+# MA-scale equivalent currents for this reactor-scale QA layout.  A
+# previous revision of ``_fold_Bn_to_work`` / ``_gather_beta_work_to_all``
+# silently dropped the stellsym sign flip and collapsed ``I_equivalent``
+# to ~1e-9 A.  Keep a lenient floor (1 kA) so the example fails loudly
+# if that bug ever returns while optimizer tuning / weights drift.
+assert I_eq.max() > 1e3, (
+    f"I_equivalent max = {I_eq.max():.3e} A collapsed below 1 kA; the "
+    f"signed reduced-L solve may have regressed (previously this layout "
+    f"yielded ~1e-9 A with an unsigned fold under stellsym=True)."
+)
 
 # ---------------------------------------------------------------------------
 # 10. Final VTK export
