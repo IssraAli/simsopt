@@ -62,6 +62,7 @@ __all__ = [
     "assemble_puck_self_L",
     "assemble_puck_disc_faces_L",
     "pucks_are_coaxial",
+    "fill_coaxial_inter_puck_disc_block",
 ]
 
 
@@ -1274,6 +1275,110 @@ def assemble_puck_disc_faces_L(
 # ----------------------------------------------------------------------
 # Coaxial-mutual helper
 # ----------------------------------------------------------------------
+
+
+def fill_coaxial_inter_puck_disc_block(
+    L: np.ndarray,
+    d0_i: int,
+    d0_j: int,
+    basis_i: PuckBasisData,
+    basis_j: PuckBasisData,
+    R_i: float,
+    t_i: float,
+    R_j: float,
+    t_j: float,
+    c_i: np.ndarray,
+    axis_i: np.ndarray,
+    c_j: np.ndarray,
+    axis_j: np.ndarray,
+    n_radial: int = 32,
+) -> bool:
+    r"""If two pucks are coaxial, overwrite disc–disc mutuals with :func:`disc_disc_cross_block`.
+
+    Side-wall and mixed face pairs are left unchanged in ``L``.  Pucks must
+    share the same (parallel) global axis; anti-parallel axes are not
+    handled.  Gated in the driver by :envvar:`SIMSOPT_PSC_COAXIAL_MUTUAL`.
+
+    Returns:
+        ``True`` if a coaxial disc–disc sub-block was written, else ``False``.
+    """
+    dz0 = pucks_are_coaxial(c_i, axis_i, c_j, axis_j, atol=1.0e-4)  # noqa: F841  — use geometry below
+    if dz0 is None:
+        return False
+    n1 = np.asarray(axis_i, dtype=float).ravel()[:3]
+    n2 = np.asarray(axis_j, dtype=float).ravel()[:3]
+    n1 = n1 / (np.linalg.norm(n1) + 1.0e-30)
+    n2 = n2 / (np.linalg.norm(n2) + 1.0e-30)
+    if float(np.dot(n1, n2)) < 0.99:
+        return False
+    c_i = np.asarray(c_i, dtype=float).reshape(3)
+    c_j = np.asarray(c_j, dtype=float).reshape(3)
+    dz_cc = float(np.dot(c_j - c_i, n1))
+    d_tt = dz_cc + 0.5 * (t_j - t_i)
+    d_bb = dz_cc - 0.5 * (t_j - t_i)
+    d_tb = dz_cc - 0.5 * (t_i + t_j)
+    d_bt = dz_cc + 0.5 * (t_i + t_j)
+
+    names_i = basis_i.dof_names
+    names_j = basis_j.dof_names
+    disk_i: List[Optional[Tuple[str, int, int, str]]] = [
+        _parse_disk_dof_name(nm) for nm in names_i
+    ]
+    disk_j: List[Optional[Tuple[str, int, int, str]]] = [
+        _parse_disk_dof_name(nm) for nm in names_j
+    ]
+    n_i = len(names_i)
+    n_jd = len(names_j)
+
+    def _z_pair(face_i: str, face_j: str) -> float:
+        if (face_i, face_j) == ("top", "top"):
+            return d_tt
+        if (face_i, face_j) == ("bot", "bot"):
+            return d_bb
+        if (face_i, face_j) == ("top", "bot"):
+            return d_tb
+        if (face_i, face_j) == ("bot", "top"):
+            return d_bt
+        raise ValueError(face_i, face_j)
+
+    wrote = False
+    for pi in range(n_i):
+        if disk_i[pi] is None:
+            continue
+        face_i, m_i, n_ri, trig_i = disk_i[pi]  # type: ignore[misc]
+        for qj in range(n_jd):
+            if disk_j[qj] is None:
+                continue
+            face_j, m_j, n_rj, trig_j = disk_j[qj]  # type: ignore[misc]
+            if m_i != m_j or trig_i != trig_j:
+                continue
+            m = m_i
+            zsep = _z_pair(face_i, face_j)
+            if abs(zsep) < 1.0e-14:
+                continue
+            f_p, fp_p = _make_radial(R_i, m, n_ri)
+            f_q, fp_q = _make_radial(R_j, m, n_rj)
+            val = disc_disc_cross_block(
+                f_p,
+                fp_p,
+                f_q,
+                fp_q,
+                m,
+                R_i,
+                R_j,
+                zsep,
+                n_radial=n_radial,
+            )
+            sgn = 1.0
+            if (face_i == "top" and face_j == "bot") or (
+                face_i == "bot" and face_j == "top"
+            ):
+                sgn = -1.0
+            v = sgn * val
+            L[d0_i + pi, d0_j + qj] = v
+            L[d0_j + qj, d0_i + pi] = v
+            wrote = True
+    return bool(wrote)
 
 
 def pucks_are_coaxial(

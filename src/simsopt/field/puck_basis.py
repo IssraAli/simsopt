@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from math import factorial
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -162,6 +162,11 @@ class PuckBasisData:
     k_basis_local: np.ndarray  # (n_quad, n_dof, 3) K = n x grad_s phi
     dof_names: List[str]
     basis_spec: List[Tuple[str, int, int, str]] = field(default_factory=list)
+    #: Optional cache of :math:`(M,D,Q)` local-frame multipole tensors for
+    #: far-pair fast paths (see :mod:`simsopt.field.multipole_inductance`). Filled
+    #: lazily when :envvar:`SIMSOPT_PSC_MOMENTS` is ``"fourier"`` or when
+    #: callers opt in to one-shot precomputation.
+    moments_cache: Optional[Tuple[Any, ...]] = field(default=None, repr=False)
 
 
 def _disk_grad_g_cartesian(

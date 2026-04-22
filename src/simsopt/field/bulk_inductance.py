@@ -1,21 +1,127 @@
 """
 Shell inductance matrix and ideal-diamagnetic passive-bulk field (surface currents on :math:`\\partial\\Omega`).
+
+Host batch sizing for the symmetry-reduced JAX path is in this module; **row
+chunking** for the free-puck-DoF JAX forward/VJP (``L`` assembly in
+:mod:`simsopt.field.psc_bulk`) is controlled by ``SIMSOPT_PSC_JAX_PAIR_CHUNK``
+and :class:`PSCBulkArray` ``jax_pair_row_chunk``.
 """
 
 from __future__ import annotations
 
+import os
+import time
 import warnings
 from functools import partial
-from typing import List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import jax
 
-# Max puck pairs per batch in vectorized block assembly (tune for memory vs speed).
-_PAIR_BATCH_SIZE = 64
 import jax.numpy as jnp
 
 
-@partial(jax.jit, static_argnames=("adaptive_self_reg",))
+def _effective_pair_batch_size(nq_i: int, nq_j: int, nd_per: int) -> int:
+    """Batch size for :func:`_jax_pair_batch_blocks` host buffers.
+
+    Override with env ``SIMSOPT_PAIR_BATCH_SIZE`` (integer). Otherwise use a
+    lightweight heuristic targeting ~256 MiB for ``blocks_all`` of shape
+    ``(B, nd_per, nd_per)`` and similar.
+    """
+    env = os.environ.get("SIMSOPT_PAIR_BATCH_SIZE")
+    if env is not None and env.strip() != "":
+        return max(1, int(env))
+    denom = max(1, int(nd_per) ** 2)
+    b = int(256e6 / (8 * denom))
+    # Tie-break with plan's nq-dependent term when nd is small
+    b2 = int(256e6 / (8 * max(1, int(nq_i) * int(nq_j) * int(nd_per))))
+    cap = 2048 if int(nd_per) <= 32 else 256
+    return max(8, min(cap, min(b, b2)))
+
+
+# One-shot guard for the fp32 vs f64 first-batch self-check in
+# :func:`_shell_inductance_matrix_symmetric_reduced_jax`.  Flipped to
+# ``True`` after the first successful rebuild under ``SIMSOPT_PSC_FP32=1``
+# so the self-check cost (~one batch in f64) is paid at most once.
+_PSC_FP32_SELFCHECK_DONE: bool = False
+
+#: Process-wide map ``cache_key -> bool`` for the multipole first-pair
+#: self-check. ``False`` means the approximation was rejected for that key
+#: and remains disabled until the process restarts (or
+#: :func:`reset_psc_far_selfcheck_cache` is called). ``True`` means the
+#: self-check already succeeded for that key, so it is not re-run.
+_PSC_FAR_SELFCHECK_OK: Dict[Tuple[Any, ...], bool] = {}
+
+
+def _far_selfcheck_cache_key(
+    r_far: float,
+    delta_reg: float,
+    adaptive_self_reg: bool,
+    moments_mode: str,
+    nd: int,
+    n_pucks: int,
+) -> Tuple[Any, ...]:
+    """Host-side key for the multipole first-pair self-check (sticky per parameter set)."""
+    return (
+        round(float(r_far), 9),
+        float(delta_reg),
+        bool(adaptive_self_reg),
+        str(moments_mode).lower().strip(),
+        int(nd),
+        int(n_pucks),
+    )
+
+
+def reset_psc_far_selfcheck_cache() -> None:
+    r"""Clear the far-pair multipole self-check cache (use in tests / long sessions)."""
+    _PSC_FAR_SELFCHECK_OK.clear()
+
+
+def _pair_class_timer_end(
+    pair_class_timer: "Optional[Callable[[str, int, float], None]]",
+    tag: str,
+    n: int,
+    t0: float,
+) -> None:
+    if pair_class_timer is not None:
+        pair_class_timer(str(tag), int(n), time.perf_counter() - t0)
+
+
+def _psc_fp32_enabled() -> bool:
+    """Return ``True`` when the fp32 off-diagonal pair kernel is requested."""
+    return os.environ.get("SIMSOPT_PSC_FP32", "0") == "1"
+
+
+def _psc_far_pair_enabled() -> bool:
+    """Return ``True`` when ``SIMSOPT_PSC_FAR_PAIR=1`` is set.
+
+    Stage 4 of the ``psc-scale-to-100-bulks`` plan proposed a near/far
+    split with a 2nd-order multipole (monopole + dipole) correction plus
+    runtime ``R_far`` calibration to guarantee ``rel_error <= 1e-6`` on
+    ``L_base``.  Landing that path requires:
+
+    1. Per-puck monopole ``M_a = sum_q K[q,a,:] w[q]`` and dipole
+       ``D_{a,beta} = sum_q K[q,a,:] (pts[q] - c)_beta w[q]``
+       moments pre-computed once per rebuild.
+    2. A center-separation test ``d_ij >= R_far * (R_i + R_j)`` gating
+       each pair to the near (full ``(nq, nq)`` einsum) or far
+       (multipole contraction, cost ``nd * nd * 9``) kernel.
+    3. A self-calibration step (32 random pairs) to bisect ``R_far`` in
+       ``[2, 10]`` against a ``1e-6`` tolerance.
+    4. Persisting the calibrated ``R_far`` in the structural-cache hash
+       used by Stage 1 so stale cache entries are invalidated.
+
+    The multipole (through quadrupole) path is implemented in
+    :mod:`simsopt.field.multipole_inductance` and is wired into
+    :func:`_shell_inductance_matrix_blockwise_batched_jax` and
+    :func:`_shell_inductance_matrix_symmetric_reduced_jax` when
+    :envvar:`SIMSOPT_PSC_FAR_PAIR` is set, subject to
+    :envvar:`SIMSOPT_PSC_R_FAR` (or an automatic calibration on a
+    sample of off-diagonal pairs).
+    """
+    return os.environ.get("SIMSOPT_PSC_FAR_PAIR", "0") == "1"
+
+
+@partial(jax.jit, static_argnames=("adaptive_self_reg", "use_fp32"))
 def _jax_pair_batch_blocks(
     Ki: jnp.ndarray,
     Kj: jnp.ndarray,
@@ -25,6 +131,7 @@ def _jax_pair_batch_blocks(
     w_j: jnp.ndarray,
     delta_reg: jnp.ndarray,
     adaptive_self_reg: bool = False,
+    use_fp32: bool = False,
 ) -> jnp.ndarray:
     """One batch of upper-triangular puck-pair inductance blocks ``(B, nd, nd)``.
 
@@ -53,18 +160,155 @@ def _jax_pair_batch_blocks(
 
     Returns:
         ``(B, nd_i, nd_j)`` inductance blocks in henries.
+
+    Notes:
+        When ``use_fp32=True`` the per-pair kernel is evaluated entirely
+        in ``float32`` (inputs cast on entry, result upcast to the caller
+        dtype on exit).  This path is intended for **off-diagonal** puck
+        pairs only, where the regularized distance is large enough that
+        ``~1e-7`` rel error does not impair PSD of ``L_base``; self pairs
+        (``i == j``) must keep the default ``float64`` path to preserve
+        the analytic self-regularization prefactor.  Gated by
+        ``SIMSOPT_PSC_FP32=1`` in the host driver.
     """
+    out_dtype = Ki.dtype
+    if use_fp32:
+        Ki = Ki.astype(jnp.float32)
+        Kj = Kj.astype(jnp.float32)
+        pts_i = pts_i.astype(jnp.float32)
+        pts_j = pts_j.astype(jnp.float32)
+        w_i = w_i.astype(jnp.float32)
+        w_j = w_j.astype(jnp.float32)
+        delta_reg = jnp.asarray(delta_reg, dtype=jnp.float32)
+        mu0_const = jnp.float32(MU0_OVER_4PI)
+    else:
+        mu0_const = MU0_OVER_4PI
     r = pts_i[:, :, None, :] - pts_j[:, None, :, :]
     if adaptive_self_reg:
-        delta_i = _SELF_REG_COEFF * jnp.sqrt(w_i)
-        delta_j = _SELF_REG_COEFF * jnp.sqrt(w_j)
+        self_coeff = jnp.float32(_SELF_REG_COEFF) if use_fp32 else _SELF_REG_COEFF
+        delta_i = self_coeff * jnp.sqrt(w_i)
+        delta_j = self_coeff * jnp.sqrt(w_j)
         delta_pair = 0.5 * (delta_i[:, :, None] + delta_j[:, None, :])
-        dist = jnp.sqrt(jnp.sum(r**2, axis=-1) + delta_pair**2)
+        dist_reg = jnp.sqrt(jnp.sum(r**2, axis=-1) + delta_pair**2)
     else:
-        dist = jnp.sqrt(jnp.sum(r**2, axis=-1) + delta_reg**2)
-    dot = jnp.einsum("Biax,Bjbx->Bijab", Ki, Kj)
-    kernel = dot / dist[..., None, None]
-    return MU0_OVER_4PI * jnp.einsum("Bijab,Bi,Bj->Bab", kernel, w_i, w_j)
+        dist_reg = jnp.sqrt(jnp.sum(r**2, axis=-1) + delta_reg**2)
+    # Avoid materialising ``(B, nq_i, nq_j, nd, nd)``: absorb quadrature
+    # weights into ``K`` and contract with ``1/dist`` as a single einsum.
+    Ginv = 1.0 / dist_reg
+    # Quadrature weights multiply as ``w_i * w_j`` on the double integral (not
+    # ``sqrt(w_i)*sqrt(w_j)``).
+    A = Ki * w_i[:, :, None, None]
+    C = Kj * w_j[:, :, None, None]
+    out = mu0_const * jnp.einsum("Biax,Bij,Bjbx->Bab", A, Ginv, C)
+    if use_fp32 and out.dtype != out_dtype:
+        out = out.astype(out_dtype)
+    return out
+
+
+@partial(jax.jit, static_argnames=("adaptive_self_reg", "batch_sz", "use_fp32"))
+def _jax_pair_batch_blocks_via_take(
+    K_all: jnp.ndarray,
+    pts_all: jnp.ndarray,
+    w_all: jnp.ndarray,
+    i_idx: jnp.ndarray,
+    j_idx: jnp.ndarray,
+    delta_reg: jnp.ndarray,
+    valid_mask: jnp.ndarray,
+    adaptive_self_reg: bool = False,
+    batch_sz: int = 8,
+    use_fp32: bool = False,
+) -> jnp.ndarray:
+    """Batched pair blocks with a single stacked-device gather inside JIT.
+
+    ``K_all``, ``pts_all``, and ``w_all`` are the full per-puck stacks on
+    device; ``i_idx`` / ``j_idx`` index pairs along axis 0.  The last
+    batch is **padded** to fixed ``batch_sz`` (duplicate indices are fine);
+    rows with ``valid_mask[b] == 0`` are zeroed so padding does not affect
+    the host scatter.
+
+    Args:
+        K_all: Stacked basis ``(n_puck, nq, nd, 3)``.
+        pts_all: Stacked quadrature points ``(n_puck, nq, 3)``.
+        w_all: Stacked weights ``(n_puck, nq)``.
+        i_idx: Left puck indices, shape ``(batch_sz,)``.
+        j_idx: Right puck indices, shape ``(batch_sz,)``.
+        delta_reg: Same as :func:`_jax_pair_batch_blocks`.
+        valid_mask: Per-batch-row mask ``(batch_sz,)`` (0/1); inactive
+            padded rows must be 0.
+        adaptive_self_reg: Same as :func:`_jax_pair_batch_blocks`.
+        batch_sz: Static batch size (must match leading axis of index arrays).
+
+    Returns:
+        ``(batch_sz, nd, nd)`` inductance blocks; inactive rows are zero.
+    """
+    Ki = jnp.take(K_all, i_idx, axis=0)
+    Kj = jnp.take(K_all, j_idx, axis=0)
+    pts_i = jnp.take(pts_all, i_idx, axis=0)
+    pts_j = jnp.take(pts_all, j_idx, axis=0)
+    w_i = jnp.take(w_all, i_idx, axis=0)
+    w_j = jnp.take(w_all, j_idx, axis=0)
+    out = _jax_pair_batch_blocks(
+        Ki,
+        Kj,
+        pts_i,
+        pts_j,
+        w_i,
+        w_j,
+        delta_reg,
+        adaptive_self_reg=adaptive_self_reg,
+        use_fp32=use_fp32,
+    )
+    return out * valid_mask[:, None, None]
+
+
+@partial(jax.jit, static_argnames=("adaptive_self_reg", "batch_sz", "use_fp32"))
+def _jax_pair_batches_scan(
+    K_all: jnp.ndarray,
+    pts_all: jnp.ndarray,
+    w_all: jnp.ndarray,
+    I_b: jnp.ndarray,
+    J_b: jnp.ndarray,
+    valid_b: jnp.ndarray,
+    delta_reg: jnp.ndarray,
+    adaptive_self_reg: bool = False,
+    batch_sz: int = 8,
+    use_fp32: bool = False,
+) -> jnp.ndarray:
+    """Evaluate :func:`_jax_pair_batch_blocks_via_take` for each padded batch via ``lax.scan``.
+
+    Args:
+        K_all: Full per-puck stacks on device, shape ``(n_puck, nq, nd, 3)``.
+        pts_all: Quadrature points ``(n_puck, nq, 3)``.
+        w_all: Weights ``(n_puck, nq)``.
+        I_b: Left puck indices per batch, shape ``(n_batches, batch_sz)``.
+        J_b: Right puck indices per batch, same shape.
+        valid_b: Per-row validity mask ``(n_batches, batch_sz)``.
+        delta_reg: Scalar JAX array (same as pair kernel).
+        adaptive_self_reg: Passed through to the pair kernel.
+        batch_sz: Static padded batch size (must match trailing axis of ``I_b``).
+
+    Returns:
+        Blocks of shape ``(n_batches, batch_sz, nd, nd)``.
+    """
+
+    def _body(_carry: None, step: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]):
+        i_idx, j_idx, valid = step
+        blocks = _jax_pair_batch_blocks_via_take(
+            K_all,
+            pts_all,
+            w_all,
+            i_idx,
+            j_idx,
+            delta_reg,
+            valid,
+            adaptive_self_reg=adaptive_self_reg,
+            batch_sz=batch_sz,
+            use_fp32=use_fp32,
+        )
+        return None, blocks
+
+    _, all_blocks = jax.lax.scan(_body, None, (I_b, J_b, valid_b))
+    return all_blocks
 
 
 import jax.scipy as jscp
@@ -78,6 +322,7 @@ __all__ = [
     "shell_solve_linear_pure",
     "shell_solve_prefactored_pure",
     "shell_cholesky_pure",
+    "reset_psc_far_selfcheck_cache",
     "shell_eigenfloor_cholesky_pure",
     "shell_solve_eigenfloor_pure",
     "shell_biot_savart_pure",
@@ -103,6 +348,88 @@ MU0_OVER_4PI = 1e-7
 # small by a factor ``sqrt(3 * pi**2 / 8) ~= 1.924`` (the coincident cell
 # is then overcounted by the square of that ratio, ``3 * pi**2 / 8 ~= 3.70``).
 _SELF_REG_COEFF = 3.0 * np.pi**1.5 / 8.0
+
+
+def _puck_stack_centers_and_r_eff(
+    pts_stack: np.ndarray, w_stack: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Barycenters and ``sqrt(sum w / pi)`` radii, one per stacked puck.
+
+    ``pts_stack`` and ``w_stack`` are ``(n_puck, nq, 3)`` and
+    ``(n_puck, nq)`` respectively.
+    """
+    n = int(pts_stack.shape[0])
+    centers = np.empty((n, 3), dtype=np.float64)
+    r_eff = np.empty((n,), dtype=np.float64)
+    for p in range(n):
+        w = np.asarray(w_stack[p], dtype=np.float64).ravel()
+        sw = float(np.sum(w)) + 1.0e-300
+        centers[p] = (
+            np.sum(w[:, None] * np.asarray(pts_stack[p], dtype=np.float64), axis=0) / sw
+        )
+        r_eff[p] = float(np.sqrt(sw / np.pi))
+    return centers, r_eff
+
+
+def _split_pair_class_timer(
+    i_list: np.ndarray,
+    j_list: np.ndarray,
+    centers: np.ndarray,
+    r_eff: np.ndarray,
+    r_near: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Classify per-pair indices (upper-tri style list) for timing rows.
+
+    Returns ``(ord_self, ord_near, ord_far_t, pair_kind)`` where
+    ``pair_kind[k]`` is ``"self"``, ``"near"``, or ``"far"`` and the
+    three index arrays are disjoint subsets of ``0..n_pairs-1`` with
+    *near* and *far* covering all non-self pairs using the threshold
+    ``d_ij < r_near * (R_i + R_j)`` (near) / ``>=`` (far).
+    """
+    n_pairs = int(i_list.size)
+    kind = np.empty(n_pairs, dtype=np.int8)  # 0 self, 1 near, 2 far
+    for t in range(n_pairs):
+        i = int(i_list[t])
+        j = int(j_list[t])
+        if i == j:
+            kind[t] = 0
+        else:
+            d = float(np.linalg.norm(centers[i] - centers[j]))
+            s = r_eff[i] + r_eff[j] + 1.0e-30
+            kind[t] = 1 if d < float(r_near) * s else 2
+    return (
+        np.nonzero(kind == 0)[0].astype(np.intp),
+        np.nonzero(kind == 1)[0].astype(np.intp),
+        np.nonzero(kind == 2)[0].astype(np.intp),
+        kind,
+    )
+
+
+def _split_symmetric_timer(
+    i_idx_all: np.ndarray,
+    j_idx_all: np.ndarray,
+    centers: np.ndarray,
+    r_eff: np.ndarray,
+    r_near: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Classify ``(i_base, j_replica)`` pairs for timing: self / near / far."""
+    n_pairs = int(i_idx_all.size)
+    kind = np.empty(n_pairs, dtype=np.int8)
+    for t in range(n_pairs):
+        i = int(i_idx_all[t])
+        j = int(j_idx_all[t])
+        if i == j:
+            kind[t] = 0
+        else:
+            d = float(np.linalg.norm(centers[i] - centers[j]))
+            s = r_eff[i] + r_eff[j] + 1.0e-30
+            kind[t] = 1 if d < float(r_near) * s else 2
+    return (
+        np.nonzero(kind == 0)[0].astype(np.intp),
+        np.nonzero(kind == 1)[0].astype(np.intp),
+        np.nonzero(kind == 2)[0].astype(np.intp),
+        kind,
+    )
 
 
 def mu0_over_4pi() -> float:
@@ -183,6 +510,7 @@ def shell_inductance_matrix_blockwise(
     disc_Rts: "list | None" = None,
     disc_centers_axes: "list | None" = None,
     n_radial_disc: int = 32,
+    pair_class_timer: "Optional[Callable[[str, int, float], None]]" = None,
 ) -> np.ndarray:
     """
     Blockwise shell inductance matrix assembly.
@@ -249,6 +577,10 @@ def shell_inductance_matrix_blockwise(
             used by the semi-analytic puck-self routines (disc-disc,
             disc-side corner, and side-side axial quadratures).  Only
             consulted when ``exact_disc_faces=True``.
+        pair_class_timer: When set (e.g. by
+            :class:`PSCBulkArray` with fine timing) ``callable(phase, n_pairs, seconds)``
+            is invoked for each of ``"self"``, ``"near"``, and ``"far"``
+            (non-self) pair batches.
 
     Returns:
         Symmetric ``L`` of shape ``(n_dof_total, n_dof_total)``.
@@ -279,6 +611,7 @@ def shell_inductance_matrix_blockwise(
                 n_dof_total,
                 delta_reg,
                 adaptive_self_reg=adaptive_self_reg,
+                pair_class_timer=pair_class_timer,
             )
         except (ImportError, RuntimeError, ValueError, MemoryError) as exc:
             warnings.warn(
@@ -399,13 +732,23 @@ def _shell_inductance_matrix_symmetric_reduced_jax(
     G: int,
     delta_reg: float,
     adaptive_self_reg: bool,
+    pair_class_timer: "Optional[Callable[[str, int, float], None]]" = None,
 ) -> np.ndarray:
     """Batched-JAX symmetry-reduced ``L_base`` (homogeneous pucks only).
 
-    Processes ``(i_base, j_rep)`` pairs in chunks of :data:`_PAIR_BATCH_SIZE`
-    through :func:`_jax_pair_batch_blocks`, then scatters with
-    ``sigma_j * G`` on the host (same algebra as the NumPy loop).
+    Processes ``(i_base, j_rep)`` pairs in chunks sized by
+    :func:`_effective_pair_batch_size` through :func:`_jax_pair_batch_blocks`,
+    then scatters with ``sigma_j * G`` on the host (same algebra as the NumPy
+    loop).
+
+    The orbit-folded assembly is **not** a plain symmetric sparsity pattern in
+    ``(a, j_rep)``: one cannot drop ``(i_base, j_rep)`` pairs and recover the
+    same ``L_base`` by transposing blocks, because
+    ``L_base[a,b] = |G| sum_{s in orbit(b)} sigma_s L_all[rep(a), s]`` and
+    ``L_base[b,a]`` sums over a different orbit.  Pair batches are fused with
+    :func:`_jax_pair_batches_scan` unless ``SIMSOPT_PSC_PAIR_DISPATCH=loop``.
     """
+    t_ku0 = time.perf_counter() if pair_class_timer is not None else 0.0
     n_all = len(K_per_puck)
     n_base = int(base_reps.size)
     nd_per = int(K_per_puck[int(base_reps[0])].shape[1])
@@ -416,42 +759,380 @@ def _shell_inductance_matrix_symmetric_reduced_jax(
     signs = np.asarray(signs, dtype=np.intp)
     base_reps = np.asarray(base_reps, dtype=np.intp)
 
+    nq_i0 = int(K.shape[1])
+    batch_sz = _effective_pair_batch_size(nq_i0, nq_i0, nd_per)
+    t_pl0 = time.perf_counter() if pair_class_timer is not None else 0.0
     n_pairs = n_base * n_all
     i_idx_all = np.repeat(base_reps, n_all)
     j_idx_all = np.tile(np.arange(n_all, dtype=np.intp), n_base)
     row_base = np.repeat(np.arange(n_base, dtype=np.intp) * nd_per, n_all)
     col_base = base_idx_np[j_idx_all] * np.intp(nd_per)
-    scale = (float(G) * signs[j_idx_all].astype(np.float64))
+    scale = float(G) * signs[j_idx_all].astype(np.float64)
 
     L_base = np.zeros((n_base * nd_per, n_base * nd_per))
     dreg = jnp.asarray(float(delta_reg))
     blocks_all = np.empty((n_pairs, nd_per, nd_per), dtype=np.float64)
 
-    for start in range(0, n_pairs, _PAIR_BATCH_SIZE):
-        stop = min(start + _PAIR_BATCH_SIZE, n_pairs)
-        i_idx = i_idx_all[start:stop]
-        j_idx = j_idx_all[start:stop]
-        Ki = jnp.asarray(K[i_idx])
-        Kj = jnp.asarray(K[j_idx])
-        pts_i = jnp.asarray(pts[i_idx])
-        pts_j = jnp.asarray(pts[j_idx])
-        w_i = jnp.asarray(w[i_idx])
-        w_j = jnp.asarray(w[j_idx])
-        blocks_all[start:stop] = np.asarray(
-            _jax_pair_batch_blocks(
-                Ki,
-                Kj,
-                pts_i,
-                pts_j,
-                w_i,
-                w_j,
-                dreg,
-                adaptive_self_reg=adaptive_self_reg,
-            )
+    K_dev = jnp.asarray(K)
+    pts_dev = jnp.asarray(pts)
+    w_dev = jnp.asarray(w)
+    if pair_class_timer is not None:
+        _pair_class_timer_end(
+            pair_class_timer,
+            "rebuild_L_overhead_kbasis_upload",
+            int(n_all),
+            t_ku0,
         )
+        _pair_class_timer_end(
+            pair_class_timer, "rebuild_L_overhead_pairlist", int(n_pairs), t_pl0
+        )
+    use_loop_dispatch = (
+        os.environ.get("SIMSOPT_PSC_PAIR_DISPATCH", "").lower() == "loop"
+    )
+    # Stage 3 fp32 path: evaluate off-diagonal (i != j) pairs in f32 and
+    # self-pairs in f64.  Self-pairs carry the analytic self-reg prefactor
+    # that can under/overflow fp32 range, so keep them at f64 always.
+    if _psc_fp32_enabled() and _psc_far_pair_enabled() and (not use_loop_dispatch):
+        warnings.warn(
+            "SIMSOPT_PSC_FP32 is ignored when SIMSOPT_PSC_FAR_PAIR=1 on the "
+            "symmetry-reduced scan assembly path; using float64 for all "
+            "pair blocks.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    fp32_enabled = _psc_fp32_enabled() and not (
+        _psc_far_pair_enabled() and (not use_loop_dispatch)
+    )
+    self_pair_mask = i_idx_all == j_idx_all
+    pair_fn = partial(
+        _jax_pair_batch_blocks_via_take,
+        batch_sz=batch_sz,
+        adaptive_self_reg=adaptive_self_reg,
+    )
 
-    for ri, ci, s, blk in zip(row_base, col_base, scale, blocks_all):
-        L_base[ri : ri + nd_per, ci : ci + nd_per] += s * blk
+    def _run_scan(order: np.ndarray, use_fp32: bool) -> np.ndarray:
+        """Dispatch a padded ``lax.scan`` over the subset of pairs in ``order``.
+
+        Returns block tensor of shape ``(len(order), nd_per, nd_per)``.
+        """
+        n_sub = int(order.size)
+        if n_sub == 0:
+            return np.empty((0, nd_per, nd_per), dtype=np.float64)
+        n_batches = (n_sub + batch_sz - 1) // batch_sz
+        pad_len = n_batches * batch_sz
+        i_pad = np.zeros(pad_len, dtype=np.int32)
+        j_pad = np.zeros(pad_len, dtype=np.int32)
+        i_pad[:n_sub] = i_idx_all[order].astype(np.int32, copy=False)
+        j_pad[:n_sub] = j_idx_all[order].astype(np.int32, copy=False)
+        valid_flat = np.zeros(pad_len, dtype=np.float64)
+        valid_flat[:n_sub] = 1.0
+        I_b = i_pad.reshape(n_batches, batch_sz)
+        J_b = j_pad.reshape(n_batches, batch_sz)
+        V_b = valid_flat.reshape(n_batches, batch_sz)
+        all_b = _jax_pair_batches_scan(
+            K_dev,
+            pts_dev,
+            w_dev,
+            jnp.asarray(I_b),
+            jnp.asarray(J_b),
+            jnp.asarray(V_b),
+            dreg,
+            adaptive_self_reg=adaptive_self_reg,
+            batch_sz=batch_sz,
+            use_fp32=use_fp32,
+        )
+        return np.asarray(all_b.reshape(-1, nd_per, nd_per)[:n_sub])
+
+    if use_loop_dispatch:
+        for start in range(0, n_pairs, batch_sz):
+            stop = min(start + batch_sz, n_pairs)
+            b_active = stop - start
+            i_idx_pad = np.zeros(batch_sz, dtype=np.int32)
+            j_idx_pad = np.zeros(batch_sz, dtype=np.int32)
+            i_idx_pad[:b_active] = i_idx_all[start:stop].astype(np.int32, copy=False)
+            j_idx_pad[:b_active] = j_idx_all[start:stop].astype(np.int32, copy=False)
+            valid = np.zeros(batch_sz, dtype=np.float64)
+            valid[:b_active] = 1.0
+            blocks_out = pair_fn(
+                K_dev,
+                pts_dev,
+                w_dev,
+                jnp.asarray(i_idx_pad),
+                jnp.asarray(j_idx_pad),
+                dreg,
+                jnp.asarray(valid),
+            )
+            blocks_all[start:stop] = np.asarray(blocks_out[:b_active])
+    elif fp32_enabled:
+        nonself_idx = np.nonzero(~self_pair_mask)[0]
+        self_idx = np.nonzero(self_pair_mask)[0]
+        blocks_nonself = _run_scan(nonself_idx, use_fp32=True)
+        # One-shot fp32 vs f64 self-check on the first non-self batch:
+        # only does work the first time a process enters this path.
+        global _PSC_FP32_SELFCHECK_DONE
+        if not _PSC_FP32_SELFCHECK_DONE and nonself_idx.size > 0:
+            check_n = int(min(batch_sz, nonself_idx.size))
+            check = nonself_idx[:check_n]
+            ref_f64 = _run_scan(check, use_fp32=False)
+            f32_slice = blocks_nonself[:check_n]
+            denom = float(np.max(np.abs(ref_f64))) + 1e-300
+            rel = float(np.max(np.abs(f32_slice - ref_f64))) / denom
+            if rel > 2e-6:
+                warnings.warn(
+                    "SIMSOPT_PSC_FP32 first-batch self-check failed: "
+                    f"rel_err={rel:.3e} > 2e-6; reverting to f64 for this "
+                    "rebuild.",
+                    RuntimeWarning,
+                )
+                blocks_nonself = (
+                    ref_f64
+                    if nonself_idx.size == check_n
+                    else (_run_scan(nonself_idx, use_fp32=False))
+                )
+            _PSC_FP32_SELFCHECK_DONE = True
+        blocks_self = _run_scan(self_idx, use_fp32=False)
+        if nonself_idx.size:
+            blocks_all[nonself_idx] = blocks_nonself
+        if self_idx.size:
+            blocks_all[self_idx] = blocks_self
+    else:
+        if (not _psc_far_pair_enabled()) and (not use_loop_dispatch):
+            if pair_class_timer is None:
+                all_order = np.arange(n_pairs, dtype=np.intp)
+                blocks_all[:, :, :] = _run_scan(all_order, use_fp32=False)
+            else:
+                centers_t, r_eff_t = _puck_stack_centers_and_r_eff(pts, w)
+                rnt = float(os.environ.get("SIMSOPT_PSC_R_NEAR", "2.0"))
+                os0, on0, of0, _ = _split_symmetric_timer(
+                    i_idx_all, j_idx_all, centers_t, r_eff_t, rnt
+                )
+                for tag, oa in [
+                    ("rebuild_L_assembly_self", np.asarray(os0, dtype=np.intp)),
+                    ("rebuild_L_assembly_near", np.asarray(on0, dtype=np.intp)),
+                    ("rebuild_L_assembly_far", np.asarray(of0, dtype=np.intp)),
+                ]:
+                    t0 = time.perf_counter()
+                    if oa.size:
+                        blocks_all[oa, :, :] = _run_scan(oa, use_fp32=False)
+                    pair_class_timer(tag, int(oa.size), time.perf_counter() - t0)
+        else:
+            from . import multipole_inductance as _mps
+
+            centers_sr, r_eff_sr = _puck_stack_centers_and_r_eff(pts, w)
+            r_near = float(os.environ.get("SIMSOPT_PSC_R_NEAR", "2.0"))
+            ord_s, ord_n, ord_f, _ = _split_symmetric_timer(
+                i_idx_all, j_idx_all, centers_sr, r_eff_sr, r_near
+            )
+            use_mp = bool(_psc_far_pair_enabled() and (not use_loop_dispatch))
+            far_mp_requested = use_mp
+            r_far = 4.0
+            r_ok = True
+            t_rf0 = time.perf_counter() if pair_class_timer is not None else 0.0
+            if use_mp:
+                pidx2: List[Tuple[int, int]] = [
+                    (int(i_idx_all[k]), int(j_idx_all[k]))
+                    for k in range(n_pairs)
+                    if int(i_idx_all[k]) < int(j_idx_all[k])
+                ]
+                r_env2 = os.environ.get("SIMSOPT_PSC_R_FAR", "").strip()
+                if r_env2 != "":
+                    r_far = float(r_env2)
+                else:
+                    r_far, r_ok = _mps.calibrate_r_far(
+                        K,
+                        pts,
+                        w,
+                        pidx2,
+                        tolerance=1.0e-5,
+                        delta_reg=float(delta_reg),
+                        adaptive_self_reg=adaptive_self_reg,
+                    )
+                if not r_ok:
+                    use_mp = False
+            if pair_class_timer is not None:
+                _pair_class_timer_end(
+                    pair_class_timer,
+                    "rebuild_L_overhead_rfar_calibration",
+                    1 if far_mp_requested else 0,
+                    t_rf0,
+                )
+            moments_mode = os.environ.get("SIMSOPT_PSC_MOMENTS", "grid")
+            sck = _far_selfcheck_cache_key(
+                float(r_far),
+                float(delta_reg),
+                bool(adaptive_self_reg),
+                moments_mode,
+                int(nd_per),
+                int(n_all),
+            )
+            if (
+                use_mp
+                and sck in _PSC_FAR_SELFCHECK_OK
+                and (not _PSC_FAR_SELFCHECK_OK[sck])
+            ):
+                use_mp = False
+            order_mps: List[int] = []
+            if use_mp:
+                for k in range(n_pairs):
+                    i, j = int(i_idx_all[k]), int(j_idx_all[k])
+                    if i == j:
+                        continue
+                    d = float(np.linalg.norm(centers_sr[i] - centers_sr[j]))
+                    s = r_eff_sr[i] + r_eff_sr[j] + 1.0e-30
+                    if d >= r_far * s:
+                        order_mps.append(int(k))
+            set_mps = set(order_mps)
+            order_flsr = [k for k in range(n_pairs) if k not in set_mps]
+            dlt_s = np.asarray(pts, dtype=np.float64) - centers_sr[:, None, :]
+            mp_fp32_2 = os.environ.get("SIMSOPT_PSC_FAR_FP32", "0") == "1"
+            M = D = Q = None
+            if use_mp and order_mps:
+                t_m0 = time.perf_counter() if pair_class_timer is not None else 0.0
+                M, D, Q = _mps.jax_puck_moments(
+                    jnp.asarray(K),
+                    jnp.asarray(dlt_s),
+                    jnp.asarray(w),
+                    with_quadrupole=True,
+                    use_fp32=False,
+                )
+                M = np.asarray(M)
+                D = np.asarray(D)
+                Q = np.asarray(Q)
+                if pair_class_timer is not None:
+                    _pair_class_timer_end(
+                        pair_class_timer,
+                        "rebuild_L_overhead_moments_assembly",
+                        int(n_all),
+                        t_m0,
+                    )
+            need_sc = (
+                use_mp
+                and order_mps
+                and os.environ.get("SIMSOPT_PSC_FAR_CHECK", "1") == "1"
+            )
+            if need_sc and sck in _PSC_FAR_SELFCHECK_OK and _PSC_FAR_SELFCHECK_OK[sck]:
+                need_sc = False
+            if need_sc:
+                t_sc0 = time.perf_counter() if pair_class_timer is not None else 0.0
+                k0 = int(order_mps[0])
+                full0 = _run_scan(np.array([k0], dtype=np.intp), use_fp32=False)[0]
+                i0, j0 = int(i_idx_all[k0]), int(j_idx_all[k0])
+                app0 = np.asarray(
+                    _mps.jax_far_pair_block(
+                        jnp.asarray(M[i0]),
+                        jnp.asarray(M[j0]),
+                        jnp.asarray(D[i0]),
+                        jnp.asarray(D[j0]),
+                        jnp.asarray(Q[i0]),
+                        jnp.asarray(Q[j0]),
+                        jnp.asarray(centers_sr[j0] - centers_sr[i0], dtype=np.float64),
+                        with_quadrupole=True,
+                        use_fp32=mp_fp32_2,
+                    )
+                )
+                den = max(1.0e-30, float(np.max(np.abs(full0))))
+                rel = float(np.max(np.abs(full0 - app0)) / den)
+                if rel > 5.0e-3:
+                    warnings.warn(
+                        f"SIMSOPT_PSC_FAR_PAIR first-pair self-check rel_err={rel:.3e}; "
+                        "disabling multipole for this process (clear with "
+                        "reset_psc_far_selfcheck_cache or adjust R_far).",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    _PSC_FAR_SELFCHECK_OK[sck] = False
+                    use_mp = False
+                    order_mps = []
+                    set_mps = set()
+                else:
+                    _PSC_FAR_SELFCHECK_OK[sck] = True
+                if pair_class_timer is not None:
+                    _pair_class_timer_end(
+                        pair_class_timer,
+                        "rebuild_L_overhead_far_selfcheck",
+                        1,
+                        t_sc0,
+                    )
+                if not use_mp:
+                    order_mps = []
+                    set_mps = set()
+                    order_flsr = [k for k in range(n_pairs) if k not in set_mps]
+                    M = D = Q = None
+            set_mps = set(order_mps)
+            order_flsr = [k for k in range(n_pairs) if k not in set_mps]
+            of_dense = np.array([k for k in ord_f if k not in set_mps], dtype=np.intp)
+
+            def _mpsc(k: int) -> None:
+                if M is None or Q is None:
+                    return
+                bl = np.asarray(
+                    _mps.jax_far_pair_block(
+                        jnp.asarray(M[int(i_idx_all[k])]),
+                        jnp.asarray(M[int(j_idx_all[k])]),
+                        jnp.asarray(D[int(i_idx_all[k])]),
+                        jnp.asarray(D[int(j_idx_all[k])]),
+                        jnp.asarray(Q[int(i_idx_all[k])]),
+                        jnp.asarray(Q[int(j_idx_all[k])]),
+                        jnp.asarray(
+                            centers_sr[int(j_idx_all[k])]
+                            - centers_sr[int(i_idx_all[k])],
+                            dtype=np.float64,
+                        ),
+                        with_quadrupole=True,
+                        use_fp32=mp_fp32_2,
+                    )
+                )
+                blocks_all[k, :, :] = bl
+
+            if pair_class_timer is not None:
+                for tag, oarr in [
+                    ("rebuild_L_assembly_self", np.asarray(ord_s, dtype=np.intp)),
+                    ("rebuild_L_assembly_near", np.asarray(ord_n, dtype=np.intp)),
+                    ("rebuild_L_assembly_far", of_dense),
+                ]:
+                    t0 = time.perf_counter()
+                    if oarr.size:
+                        bbbo = _run_scan(oarr, use_fp32=False)
+                        blocks_all[oarr, :, :] = bbbo
+                    pair_class_timer(tag, int(oarr.size), time.perf_counter() - t0)
+                if use_mp and order_mps:
+                    t0m = time.perf_counter()
+                    for kk in order_mps:
+                        _mpsc(int(kk))
+                    pair_class_timer(
+                        "rebuild_L_assembly_multipole",
+                        len(order_mps),
+                        time.perf_counter() - t0m,
+                    )
+            else:
+                o_fl2 = np.asarray(order_flsr, dtype=np.intp)
+                if o_fl2.size:
+                    blocks_all[o_fl2, :, :] = _run_scan(o_fl2, use_fp32=False)
+                if use_mp and order_mps and M is not None:
+                    for kk in order_mps:
+                        _mpsc(int(kk))
+
+    t_scat0 = time.perf_counter() if pair_class_timer is not None else 0.0
+    scatter_mode = os.environ.get(
+        "SIMSOPT_SYM_REDUCED_LBASE_SCATTER", "vectorized"
+    ).lower()
+    if scatter_mode == "legacy":
+        for ri, ci, s, blk in zip(row_base, col_base, scale, blocks_all):
+            L_base[ri : ri + nd_per, ci : ci + nd_per] += s * blk
+    else:
+        dof_i = np.arange(nd_per, dtype=np.intp)
+        r_blk = row_base[:, None, None] + dof_i[None, :, None]
+        c_blk = col_base[:, None, None] + dof_i[None, None, :]
+        r_idx, c_idx = np.broadcast_arrays(r_blk, c_blk)
+        vals = (scale[:, None, None] * blocks_all).ravel()
+        np.add.at(L_base, (r_idx.ravel(), c_idx.ravel()), vals)
+    if pair_class_timer is not None:
+        _pair_class_timer_end(
+            pair_class_timer,
+            "rebuild_L_overhead_symmetric_scatter",
+            int(n_pairs),
+            t_scat0,
+        )
     return L_base
 
 
@@ -463,6 +1144,7 @@ def shell_inductance_matrix_symmetric_reduced(
     delta_reg: float = 1e-8,
     adaptive_self_reg: bool = False,
     replica_signs: "list | np.ndarray | None" = None,
+    pair_class_timer: "Optional[Callable[[str, int, float], None]]" = None,
 ) -> np.ndarray:
     """
     Symmetry-reduced shell inductance matrix under translation/rotation invariance.
@@ -516,7 +1198,7 @@ def shell_inductance_matrix_symmetric_reduced(
         return np.zeros((0, 0))
     if base_indices.size != n_all:
         raise ValueError(
-            "base_indices must have length n_all = " f"{n_all}; got {base_indices.size}"
+            f"base_indices must have length n_all = {n_all}; got {base_indices.size}"
         )
     n_base = int(base_indices.max()) + 1
     # Uniform orbit-size check (required for the |G| prefactor derivation).
@@ -534,8 +1216,7 @@ def shell_inductance_matrix_symmetric_reduced(
         signs = np.asarray(replica_signs, dtype=int)
         if signs.size != n_all:
             raise ValueError(
-                "replica_signs must have length n_all = "
-                f"{n_all}; got {signs.size}"
+                f"replica_signs must have length n_all = {n_all}; got {signs.size}"
             )
         if not np.all(np.isin(signs, (-1, 1))):
             raise ValueError(
@@ -574,6 +1255,7 @@ def shell_inductance_matrix_symmetric_reduced(
             G,
             float(delta_reg),
             adaptive_self_reg,
+            pair_class_timer=pair_class_timer,
         )
     else:
         L_base = np.zeros((n_base * nd_per, n_base * nd_per))
@@ -623,7 +1305,8 @@ def _shell_inductance_matrix_blockwise_batched(
 ) -> np.ndarray:
     """
     Vectorized assembly when every puck has identical ``(nq, nd, 3)`` for ``K``.
-    Processes upper-triangular puck pairs in batches of ``_PAIR_BATCH_SIZE``.
+    Processes upper-triangular puck pairs in batches sized by
+    :func:`_effective_pair_batch_size`.
 
     Args:
         K_per_puck: List of ``(nq, nd, 3)`` arrays (identical shape required).
@@ -649,9 +1332,10 @@ def _shell_inductance_matrix_blockwise_batched(
     ]
     L = np.zeros((n_dof_total, n_dof_total))
     n_pairs = len(pairs)
+    batch_sz = _effective_pair_batch_size(int(_nq), int(_nq), int(nd))
 
-    for start in range(0, n_pairs, _PAIR_BATCH_SIZE):
-        batch = pairs[start : start + _PAIR_BATCH_SIZE]
+    for start in range(0, n_pairs, batch_sz):
+        batch = pairs[start : start + batch_sz]
         bsz = len(batch)
         i_idx = np.array([p[0] for p in batch], dtype=np.intp)
         j_idx = np.array([p[1] for p in batch], dtype=np.intp)
@@ -720,6 +1404,50 @@ def shell_inductance_matrix_jax_blockwise(
     )
 
 
+def _run_scan_blockwise(
+    i_list: np.ndarray,
+    j_list: np.ndarray,
+    order: np.ndarray,
+    K_dev: jnp.ndarray,
+    pts_dev: jnp.ndarray,
+    w_dev: jnp.ndarray,
+    dreg: jnp.ndarray,
+    batch_sz: int,
+    adaptive_self_reg: bool,
+) -> np.ndarray:
+    """Return ``(n_sub, nd, nd)`` tensor blocks for a subset of pair list indices."""
+    n_sub = int(order.size)
+    if n_sub == 0:
+        nd0 = int(K_dev.shape[2])
+        return np.empty((0, nd0, nd0), dtype=np.float64)
+    nd = int(K_dev.shape[2])
+    i_sel = i_list[order].astype(np.int32, copy=False)
+    j_sel = j_list[order].astype(np.int32, copy=False)
+    n_batches = (n_sub + batch_sz - 1) // batch_sz
+    pad_len = n_batches * batch_sz
+    i_pad = np.zeros(pad_len, dtype=np.int32)
+    j_pad = np.zeros(pad_len, dtype=np.int32)
+    i_pad[:n_sub] = i_sel
+    j_pad[:n_sub] = j_sel
+    valid_flat = np.zeros(pad_len, dtype=np.float64)
+    valid_flat[:n_sub] = 1.0
+    I_b = i_pad.reshape(n_batches, batch_sz)
+    J_b = j_pad.reshape(n_batches, batch_sz)
+    V_b = valid_flat.reshape(n_batches, batch_sz)
+    all_b = _jax_pair_batches_scan(
+        K_dev,
+        pts_dev,
+        w_dev,
+        jnp.asarray(I_b),
+        jnp.asarray(J_b),
+        jnp.asarray(V_b),
+        dreg,
+        adaptive_self_reg=adaptive_self_reg,
+        batch_sz=batch_sz,
+    )
+    return np.asarray(all_b.reshape(-1, nd, nd)[:n_sub])
+
+
 def _shell_inductance_matrix_blockwise_batched_jax(
     K_per_puck: List[np.ndarray],
     pts_per_puck: List[np.ndarray],
@@ -728,17 +1456,24 @@ def _shell_inductance_matrix_blockwise_batched_jax(
     n_dof_total: int,
     delta_reg: float = 1e-8,
     adaptive_self_reg: bool = False,
+    pair_class_timer: "Optional[Callable[[str, int, float], None]]" = None,
 ) -> np.ndarray:
     """Same as :func:`_shell_inductance_matrix_blockwise_batched` with XLA-accelerated batches.
 
+    When :envvar:`SIMSOPT_PSC_FAR_PAIR` is set, a subset of well-separated
+    off-diagonal blocks use the Cartesian multipole kernel from
+    :mod:`simsopt.field.multipole_inductance` (see the PSC speedup plan).
+
     Args:
         adaptive_self_reg: See :func:`shell_inductance_matrix_blockwise`.
+        pair_class_timer: Optional callback ``(phase, n_pairs, wall_seconds)``.
     """
+    t_ku0 = time.perf_counter() if pair_class_timer is not None else 0.0
     n_pucks = len(K_per_puck)
     K = np.stack(K_per_puck, axis=0)
     pts = np.stack(pts_per_puck, axis=0)
     w = np.stack(weights_per_puck, axis=0)
-    nd = K.shape[2]
+    nq_i0, nd = int(K.shape[1]), int(K.shape[2])
 
     pairs: List[Tuple[int, int]] = [
         (i, j) for i in range(n_pucks) for j in range(i, n_pucks)
@@ -747,39 +1482,387 @@ def _shell_inductance_matrix_blockwise_batched_jax(
     n_pairs = len(pairs)
 
     dreg = jnp.asarray(float(delta_reg))
-
-    for start in range(0, n_pairs, _PAIR_BATCH_SIZE):
-        batch = pairs[start : start + _PAIR_BATCH_SIZE]
-        bsz = len(batch)
-        i_idx = np.array([p[0] for p in batch], dtype=np.intp)
-        j_idx = np.array([p[1] for p in batch], dtype=np.intp)
-        Ki = jnp.asarray(K[i_idx])
-        Kj = jnp.asarray(K[j_idx])
-        pts_i = jnp.asarray(pts[i_idx])
-        pts_j = jnp.asarray(pts[j_idx])
-        w_i = jnp.asarray(w[i_idx])
-        w_j = jnp.asarray(w[j_idx])
-        blocks = np.asarray(
-            _jax_pair_batch_blocks(
-                Ki,
-                Kj,
-                pts_i,
-                pts_j,
-                w_i,
-                w_j,
-                dreg,
-                adaptive_self_reg=adaptive_self_reg,
-            ),
+    batch_sz = _effective_pair_batch_size(nq_i0, nq_i0, nd)
+    K_dev = jnp.asarray(K)
+    pts_dev = jnp.asarray(pts)
+    w_dev = jnp.asarray(w)
+    i_list = np.array([p[0] for p in pairs], dtype=np.int32)
+    j_list = np.array([p[1] for p in pairs], dtype=np.int32)
+    if pair_class_timer is not None:
+        _pair_class_timer_end(
+            pair_class_timer,
+            "rebuild_L_overhead_kbasis_upload",
+            int(n_pucks),
+            t_ku0,
         )
-        for bi in range(bsz):
-            i, j = int(i_idx[bi]), int(j_idx[bi])
+    t_pl0 = time.perf_counter() if pair_class_timer is not None else 0.0
+    use_loop_dispatch = (
+        os.environ.get("SIMSOPT_PSC_PAIR_DISPATCH", "").lower() == "loop"
+    )
+    if use_loop_dispatch and _psc_far_pair_enabled():
+        warnings.warn(
+            "SIMSOPT_PSC_FAR_PAIR is ignored on the loop dispatch path; use "
+            "the default pair scan or set SIMSOPT_PSC_PAIR_DISPATCH=''.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    centers, r_eff = _puck_stack_centers_and_r_eff(pts, w)
+    r_near = float(os.environ.get("SIMSOPT_PSC_R_NEAR", "2.0"))
+    ord_self, ord_near, ord_far_t, _ = _split_pair_class_timer(
+        i_list, j_list, centers, r_eff, r_near
+    )
+    if pair_class_timer is not None:
+        _pair_class_timer_end(
+            pair_class_timer, "rebuild_L_overhead_pairlist", int(n_pairs), t_pl0
+        )
+
+    use_mp = bool(_psc_far_pair_enabled() and (not use_loop_dispatch))
+    far_mp_requested = use_mp
+    r_far = 4.0
+    r_ok = True
+    t_rf0 = time.perf_counter() if pair_class_timer is not None else 0.0
+    if use_mp:
+        from . import multipole_inductance
+
+        pidx: List[Tuple[int, int]] = [
+            (int(i_list[k]), int(j_list[k]))
+            for k in range(n_pairs)
+            if int(i_list[k]) < int(j_list[k])
+        ]
+        r_env = os.environ.get("SIMSOPT_PSC_R_FAR", "").strip()
+        if r_env != "":
+            r_far = float(r_env)
+        else:
+            r_far, r_ok = multipole_inductance.calibrate_r_far(
+                K,
+                pts,
+                w,
+                pidx,
+                tolerance=1.0e-5,
+                delta_reg=float(delta_reg),
+                adaptive_self_reg=adaptive_self_reg,
+            )
+        if not r_ok:
+            use_mp = False
+            warnings.warn(
+                "SIMSOPT_PSC_FAR_PAIR: R_far auto-calibration failed; "
+                "using the full pair kernel (no far multipole).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    if pair_class_timer is not None:
+        _pair_class_timer_end(
+            pair_class_timer,
+            "rebuild_L_overhead_rfar_calibration",
+            1 if far_mp_requested else 0,
+            t_rf0,
+        )
+    moments_mode = os.environ.get("SIMSOPT_PSC_MOMENTS", "grid")
+    sck = _far_selfcheck_cache_key(
+        float(r_far),
+        float(delta_reg),
+        bool(adaptive_self_reg),
+        moments_mode,
+        int(nd),
+        int(n_pucks),
+    )
+    if use_mp and sck in _PSC_FAR_SELFCHECK_OK and (not _PSC_FAR_SELFCHECK_OK[sck]):
+        use_mp = False
+
+    order_mp: List[int] = []
+    if use_mp:
+        for k in range(n_pairs):
+            i, j = int(i_list[k]), int(j_list[k])
+            if i == j:
+                continue
+            d = float(np.linalg.norm(centers[i] - centers[j]))
+            s = r_eff[i] + r_eff[j] + 1.0e-30
+            if d >= r_far * s:
+                order_mp.append(int(k))
+    set_mp = set(order_mp)
+    order_fl = [k for k in range(n_pairs) if k not in set_mp]
+    order_f_dense = np.array([k for k in ord_far_t if k not in set_mp], dtype=np.intp)
+    dlt = np.asarray(pts, dtype=np.float64) - centers[:, None, :]
+    mp_fp32 = os.environ.get("SIMSOPT_PSC_FAR_FP32", "0") == "1"
+    M = D = Q = None
+    if use_mp and order_mp:
+        t_m0 = time.perf_counter() if pair_class_timer is not None else 0.0
+        from . import multipole_inductance
+
+        # "fourier" here selects :func:`puck_moments_fourier_numpy` for host-side
+        # self-checks (tests); the batched path matches :func:`jax_puck_moments`.
+        M, D, Q = multipole_inductance.jax_puck_moments(
+            jnp.asarray(K),
+            jnp.asarray(dlt),
+            jnp.asarray(w),
+            with_quadrupole=True,
+            use_fp32=False,
+        )
+        M = np.asarray(M)
+        D = np.asarray(D)
+        Q = np.asarray(Q)
+        if pair_class_timer is not None:
+            _pair_class_timer_end(
+                pair_class_timer,
+                "rebuild_L_overhead_moments_assembly",
+                int(n_pucks),
+                t_m0,
+            )
+
+    need_sc = (
+        use_mp and order_mp and os.environ.get("SIMSOPT_PSC_FAR_CHECK", "1") == "1"
+    )
+    if need_sc and sck in _PSC_FAR_SELFCHECK_OK and _PSC_FAR_SELFCHECK_OK[sck]:
+        need_sc = False
+    if need_sc:
+        t_sc0 = time.perf_counter() if pair_class_timer is not None else 0.0
+        from . import multipole_inductance as _mp2
+
+        k0 = int(order_mp[0])
+        i0, j0 = int(i_list[k0]), int(j_list[k0])
+        full0 = _run_scan_blockwise(
+            i_list,
+            j_list,
+            np.array([k0], dtype=np.intp),
+            K_dev,
+            pts_dev,
+            w_dev,
+            dreg,
+            batch_sz,
+            adaptive_self_reg,
+        )[0]
+        app0 = np.asarray(
+            _mp2.jax_far_pair_block(
+                jnp.asarray(M[i0]),
+                jnp.asarray(M[j0]),
+                jnp.asarray(D[i0]),
+                jnp.asarray(D[j0]),
+                jnp.asarray(Q[i0]),
+                jnp.asarray(Q[j0]),
+                jnp.asarray(centers[j0] - centers[i0], dtype=np.float64),
+                with_quadrupole=True,
+                use_fp32=mp_fp32,
+            )
+        )
+        den = max(1.0e-30, float(np.max(np.abs(full0))))
+        rel = float(np.max(np.abs(full0 - app0)) / den)
+        if rel > 5.0e-3:
+            warnings.warn(
+                f"SIMSOPT_PSC_FAR_PAIR first-pair self-check rel_err={rel:.3e}; "
+                "disabling multipole for this process (clear with "
+                "reset_psc_far_selfcheck_cache or adjust R_far).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            _PSC_FAR_SELFCHECK_OK[sck] = False
+            use_mp = False
+            order_mp = []
+            set_mp = set()
+        else:
+            _PSC_FAR_SELFCHECK_OK[sck] = True
+        if pair_class_timer is not None:
+            _pair_class_timer_end(
+                pair_class_timer,
+                "rebuild_L_overhead_far_selfcheck",
+                1,
+                t_sc0,
+            )
+        if not use_mp:
+            order_fl = [k for k in range(n_pairs) if k not in set(order_mp)]
+            order_f_dense = np.array(
+                [k for k in ord_far_t if k not in set(order_mp)], dtype=np.intp
+            )
+            M = D = Q = None
+
+    def _scatter_blocks(order: np.ndarray, blks: np.ndarray) -> None:
+        for bi, k in enumerate(order.tolist()):
+            i, j = int(i_list[k]), int(j_list[k])
             d0_i = dof_offsets[i]
             d0_j = dof_offsets[j]
-            block = blocks[bi]
+            block = blks[bi]
             L[d0_i : d0_i + nd, d0_j : d0_j + nd] = block
             if i != j:
                 L[d0_j : d0_j + nd, d0_i : d0_i + nd] = block.T
+
+    def _mp_scatter() -> None:
+        if not (
+            use_mp and order_mp and M is not None and D is not None and Q is not None
+        ):
+            return
+        from . import multipole_inductance as _mp3
+
+        for k in order_mp:
+            i, j = int(i_list[k]), int(j_list[k])
+            d0_i = dof_offsets[i]
+            d0_j = dof_offsets[j]
+            blk = np.asarray(
+                _mp3.jax_far_pair_block(
+                    jnp.asarray(M[i]),
+                    jnp.asarray(M[j]),
+                    jnp.asarray(D[i]),
+                    jnp.asarray(D[j]),
+                    jnp.asarray(Q[i]),
+                    jnp.asarray(Q[j]),
+                    jnp.asarray(centers[j] - centers[i], dtype=np.float64),
+                    with_quadrupole=True,
+                    use_fp32=mp_fp32,
+                )
+            )
+            L[d0_i : d0_i + nd, d0_j : d0_j + nd] = blk
+            if i != j:
+                L[d0_j : d0_j + nd, d0_i : d0_i + nd] = blk.T
+
+    if use_loop_dispatch:
+        pair_fn = partial(
+            _jax_pair_batch_blocks_via_take,
+            batch_sz=batch_sz,
+            adaptive_self_reg=adaptive_self_reg,
+        )
+        for start in range(0, n_pairs, batch_sz):
+            batch = pairs[start : start + batch_sz]
+            bsz = len(batch)
+            i_idx = np.array([p[0] for p in batch], dtype=np.int32)
+            j_idx = np.array([p[1] for p in batch], dtype=np.int32)
+            i_idx_pad = np.zeros(batch_sz, dtype=np.int32)
+            j_idx_pad = np.zeros(batch_sz, dtype=np.int32)
+            i_idx_pad[:bsz] = i_idx
+            j_idx_pad[:bsz] = j_idx
+            valid = np.zeros(batch_sz, dtype=np.float64)
+            valid[:bsz] = 1.0
+            blocks = np.asarray(
+                pair_fn(
+                    K_dev,
+                    pts_dev,
+                    w_dev,
+                    jnp.asarray(i_idx_pad),
+                    jnp.asarray(j_idx_pad),
+                    dreg,
+                    jnp.asarray(valid),
+                ),
+            )
+            for bi in range(bsz):
+                i, j = int(i_idx[bi]), int(j_idx[bi])
+                d0_i = dof_offsets[i]
+                d0_j = dof_offsets[j]
+                block = blocks[bi]
+                L[d0_i : d0_i + nd, d0_j : d0_j + nd] = block
+                if i != j:
+                    L[d0_j : d0_j + nd, d0_i : d0_i + nd] = block.T
+        return L
+
+    if pair_class_timer is not None:
+        for tag, oarr in [
+            ("rebuild_L_assembly_self", np.asarray(ord_self, dtype=np.intp)),
+            ("rebuild_L_assembly_near", np.asarray(ord_near, dtype=np.intp)),
+            ("rebuild_L_assembly_far", order_f_dense),
+        ]:
+            t0 = time.perf_counter()
+            if int(oarr.size) > 0:
+                bbb = _run_scan_blockwise(
+                    i_list,
+                    j_list,
+                    oarr,
+                    K_dev,
+                    pts_dev,
+                    w_dev,
+                    dreg,
+                    batch_sz,
+                    adaptive_self_reg,
+                )
+                _scatter_blocks(oarr, bbb)
+            pair_class_timer(tag, int(oarr.size), time.perf_counter() - t0)
+        if use_mp and order_mp:
+            t0m = time.perf_counter()
+            _mp_scatter()
+            pair_class_timer(
+                "rebuild_L_assembly_multipole", len(order_mp), time.perf_counter() - t0m
+            )
+        return L
+
+    o_fl = np.asarray(order_fl, dtype=np.intp)
+    if o_fl.size:
+        b_fl = _run_scan_blockwise(
+            i_list,
+            j_list,
+            o_fl,
+            K_dev,
+            pts_dev,
+            w_dev,
+            dreg,
+            batch_sz,
+            adaptive_self_reg,
+        )
+        _scatter_blocks(o_fl, b_fl)
+    _mp_scatter()
     return L
+
+
+def _psc_big_chol_enabled() -> bool:
+    """Return ``True`` when ``SIMSOPT_PSC_BIG_CHOL=1`` is set."""
+    return os.environ.get("SIMSOPT_PSC_BIG_CHOL", "0") == "1"
+
+
+def _psc_big_chol_threshold() -> int:
+    """Dim threshold (rows of ``L_c``) for switching to the iterative path."""
+    try:
+        return int(os.environ.get("SIMSOPT_PSC_CHOL_THRESHOLD", "2000"))
+    except ValueError:
+        return 2000
+
+
+def _null_space_projection_iterative(
+    L: np.ndarray,
+    threshold: float,
+    *,
+    k_frac: float = 0.98,
+) -> np.ndarray:
+    """Iterative (Lanczos) null-space projection for large PSD ``L``.
+
+    Uses :func:`scipy.sparse.linalg.eigsh` to recover the top
+    ``k = int(k_frac * n)`` eigenpairs of ``L`` (largest algebraic,
+    symmetric positive semi-definite).  Eigenvectors whose eigenvalue is
+    below ``threshold * max(lambda)`` are discarded, matching the strict
+    behaviour of :func:`null_space_projection_matrix`.
+
+    Guarantees that ``k`` exceeds the expected number of non-null modes
+    by at least 10% of the dimension; for ``L_c`` produced by the
+    symmetry-reduced PSC path the null space is typically under a few
+    percent of ``n`` so this is safe.  Falls back to the dense
+    ``numpy.linalg.eigh`` path when SciPy is unavailable or when the
+    Lanczos iteration fails to converge.
+
+    Args:
+        L: Symmetric matrix ``(n, n)``.
+        threshold: Relative eigenvalue cutoff (same semantics as
+            :func:`null_space_projection_matrix`).
+        k_frac: Fraction of the spectrum to request from ``eigsh`` (must
+            be strictly less than 1).
+
+    Returns:
+        ``Q`` of shape ``(n, n_reduced)`` with ``n_reduced <= n``.
+    """
+    L = np.asarray(L)
+    n = int(L.shape[0])
+    if n <= 2:
+        return null_space_projection_matrix(L, threshold=threshold)
+    try:
+        from scipy.sparse.linalg import eigsh  # type: ignore
+    except Exception:  # noqa: BLE001
+        return null_space_projection_matrix(L, threshold=threshold)
+    k = max(1, min(n - 1, int(k_frac * n)))
+    try:
+        lam, V = eigsh(L, k=k, which="LA")
+    except Exception:  # noqa: BLE001
+        return null_space_projection_matrix(L, threshold=threshold)
+    order = np.argsort(-lam)
+    lam = lam[order]
+    V = V[:, order]
+    max_lam = float(np.max(np.abs(lam)))
+    if max_lam < 1e-30:
+        return V
+    good = lam > threshold * max_lam
+    return V[:, good]
 
 
 def null_space_projection_matrix(
@@ -799,6 +1882,15 @@ def null_space_projection_matrix(
     removed one null mode and left the remaining patch-local constant modes
     (approximately 3 per puck) unhandled.
 
+    **Stage 5 (big-chol)**: when ``SIMSOPT_PSC_BIG_CHOL=1`` and
+    ``L.shape[0] >= SIMSOPT_PSC_CHOL_THRESHOLD`` (default ``2000``), the
+    dense :func:`numpy.linalg.eigh` is replaced with a Lanczos
+    :func:`scipy.sparse.linalg.eigsh` that recovers the top ~90% of the
+    spectrum.  For the symmetry-reduced PSC path the null space is a
+    small fraction of the dimension so this returns an identical ``Q``
+    (up to sign) while scaling like ``O(n^2 * k)`` instead of
+    ``O(n^3)``.
+
     Args:
         L: Symmetric matrix of shape ``(n_dof, n_dof)``.
         threshold: Relative eigenvalue cutoff.
@@ -807,6 +1899,8 @@ def null_space_projection_matrix(
         ``Q`` of shape ``(n_dof, n_reduced)`` with ``n_reduced <= n_dof``.
     """
     L = np.asarray(L)
+    if _psc_big_chol_enabled() and L.shape[0] >= _psc_big_chol_threshold():
+        return _null_space_projection_iterative(L, threshold=threshold)
     lam, V = np.linalg.eigh(L)
     max_lam = np.max(np.abs(lam))
     if max_lam < 1e-30:
@@ -895,8 +1989,15 @@ def shell_eigenfloor_cholesky_pure(
     threshold: float = 1e-10,
     jitter: float = 1e-10,
 ) -> jnp.ndarray:
-    """Cholesky factor of the eigenvalue-floored SPD matrix used in
+    r"""Cholesky factor of the eigenvalue-floored SPD matrix used in
     :func:`shell_solve_eigenfloor_pure`.
+
+    This routine first runs a full dense ``eigh`` of ``L`` (to apply the
+    eigenfloor) and is therefore often the **dominant** cost in the PSC
+    ``rebuild_cholesky`` phase in :class:`~simsopt.field.psc_bulk.PSCBulkArray` —
+    typically comparable to the inductance *assembly* step for
+    mid-sized :math:`n_\text{DOF}`.  Profiling that phase should time this
+    function and :func:`shell_cholesky_pure` separately from L-assembly.
     """
     L = jnp.asarray(L)
     lam, V = jnp.linalg.eigh(L)
@@ -1209,8 +2310,7 @@ def shell_normal_field_basis_matrix(
     n_quad = pts.shape[0]
     if K_basis.shape[0] != n_quad or K_basis.shape[-1] != 3:
         raise ValueError(
-            f"K_basis shape {K_basis.shape} inconsistent with "
-            f"quad_points {pts.shape}"
+            f"K_basis shape {K_basis.shape} inconsistent with quad_points {pts.shape}"
         )
     eps_obs = float(inset_frac) * np.sqrt(w / np.pi)
     obs = pts - eps_obs[:, None] * n_hat

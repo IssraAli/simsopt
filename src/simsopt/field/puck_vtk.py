@@ -4,7 +4,7 @@ VTK export for cylindrical passive-bulk pucks (finite-build visualization in Par
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -30,6 +30,8 @@ def puck_surface_mesh(
     t: float,
     n_phi: int = 64,
     n_r: int = 16,
+    *,
+    quat: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Triangulated closed surface of a right circular cylinder (caps + side).
@@ -41,16 +43,26 @@ def puck_surface_mesh(
         t: thickness / height (m).
         n_phi: azimuthal segments.
         n_r: radial segments on each disk (including rim).
+        quat: Optional scalar-first quaternion ``[w, x, y, z]`` mapping the
+            local frame to global.  When provided, this rotation is used instead
+            of the shortest-arc map from ``(0,0,1)`` to ``axis_z`` (which drops
+            in-plane roll).  For :class:`~simsopt.field.psc_bulk.PSCBulkArray` VTK
+            export, pass the replica's ``_all_pucks_quats[i]`` so mesh vertices
+            align with the quadrature used to build ``K`` and ``beta``.
 
     Returns:
         ``x, y, z`` (n_pts,) and ``triangles`` (n_tri, 3) vertex indices.
     """
-    from .psc_bulk import _rotation_matrix_local_to_global
+    from .psc_bulk import _rotation_matrix_from_quat, _rotation_matrix_local_to_global
 
     c = np.asarray(center, dtype=float).ravel()
     ax = np.asarray(axis_z, dtype=float)
     ax = ax / np.linalg.norm(ax)
-    Rmat = _rotation_matrix_local_to_global(ax)
+    if quat is not None:
+        q = np.asarray(quat, dtype=float).ravel()
+        Rmat = _rotation_matrix_from_quat(q)
+    else:
+        Rmat = _rotation_matrix_local_to_global(ax)
 
     phi = np.linspace(0, 2 * np.pi, n_phi, endpoint=False)
     np.linspace(0, R, n_r)
@@ -124,44 +136,158 @@ def _sample_K_g_on_mesh(
     y: np.ndarray,
     z: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Interpolate shell K and g at mesh vertices using nearest quad on this puck's shell patch."""
+    """Evaluates sheet current and scalar potential on mesh vertices in the
+    **continuous** Fourier--Zernike / Fourier--Chebyshev basis.
+
+    **Not** a nearest-quadrature lookup: the polar-grid quadrature only samples
+    the basis for the Galerkin system; the continuous :math:`\\mathbf{K}(\\mathbf
+    x) = \\sum_a \\beta_a \\mathbf{K}_a(\\mathbf x)` and :math:`g` can therefore
+    be evaluated at an arbitrary :math:`\\mathbf x` on the closed puck shell
+    (including the cap rim) without the ``n_phi``-keyed aliasing that shows up
+    in ParaView if one splats quadrature values by nearest cell.
+
+    The outward unit normal for :math:`B_n^{\\rm TF} = \\hat{\\mathbf n}\\cdot
+    \\mathbf{B}^{\\rm TF}` still uses the **nearest** shell quadrature point so
+    coincident top-rim and side-mesh nodes (duplicate 3D coordinates) get the
+    correct face normal for the triangle the vertex belongs to.
+    """
+    import jax.numpy as jnp
+
+    from .puck_basis import (
+        _basis_spec_for_dof,
+        _disk_grad_g_cartesian,
+        _side_grad_K,
+        zernike_radial,
+    )
+    from .psc_bulk import _rotation_matrix_from_quat
+
     pts = np.stack([x, y, z], axis=-1)
     r0, r1 = psc_bulk._quad_row_ranges[puck_index]
     quad = psc_bulk._quad_points[r0:r1]
-    beta = np.asarray(psc_bulk.beta)
-    # Use the stacked basis tables so we never allocate the dense
-    # (nq_total, n_dof_total, 3) / (nq_total, n_dof_total) arrays just to
-    # look up this puck's quadrature values.
     K_stack = psc_bulk._K_stack
     phi_stack = psc_bulk._phi_stack
     if K_stack is None or phi_stack is None:
-        # The dense fallback that used to live here (``_K_basis`` /
-        # ``_phi_mat`` lazy reconstructions) is unreachable in practice:
-        # both lazy accessors raise ``RuntimeError`` whenever the stacks
-        # are ``None`` (i.e. under heterogeneous puck shapes), and every
-        # current factory (``cylindrical_grid_pucks``,
-        # ``winding_surface_pucks``) builds homogeneous pucks with
-        # populated stacks.  Surface the precondition loudly instead of
-        # silently attempting a dead code path.
         raise RuntimeError(
             "puck VTK export requires homogeneous-shape pucks with "
             "populated _K_stack / _phi_stack; this PSCBulkArray was built "
             "with heterogeneous pucks which are not supported."
         )
-    n_pucks, nq_per, nd_per, _ = K_stack.shape
-    beta_s = beta.reshape(n_pucks, nd_per)
-    K_vec_stack = np.einsum("pqak,pa->pqk", K_stack, beta_s)
-    phi_vals_stack = np.einsum("pqa,pa->pq", phi_stack, beta_s)
-    K_all = K_vec_stack.reshape(n_pucks * nq_per, 3)
-    g_all = phi_vals_stack.reshape(n_pucks * nq_per)
-    K_out = np.zeros_like(pts)
-    g_out = np.zeros(len(pts))
+
+    c, _axis, R, t = psc_bulk._all_pucks[puck_index]
+    q = np.asarray(psc_bulk._all_pucks_quats[puck_index], dtype=float).ravel()
+    Rmat = _rotation_matrix_from_quat(q)
+    c = np.asarray(c, dtype=float).ravel()
+
+    basis = psc_bulk._basis_per_puck[puck_index]
+    d0 = psc_bulk._dof_offsets[puck_index]
+    nd = len(basis.dof_names)
+    beta = np.asarray(psc_bulk.beta, dtype=float)
+    beta_p = beta[d0 : d0 + nd]
+
+    p_loc = (pts - c[None, :]) @ Rmat
+    xl, yl, zl = p_loc[:, 0], p_loc[:, 1], p_loc[:, 2]
+    rho_l = np.hypot(xl, yl)
+    phi_l = np.arctan2(yl, xl)
+
+    n_pts = int(pts.shape[0])
+    g_out = np.zeros(n_pts, dtype=float)
+    K_local = np.zeros((n_pts, 3), dtype=float)
+
+    tol_z = 1e-9 * max(float(R), float(t), 1e-15)
+    tol_r = 1e-6 * max(float(R), 1e-15)
+
+    spec_list = (
+        list(basis.basis_spec) if len(getattr(basis, "basis_spec", [])) == nd else None
+    )
+
+    for a in range(nd):
+        ba = float(beta_p[a])
+        if not np.isfinite(ba) or abs(ba) < 1e-300:
+            continue
+        if spec_list is not None:
+            face, m, n_or_k, trig = spec_list[a]
+        else:
+            face, m, n_or_k, trig = _basis_spec_for_dof(basis, a)
+        if face == "disk_top":
+            mask = (np.abs(zl - 0.5 * t) < tol_z) & (rho_l <= R + tol_r)
+            if not np.any(mask):
+                continue
+            sel = mask
+            rho_s = rho_l[sel]
+            phi_s = phi_l[sel]
+            r_norm = jnp.array(rho_s / R)
+            Rvals = np.array(zernike_radial(r_norm, m, n_or_k))
+            ang = (
+                1.0
+                if m == 0
+                else (np.cos(m * phi_s) if trig == "cos" else np.sin(m * phi_s))
+            )
+            g_a = Rvals * ang
+            dgx, dgy, _ = _disk_grad_g_cartesian(
+                jnp.array(rho_s),
+                jnp.array(phi_s),
+                R,
+                m,
+                n_or_k,
+                trig if m > 0 else "cos",
+            )
+            dgx = np.asarray(dgx, dtype=float)
+            dgy = np.asarray(dgy, dtype=float)
+            g_out[sel] += ba * g_a
+            K_local[sel, 0] += ba * (-dgy)
+            K_local[sel, 1] += ba * (dgx)
+        elif face == "disk_bot":
+            mask = (np.abs(zl + 0.5 * t) < tol_z) & (rho_l <= R + tol_r)
+            if not np.any(mask):
+                continue
+            sel = mask
+            rho_s = rho_l[sel]
+            phi_s = phi_l[sel]
+            r_norm = jnp.array(rho_s / R)
+            Rvals = np.array(zernike_radial(r_norm, m, n_or_k))
+            ang = (
+                1.0
+                if m == 0
+                else (np.cos(m * phi_s) if trig == "cos" else np.sin(m * phi_s))
+            )
+            g_a = Rvals * ang
+            dgx, dgy, _ = _disk_grad_g_cartesian(
+                jnp.array(rho_s),
+                jnp.array(phi_s),
+                R,
+                m,
+                n_or_k,
+                trig if m > 0 else "cos",
+            )
+            dgx = np.asarray(dgx, dtype=float)
+            dgy = np.asarray(dgy, dtype=float)
+            g_out[sel] += ba * g_a
+            K_local[sel, 0] += ba * dgy
+            K_local[sel, 1] += ba * (-dgx)
+        elif face == "side":
+            mask = (rho_l >= R * (1.0 - 1e-5)) & (np.abs(zl) <= 0.5 * t * (1.0 + 1e-5))
+            if not np.any(mask):
+                continue
+            sel = mask
+            g_a, _grad, K_a = _side_grad_K(
+                zl[sel],
+                phi_l[sel],
+                R,
+                t,
+                m,
+                n_or_k,
+                trig if m > 0 else "cos",
+            )
+            g_out[sel] += ba * g_a
+            K_local[sel] += ba * K_a
+        else:  # pragma: no cover
+            continue
+
+    K_out = K_local @ Rmat.T
     tree = cKDTree(quad)
     _, j_local = tree.query(pts, k=1)
     j_local = np.asarray(j_local, dtype=np.intp)
     j = r0 + j_local
-    K_out = K_all[j]
-    g_out = g_all[j]
     nn = psc_bulk._quad_normals[j]
     bs_tf = getattr(psc_bulk, "_vtk_bs_tf", None)
     if bs_tf is None:
@@ -200,7 +326,10 @@ def pucks_to_vtk(
     all_tri: List[np.ndarray] = []
 
     for idx, (c, ax, R, t) in enumerate(psc_bulk._all_pucks):
-        x, y, z, tri = puck_surface_mesh(c, ax, R, t, n_phi=n_phi, n_r=n_r)
+        q_replica = np.asarray(psc_bulk._all_pucks_quats[idx], dtype=float)
+        x, y, z, tri = puck_surface_mesh(
+            c, ax, R, t, n_phi=n_phi, n_r=n_r, quat=q_replica
+        )
         Km, Kv, Bn, g = _sample_K_g_on_mesh(psc_bulk, idx, x, y, z)
         all_x.append(x)
         all_y.append(y)
