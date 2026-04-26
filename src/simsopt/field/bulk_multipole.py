@@ -127,19 +127,33 @@ def pair_dipole_quadrupole_cross_block(
     Q_j_sym: jnp.ndarray,
     R_vec: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Subleading :math:`O(1/R^4)` dipole--quadrupole cross block (proxy for W2 ``P=2``).
+    r"""Engineering proxy for the dipole--quadrupole cross block (NOT a derived expansion).
 
-    Uses :math:`L^{(DQ)}_{ab} \\propto 1/R^4` with
-    :math:`m^a\\cdot (Q^b \\hat r)`-style coupling, symmetrised in the
-    (dipole, quadrupole) roles so the output is a modest correction for far pairs.
+    .. warning::
+        This function is an **engineering proxy**, not a closed-form
+        :math:`P=2` multipole expansion of the mutual inductance.  It models
+        the *scaling* of the dipole--quadrupole cross term as
+        :math:`\propto 1/R^4` with a roles-symmetrised
+        :math:`m_i^a (Q_j^b \hat r) + (Q_i^a \hat r) m_j^b` coupling, but the
+        coefficient is **not** derived from the Neumann mutual-inductance
+        integral and the full :math:`T_{dq}, T_{qq}` rank-3 / rank-4 kernels
+        are not implemented.  In particular, the slope of the residual
+        ``||L_dense - L_dipole - L_DQ||_F / ||L_dense||_F`` versus
+        :math:`\kappa = R/R_{\max}` is **not** guaranteed to follow the
+        :math:`R^{-(P+1)} = R^{-3}` law expected from a true :math:`P=2`
+        truncation.  The public :func:`pair_inductance_multipole` therefore
+        raises :class:`NotImplementedError` for ``order >= 2`` to prevent
+        silent use of this proxy in production.  Direct callers (regression
+        tests, diagnostic notebooks) are responsible for understanding the
+        approximation.
 
     Args:
         m_i, m_j: ``(n_d, 3)`` per-mode dipole rows (global frame).
         Q_i_sym, Q_j_sym: ``(n_d, 3, 3)`` traceless symmetric quadrupole tensors.
-        R_vec: ``(3,)`` center separation :math:`\\mathbf c_j - \\mathbf c_i`.
+        R_vec: ``(3,)`` center separation :math:`\mathbf c_j - \mathbf c_i`.
 
     Returns:
-        ``(n_d, n_d)`` increment to the dipole--dipole block.
+        ``(n_d, n_d)`` increment to the dipole--dipole block (proxy).
 
     """
     m_i = jnp.asarray(m_i, dtype=float)
@@ -165,27 +179,51 @@ def pair_inductance_multipole(
     Q_i_sym: jnp.ndarray | None = None,
     Q_j_sym: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
-    """Far-pair mutual-inductance block to fixed multipole *order* (W2).
+    r"""Far-pair mutual-inductance block at fixed multipole *order* (W2).
 
-    ``order=1``: dipole--dipole via :func:`pair_inductance_dipole_block`.
-    ``order>=2`` and both ``Q_*`` provided: add
-    :func:`pair_dipole_quadrupole_cross_block` (otherwise same as ``order=1``).
+    Only ``order=1`` (dipole--dipole) is part of the supported public API;
+    the dispatcher delegates directly to :func:`pair_inductance_dipole_block`
+    so the result is the genuine :math:`O(1/R^3)` expansion derived from
+    Neumann's integral.
+
+    Higher orders are intentionally not implemented in this module: the
+    proxy :func:`pair_dipole_quadrupole_cross_block` captures only the
+    *scaling* of the dipole--quadrupole cross term and is not a derived
+    :math:`P=2` truncation of the mutual-inductance integral.  Calling
+    this function with ``order >= 2`` raises :class:`NotImplementedError`
+    so the proxy cannot be silently used as a drop-in replacement; tests
+    and diagnostics that explicitly want the proxy must call
+    :func:`pair_dipole_quadrupole_cross_block` directly.
 
     Args:
         m_i, m_j: ``(n_d, 3)`` per-mode dipole rows.
-        R_vec: ``(3,)`` separation :math:`\\mathbf c_j-\\mathbf c_i`.
-        order: ``1`` or ``2`` (higher currently treated as ``2`` when Q given).
-        Q_i_sym, Q_j_sym: optional ``(n_d, 3, 3)`` traceless quadrupole rows for ``order>=2``.
+        R_vec: ``(3,)`` separation :math:`\mathbf c_j-\mathbf c_i`.
+        order: Only ``1`` is supported.
+        Q_i_sym, Q_j_sym: Unused at ``order=1``; reserved for future
+            higher-order kernels.  Pass ``None`` (default).
 
     Returns:
-        ``(n_d, n_d)`` block.
+        ``(n_d, n_d)`` dipole--dipole block.
+
+    Raises:
+        NotImplementedError: If ``order >= 2``.  The dipole--quadrupole
+            proxy (:func:`pair_dipole_quadrupole_cross_block`) is a
+            scaling-only approximation and is no longer reachable through
+            this dispatcher.
 
     """
-    o = int(max(1, order))
-    Ldd = pair_inductance_dipole_block(m_i, m_j, R_vec)
-    if o < 2 or Q_i_sym is None or Q_j_sym is None:
-        return Ldd
-    return Ldd + pair_dipole_quadrupole_cross_block(m_i, Q_i_sym, m_j, Q_j_sym, R_vec)
+    o = int(order)
+    if o >= 2:
+        raise NotImplementedError(
+            "pair_inductance_multipole(order>=2) is not supported. "
+            "The order=2 path previously routed to "
+            "pair_dipole_quadrupole_cross_block, which is an engineering "
+            "proxy that captures only 1/R^4 scaling and not a derived P=2 "
+            "multipole expansion.  Call "
+            "pair_dipole_quadrupole_cross_block directly if you understand "
+            "the approximation."
+        )
+    return pair_inductance_dipole_block(m_i, m_j, R_vec)
 
 
 def pair_inductance_multipole_selfcheck_dense(

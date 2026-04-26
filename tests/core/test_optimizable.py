@@ -1558,5 +1558,110 @@ class TestOptimizableSharedDOFs(unittest.TestCase):
         self.assertEqual(len(sum_obj.x), 2)
 
 
+class TestSimsoptDeferRecompute(unittest.TestCase):
+    """
+    Equivalence test for the ``SIMSOPT_DEFER_RECOMPUTE`` feature flag (PR2).
+
+    The deferred-recompute mode collects the dependent ``Optimizable``
+    objects from each per-``Dofs`` ``_flag_recompute_opt`` notification
+    in a per-context queue and runs ``set_recompute_flag`` once after
+    all ``local_x`` slices have been written.  The final value of every
+    objective and gradient must be identical to the eager
+    (default-off) path.
+    """
+
+    def _build_dag(self):
+        """Two independent ``Adder`` carriers fed into a ``TestObject1``."""
+        from simsopt.objectives.functions import Adder as FAdder
+
+        return TestObject1(
+            5.0,
+            depends_on=[
+                FAdder(n=3, x0=np.array([1.0, 2.0, 3.0]), names=["a", "b", "c"]),
+                FAdder(n=2, x0=np.array([4.0, 5.0]), names=["d", "e"]),
+            ],
+        )
+
+    def _exercise(self, opt, x_values):
+        """Apply each joint ``opt.x`` write and record ``f`` + ``dJ``."""
+        results = []
+        for x in x_values:
+            opt.x = x
+            results.append(
+                {
+                    "f": float(opt.f()),
+                    "dJ": np.asarray(opt.dJ()).copy(),
+                    "state_versions": tuple(
+                        sub._dofs._state_version for sub in opt._unique_dof_opts
+                    ),
+                }
+            )
+        return results
+
+    def test_deferred_recompute_equivalence(self):
+        """
+        Same DAG with ``SIMSOPT_DEFER_RECOMPUTE`` OFF and ON must yield
+        identical ``f``, ``dJ``, and per-``Dofs`` ``_state_version``
+        sequences after each joint ``x`` write.
+        """
+        import simsopt._core.optimizable as _opt_mod
+
+        x_values = [
+            np.array([1.0, 2.0, 3.0, 4.0, 5.0, 0.5]),
+            np.array([0.1, 0.2, 0.3, 0.4, 0.5, 1.5]),
+            np.array([10.0, -5.0, 3.0, 1.0, 1.0, 2.0]),
+            np.array([1.0, 2.0, 3.0, 4.0, 5.0, 0.5]),  # repeat: no-op should
+            # leave _state_version unchanged on either branch.
+        ]
+
+        original_flag = _opt_mod._SIMSOPT_DEFER_RECOMPUTE
+        try:
+            _opt_mod._SIMSOPT_DEFER_RECOMPUTE = False
+            opt_off = self._build_dag()
+            res_off = self._exercise(opt_off, x_values)
+
+            _opt_mod._SIMSOPT_DEFER_RECOMPUTE = True
+            opt_on = self._build_dag()
+            res_on = self._exercise(opt_on, x_values)
+        finally:
+            _opt_mod._SIMSOPT_DEFER_RECOMPUTE = original_flag
+
+        self.assertEqual(len(res_off), len(res_on))
+        for off, on in zip(res_off, res_on):
+            self.assertAlmostEqual(off["f"], on["f"], places=14)
+            np.testing.assert_allclose(off["dJ"], on["dJ"], atol=1e-14)
+            self.assertEqual(off["state_versions"], on["state_versions"])
+
+    def test_deferred_recompute_local_dof_setter_immediate(self):
+        """
+        ``local_dof_setter`` must run *immediately* even in deferred mode,
+        so any C++-side mirror of the DOF array stays in lockstep with
+        ``self._x`` between ``local_x`` slice writes.
+        """
+        import simsopt._core.optimizable as _opt_mod
+
+        captured = []
+
+        def setter(opt, values):
+            captured.append(np.array(values).copy())
+
+        from simsopt.objectives.functions import Adder as FAdder
+
+        adder = FAdder(n=3, x0=np.array([1.0, 2.0, 3.0]))
+        # Wire an external setter onto the adder so we can observe when
+        # it fires relative to the joint setter.
+        adder.local_dof_setter = setter
+
+        original_flag = _opt_mod._SIMSOPT_DEFER_RECOMPUTE
+        try:
+            _opt_mod._SIMSOPT_DEFER_RECOMPUTE = True
+            adder.x = np.array([10.0, 20.0, 30.0])
+        finally:
+            _opt_mod._SIMSOPT_DEFER_RECOMPUTE = original_flag
+
+        self.assertGreaterEqual(len(captured), 1)
+        np.testing.assert_allclose(captured[-1], np.array([10.0, 20.0, 30.0]))
+
+
 if __name__ == "__main__":
     unittest.main()

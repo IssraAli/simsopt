@@ -51,6 +51,19 @@ Ideal-diamagnetic passive bulk (cylindrical pucks) and :class:`PassiveBulkField`
 default and supplies the implicit-function backward; the legacy
 ``SIMSOPT_PSC_FREE_SOLVE_VJP=implicit`` knob is now redundant for the reduced
 free-DOF path.
+
+**Measured speedup** (Apple Silicon CPU, ``stellcoilbench_py312`` env, see
+``examples/3_Advanced/timing_outputs/RESULTS.md`` for raw CSVs): on the
+``basis=medium, n_base=6, n_eval=8, nfp=2, stellsym=True,
+free=quaternions`` fixture, ``SIMSOPT_PSC_W1_ENVELOPE=1`` reduces the
+``vjp_setup_B`` median from ``69.66s`` (``=0``) to ``59.51s`` (``=1``),
+a ``1.17x`` speedup on `combo_fast`.  At the smaller
+``basis=small, n_base=6, n_eval=2`` fixture the envelope adds ``~0.18s``
+fixed tracing overhead (``1.59s`` -> ``1.77s``); the envelope's
+mechanical benefit (one ``solve`` instead of ``eigh + solve`` in the
+backward) scales with ``n_reduced_dof``, so the gain widens at larger
+``n_base``.  The plan-mandated ``medium/64`` (``n_base=64``) target was
+not validated within the available compute budget.
 - ``SIMSOPT_PSC_BS_EVAL_FAR_KAPPA`` (``0`` = off): distance / local
   shell-radius ratio for the W7 far-eval dipole / shell Biot–Savart blend
   in the free-DoF JAX forward.
@@ -3211,6 +3224,15 @@ class PSCBulkArray(Optimizable):
         )
 
         self._geom_hash: Optional[int] = None
+        # In-process snapshot of ``(id(opt._dofs), opt._dofs._state_version)``
+        # for ``opt in self._unique_dof_opts`` at the last successful
+        # ``recompute_currents``.  Used by ``recompute_currents`` for an
+        # ``O(N_unique_dof_opts)`` "have any DOFs changed?" check; this
+        # replaces the previous ``hash(tuple(self.local_full_x))`` per call.
+        # ``_geom_hash`` and the disk-cache ``_psc_lcache_digest`` are kept
+        # because ``_state_version`` resets every process and cannot serve as
+        # a cross-process key.
+        self._geom_versions: Optional[tuple] = None
         self._local_stacks_valid: bool = False
         self._timing_rows: Optional[List[Dict[str, Any]]] = None
         self._structural_key: Optional[tuple] = None
@@ -4650,10 +4672,24 @@ class PSCBulkArray(Optimizable):
         know which puck DoFs moved and want to exercise the fast path
         explicitly; the default path here does not yet emit per-DoF
         masks.
+
+        The "have any DOFs changed?" branch is decided by an
+        ``O(N_unique_dof_opts)`` comparison of
+        ``(id(opt._dofs), opt._dofs._state_version)`` tuples instead of
+        the previous ``hash(tuple(self.local_full_x))`` (which copied the
+        full DOF array on every call).  ``Dofs._state_version`` is bumped
+        only when DOF *values* actually change (see
+        :class:`~simsopt._core.optimizable.DOFs`), so this is exact for
+        in-process state.  The persistent ``_geom_hash`` /
+        ``_psc_lcache_digest`` paths are kept because ``_state_version``
+        resets every process and cannot key a cross-process cache.
         """
         _t_total = self._mark_phase_start()
-        current_hash = hash(tuple(self.local_full_x))
-        if current_hash != self._geom_hash:
+        current_versions = tuple(
+            (id(opt._dofs), opt._dofs._state_version)
+            for opt in self._unique_dof_opts
+        )
+        if current_versions != self._geom_versions:
             self._rebuild()
             # Do not replace ``self._field``: the existing :class:`PassiveBulkField`
             # still delegates to ``self.B_at_points``, which uses updated L, beta,
@@ -4672,6 +4708,7 @@ class PSCBulkArray(Optimizable):
                     self._setup_jax()
             self.beta = self._solve_beta(self._tf_arrays())
             _path = "tf_only"
+        self._geom_versions = current_versions
         self._free_vjp_cache = None
         self._field.clear_cached_properties()
         self._mark_phase_end(f"recompute_currents_total_{_path}", _t_total)

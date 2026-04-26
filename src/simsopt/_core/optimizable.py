@@ -10,6 +10,7 @@ build an optimization problem in a graph like manner.
 from __future__ import annotations
 
 import contextvars
+import os
 import weakref
 import hashlib
 from collections.abc import Callable as ABC_Callable, Hashable
@@ -44,6 +45,30 @@ from .json import GSONable, SIMSON, GSONDecoder, GSONEncoder
 # child is reachable through multiple parent edges in a DAG.
 _recompute_visited_during_batch: contextvars.ContextVar[Optional[set]] = (
     contextvars.ContextVar("recompute_visited_during_batch", default=None)
+)
+
+# Opt-in defer mode (PR2 of the DOF-graph speedup plan).  When enabled
+# via ``SIMSOPT_DEFER_RECOMPUTE=1``, joint ``Optimizable.x`` /
+# ``full_x`` writes collect the dependent ``Optimizable`` objects in
+# the per-context queue below instead of triggering an immediate
+# ``set_recompute_flag`` walk inside ``Dofs._flag_recompute_opt``.  The
+# joint setter then drains the queue once, calling ``set_recompute_flag``
+# from each unique root with the shared visited set.  This collapses the
+# previous ``N`` walks (one per unique DOF carrier) into a single walk
+# while preserving final invalidation semantics.
+#
+# ``local_dof_setter`` is *not* deferred: C++ side state must remain in
+# lockstep with the Python ``_x`` array because external callers may
+# read field values between ``local_x`` slice writes inside the joint
+# setter.
+#
+# Default: OFF (env var unset or set to anything other than ``"1"``).
+_SIMSOPT_DEFER_RECOMPUTE: bool = (
+    os.environ.get("SIMSOPT_DEFER_RECOMPUTE", "0") == "1"
+)
+
+_deferred_recompute_queue: contextvars.ContextVar[Optional[list]] = (
+    contextvars.ContextVar("deferred_recompute_queue", default=None)
 )
 
 try:
@@ -93,6 +118,16 @@ class DOFs(GSONable, Hashable):
     The class implements the external name column properties in the above
     table as properties. Additional methods to update bounds, fix/unfix DOFs,
     etc. are also defined.
+
+    Invariant
+    ---------
+    ``_state_version`` is the single source of truth for "DOF values
+    changed". Any code that mutates ``self._x`` **must** go through
+    :meth:`set`, :attr:`free_x`, or :attr:`full_x`; bypassing those
+    skips the ``_state_version`` bump and leaves downstream caches that
+    key off ``_state_version`` (notably
+    ``MagneticField._mf_last_seen_dof_versions`` and
+    ``PSCBulkArray._geom_versions``) inconsistent with reality.
     """
 
     __slots__ = [
@@ -193,17 +228,33 @@ class DOFs(GSONable, Hashable):
         """
         Sets the recompute flag in the dependent Optimizable objects.
         This function is called whenever the DOF values are changed.
+
+        When the per-context ``_deferred_recompute_queue`` is active
+        (opened by a joint ``Optimizable.x`` / ``full_x`` setter under
+        ``SIMSOPT_DEFER_RECOMPUTE=1``), the dependent ``Optimizable``
+        objects are appended to the queue and their
+        ``set_recompute_flag`` walks are deferred until the joint setter
+        drains the queue with one shared visited set. ``local_dof_setter``
+        is *always* invoked immediately so any C++-side mirror of the
+        DOF array stays in lockstep with ``self._x``.
         """
         shared = _recompute_visited_during_batch.get()
+        deferred = _deferred_recompute_queue.get()
         for opt_ref in self._dep_opts:
             opt = opt_ref()
-            if opt is not None:
-                if opt.local_dof_setter is not None:
-                    # opt.local_dof_setter(opt, list(self._x))
-                    opt.local_dof_setter(opt, self._x)
-                # ``shared`` is non-``None`` only inside an ``Optimizable.x`` /
-                # ``full_x`` batch; otherwise each call gets a fresh set inside
-                # ``set_recompute_flag`` (``_visited is None``).
+            if opt is None:
+                continue
+            if opt.local_dof_setter is not None:
+                # opt.local_dof_setter(opt, list(self._x))
+                opt.local_dof_setter(opt, self._x)
+            if deferred is not None:
+                # Defer the recompute walk; the joint setter drains the
+                # queue after all ``local_x`` slices have been written.
+                deferred.append(opt)
+            else:
+                # ``shared`` is non-``None`` only inside an ``Optimizable.x``
+                # / ``full_x`` batch; otherwise each call gets a fresh set
+                # inside ``set_recompute_flag`` (``_visited is None``).
                 opt.set_recompute_flag(_visited=shared)
 
     def _update_opt_indices(self):
@@ -1036,6 +1087,15 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         # descendants.
         self._has_any_free_in_lineage = None
 
+        # The ``MagneticField`` "skip C++ invalidate_cache" map is keyed by
+        # ``id(opt._dofs)`` for ``opt in self._unique_dof_opts``.  Free-status
+        # changes can perturb the lineage walk (and hence the keys), so the
+        # cached version map must be discarded together with the
+        # ``_any_free_in_lineage`` cache.  ``MagneticField.recompute_bell``
+        # short-circuits on ``last is None`` and re-populates the map.
+        if hasattr(self, "_mf_last_seen_dof_versions"):
+            self._mf_last_seen_dof_versions = None
+
         # Update the reduced dof length of children
         for weakref_child in self._children:
             child = weakref_child()
@@ -1075,6 +1135,13 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         # The lineage just changed, so the cached ``_any_free_in_lineage``
         # answer is no longer trustworthy.
         self._has_any_free_in_lineage = None
+
+        # Same reasoning as in ``update_free_dof_size_indices``: structural
+        # parent/child changes can shift the unique-lineage walk, so the
+        # ``MagneticField._mf_last_seen_dof_versions`` map (keyed by
+        # ``id(opt._dofs)``) must be discarded.
+        if hasattr(self, "_mf_last_seen_dof_versions"):
+            self._mf_last_seen_dof_versions = None
 
         # Update the full dof length of children
         for weakref_child in self._children:
@@ -1143,12 +1210,24 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
             raise ValueError
         # One shared visited set for all local_x writes: avoids an O(N_graph)
         # recompute walk per sub-``Optimizable`` in this joint object.
-        token = _recompute_visited_during_batch.set(set())
+        token_visited = _recompute_visited_during_batch.set(set())
+        # When ``SIMSOPT_DEFER_RECOMPUTE=1``, queue dependent ``Optimizable``
+        # objects across all per-``Dofs`` notifications and run a single
+        # ``set_recompute_flag`` walk after every ``local_x`` slice is
+        # written.  Default (env unset / ``"0"``) preserves the previous
+        # eager-walk semantics.
+        queue: Optional[list] = [] if _SIMSOPT_DEFER_RECOMPUTE else None
+        token_queue = _deferred_recompute_queue.set(queue)
         try:
             for opt, indices in self.dof_indices.items():
                 opt.local_x = x[indices[0] : indices[1]]
+            if queue is not None and queue:
+                visited = _recompute_visited_during_batch.get()
+                for dep_opt in queue:
+                    dep_opt.set_recompute_flag(_visited=visited)
         finally:
-            _recompute_visited_during_batch.reset(token)
+            _deferred_recompute_queue.reset(token_queue)
+            _recompute_visited_during_batch.reset(token_visited)
 
     @property
     def full_x(self) -> RealArray:
@@ -1163,12 +1242,21 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         """
         Setter used to set all the global DOF values
         """
-        token = _recompute_visited_during_batch.set(set())
+        token_visited = _recompute_visited_during_batch.set(set())
+        # See the matching ``x.setter``: opt-in deferred root walk via the
+        # ``SIMSOPT_DEFER_RECOMPUTE`` env flag.
+        queue: Optional[list] = [] if _SIMSOPT_DEFER_RECOMPUTE else None
+        token_queue = _deferred_recompute_queue.set(queue)
         try:
             for opt, indices in self._full_dof_indices.items():
                 opt.local_full_x = x[indices[0] : indices[1]]
+            if queue is not None and queue:
+                visited = _recompute_visited_during_batch.get()
+                for dep_opt in queue:
+                    dep_opt.set_recompute_flag(_visited=visited)
         finally:
-            _recompute_visited_during_batch.reset(token)
+            _deferred_recompute_queue.reset(token_queue)
+            _recompute_visited_during_batch.reset(token_visited)
 
     @property
     def local_x(self) -> RealArray:
