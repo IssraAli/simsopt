@@ -9,9 +9,24 @@ from simsopt.geo.curvexyzfourier import CurveXYZFourier, JaxCurveXYZFourier
 from simsopt.geo.curverzfourier import CurveRZFourier
 from simsopt.geo.curvehelical import CurveHelical
 from simsopt.geo.curveplanarfourier import CurvePlanarFourier, JaxCurvePlanarFourier
-from simsopt.geo.curve import RotatedCurve, create_equally_spaced_curves, create_equally_spaced_planar_curves
-from simsopt.field.coil import Coil, RegularizedCoil, Current, ScaledCurrent, CurrentSum, coils_via_symmetries
-from simsopt.field.coil import coils_to_makegrid, coils_to_focus, load_coils_from_makegrid_file
+from simsopt.geo.curve import (
+    RotatedCurve,
+    create_equally_spaced_curves,
+    create_equally_spaced_planar_curves,
+)
+from simsopt.field.coil import (
+    Coil,
+    RegularizedCoil,
+    Current,
+    ScaledCurrent,
+    CurrentSum,
+    coils_via_symmetries,
+)
+from simsopt.field.coil import (
+    coils_to_makegrid,
+    coils_to_focus,
+    load_coils_from_makegrid_file,
+)
 from simsopt.field.biotsavart import BiotSavart
 from simsopt.field.selffield import regularization_circ
 from simsopt._core.json import GSONEncoder, GSONDecoder, SIMSON
@@ -57,21 +72,21 @@ def get_curve(curvetype, rotated, x=np.asarray([0.5])):
         curve = JaxCurvePlanarFourier(x, order)
     else:
         assert False
-    dofs = np.zeros((curve.dof_size, ))
+    dofs = np.zeros((curve.dof_size,))
     if curvetype in ["CurveXYZFourier", "JaxCurveXYZFourier"]:
-        dofs[1] = 1.
-        dofs[2*order + 3] = 1.
-        dofs[4*order + 3] = 1.
+        dofs[1] = 1.0
+        dofs[2 * order + 3] = 1.0
+        dofs[4 * order + 3] = 1.0
     elif curvetype in ["CurveRZFourier"]:
-        dofs[0] = 1.
+        dofs[0] = 1.0
         dofs[1] = 0.1
-        dofs[order+1] = 0.1
+        dofs[order + 1] = 0.1
     elif curvetype in ["CurveHelical"]:
-        dofs[0] = np.pi/2
+        dofs[0] = np.pi / 2
     elif curvetype in ["CurvePlanarFourier", "JaxCurvePlanarFourier"]:
-        dofs[0] = 1.
+        dofs[0] = 1.0
         dofs[1] = 0.1
-        dofs[order+1] = 0.1
+        dofs[order + 1] = 0.1
     else:
         assert False
 
@@ -82,8 +97,14 @@ def get_curve(curvetype, rotated, x=np.asarray([0.5])):
 
 
 class TestCoil(unittest.TestCase):
-
-    curvetypes = ["CurveXYZFourier", "JaxCurveXYZFourier", "CurveRZFourier", "CurveHelical", "CurvePlanarFourier", "JaxCurvePlanarFourier"]
+    curvetypes = [
+        "CurveXYZFourier",
+        "JaxCurveXYZFourier",
+        "CurveRZFourier",
+        "CurveHelical",
+        "CurvePlanarFourier",
+        "JaxCurvePlanarFourier",
+    ]
 
     def subtest_serialization(self, curvetype, rotated):
         """
@@ -103,10 +124,15 @@ class TestCoil(unittest.TestCase):
             coil_str = json.dumps(SIMSON(coil), cls=GSONEncoder)
             coil_regen = json.loads(coil_str, cls=GSONDecoder)
 
-            points = np.asarray(10 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
+            points = np.asarray(
+                10 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]]
+            )
             B1 = BiotSavart([coil]).set_points(points).B()
             B2 = BiotSavart([coil_regen]).set_points(points).B()
-            self.assertTrue(np.allclose(B1, B2), msg="Biot-Savart field mismatch after coil serialization")
+            self.assertTrue(
+                np.allclose(B1, B2),
+                msg="Biot-Savart field mismatch after coil serialization",
+            )
 
     def test_serialization(self):
         """
@@ -127,7 +153,11 @@ class TestCurrentSerialization(unittest.TestCase):
             current = CurrentCls(1e4)
             current_str = json.dumps(SIMSON(current), cls=GSONEncoder)
             current_regen = json.loads(current_str, cls=GSONDecoder)
-            self.assertAlmostEqual(current.get_value(), current_regen.get_value(), msg=f"Current value mismatch after serialization for {CurrentCls.__name__}")
+            self.assertAlmostEqual(
+                current.get_value(),
+                current_regen.get_value(),
+                msg=f"Current value mismatch after serialization for {CurrentCls.__name__}",
+            )
 
     def test_scaled_current_serialization(self):
         """
@@ -138,9 +168,11 @@ class TestCurrentSerialization(unittest.TestCase):
             scaled_current = ScaledCurrent(current, 3)
             current_str = json.dumps(SIMSON(scaled_current), cls=GSONEncoder)
             current_regen = json.loads(current_str, cls=GSONDecoder)
-            self.assertAlmostEqual(scaled_current.get_value(),
-                                   current_regen.get_value(),
-                                   msg=f"ScaledCurrent value mismatch after serialization for {CurrentCls.__name__}")
+            self.assertAlmostEqual(
+                scaled_current.get_value(),
+                current_regen.get_value(),
+                msg=f"ScaledCurrent value mismatch after serialization for {CurrentCls.__name__}",
+            )
 
     def test_current_sum_serialization(self):
         """
@@ -152,65 +184,70 @@ class TestCurrentSerialization(unittest.TestCase):
             current = CurrentSum(current_a, current_b)
             current_str = json.dumps(SIMSON(current), cls=GSONEncoder)
             current_regen = json.loads(current_str, cls=GSONDecoder)
-            self.assertAlmostEqual(current.get_value(),
-                                   current_regen.get_value(),
-                                   msg=f"CurrentSum value mismatch after serialization for {CurrentCls.__name__}")
+            self.assertAlmostEqual(
+                current.get_value(),
+                current_regen.get_value(),
+                msg=f"CurrentSum value mismatch after serialization for {CurrentCls.__name__}",
+            )
 
 
 class ScaledCurrentTesting(unittest.TestCase):
-
     def test_scaled_current(self):
         """
         Test arithmetic operations and vector-Jacobian products for ScaledCurrent and related current objects.
         """
-        one = np.asarray([1.])
+        one = np.asarray([1.0])
         for CurrentCls in [Current]:
-            c0 = CurrentCls(5.)
-            fak = 3.
+            c0 = CurrentCls(5.0)
+            fak = 3.0
             c1 = fak * c0
-            assert abs(c1.get_value()-fak * c0.get_value()) < 1e-15
-            assert np.linalg.norm((c1.vjp(one)-fak * c0.vjp(one))(c0)) < 1e-15
+            assert abs(c1.get_value() - fak * c0.get_value()) < 1e-15
+            assert np.linalg.norm((c1.vjp(one) - fak * c0.vjp(one))(c0)) < 1e-15
 
             c2 = c0 * fak
-            assert abs(c2.get_value()-fak * c0.get_value()) < 1e-15
-            assert np.linalg.norm((c2.vjp(one)-fak * c0.vjp(one))(c0)) < 1e-15
+            assert abs(c2.get_value() - fak * c0.get_value()) < 1e-15
+            assert np.linalg.norm((c2.vjp(one) - fak * c0.vjp(one))(c0)) < 1e-15
 
             c3 = ScaledCurrent(c0, fak)
-            assert abs(c3.get_value()-fak * c0.get_value()) < 1e-15
-            assert np.linalg.norm((c3.vjp(one)-fak * c0.vjp(one))(c0)) < 1e-15
-            c3.current_to_scale.x = np.array([5.])
-            assert np.isclose(c3.current_to_scale.get_value(), 5.)
+            assert abs(c3.get_value() - fak * c0.get_value()) < 1e-15
+            assert np.linalg.norm((c3.vjp(one) - fak * c0.vjp(one))(c0)) < 1e-15
+            c3.current_to_scale.x = np.array([5.0])
+            assert np.isclose(c3.current_to_scale.get_value(), 5.0)
 
             c4 = -c0
-            assert abs(c4.get_value() - (-1.) * c0.get_value()) < 1e-15
-            assert np.linalg.norm((c4.vjp(one) - (-1.) * c0.vjp(one))(c0)) < 1e-15
+            assert abs(c4.get_value() - (-1.0) * c0.get_value()) < 1e-15
+            assert np.linalg.norm((c4.vjp(one) - (-1.0) * c0.vjp(one))(c0)) < 1e-15
 
-            c00 = CurrentCls(6.)
+            c00 = CurrentCls(6.0)
 
             c5 = c0 + c00
-            assert abs(c5.get_value() - (5. + 6.)) < 1e-15
-            assert np.linalg.norm((c5.vjp(one)-c0.vjp(one))(c0)) < 1e-15
-            assert np.linalg.norm((c5.vjp(one)-c00.vjp(one))(c00)) < 1e-15
+            assert abs(c5.get_value() - (5.0 + 6.0)) < 1e-15
+            assert np.linalg.norm((c5.vjp(one) - c0.vjp(one))(c0)) < 1e-15
+            assert np.linalg.norm((c5.vjp(one) - c00.vjp(one))(c00)) < 1e-15
             c6 = sum([c0, c00])
-            assert abs(c6.get_value() - (5. + 6.)) < 1e-15
-            assert np.linalg.norm((c6.vjp(one)-c0.vjp(one))(c0)) < 1e-15
-            assert np.linalg.norm((c6.vjp(one)-c00.vjp(one))(c00)) < 1e-15
+            assert abs(c6.get_value() - (5.0 + 6.0)) < 1e-15
+            assert np.linalg.norm((c6.vjp(one) - c0.vjp(one))(c0)) < 1e-15
+            assert np.linalg.norm((c6.vjp(one) - c00.vjp(one))(c00)) < 1e-15
             c7 = c0 - c00
-            assert abs(c7.get_value() - (5. - 6.)) < 1e-15
-            assert np.linalg.norm((c7.vjp(one)-c0.vjp(one))(c0)) < 1e-15
-            assert np.linalg.norm((c7.vjp(one)+c00.vjp(one))(c00)) < 1e-15
+            assert abs(c7.get_value() - (5.0 - 6.0)) < 1e-15
+            assert np.linalg.norm((c7.vjp(one) - c0.vjp(one))(c0)) < 1e-15
+            assert np.linalg.norm((c7.vjp(one) + c00.vjp(one))(c00)) < 1e-15
 
 
 class CoilFormatConvertTesting(unittest.TestCase):
     def test_makegrid(self):
-        base_curves, base_currents, ma, nfp, bs= get_data("ncsx")
+        base_curves, base_currents, ma, nfp, bs = get_data("ncsx")
         with ScratchDir("."):
-            coils_to_focus('test.focus', base_curves, base_currents, nfp=nfp, stellsym=True)
+            coils_to_focus(
+                "test.focus", base_curves, base_currents, nfp=nfp, stellsym=True
+            )
 
     def test_focus(self):
         base_curves, base_currents, ma, nfp, bs = get_data("ncsx")
         with ScratchDir("."):
-            coils_to_makegrid('coils.test', base_curves, base_currents, nfp=nfp, stellsym=True)
+            coils_to_makegrid(
+                "coils.test", base_curves, base_currents, nfp=nfp, stellsym=True
+            )
 
     def test_load_coils_from_makegrid_file(self):
         """
@@ -219,22 +256,29 @@ class CoilFormatConvertTesting(unittest.TestCase):
         order = 25
         points_per_period = 10
 
-        base_curves, base_currents, ma, nfp, bs = get_data("ncsx", coil_order=order, points_per_period=points_per_period)
+        base_curves, base_currents, ma, nfp, bs = get_data(
+            "ncsx", coil_order=order, points_per_period=points_per_period
+        )
         with ScratchDir("."):
             coils_to_makegrid("coils.file_to_load", base_curves, base_currents, nfp=1)
-            loaded_coils = load_coils_from_makegrid_file("coils.file_to_load", order, points_per_period)
+            loaded_coils = load_coils_from_makegrid_file(
+                "coils.file_to_load", order, points_per_period
+            )
 
         gamma = [curve.gamma() for curve in base_curves]
         loaded_gamma = [coil.curve.gamma() for coil in loaded_coils]
         loaded_currents = [coil.current for coil in loaded_coils]
-        coils = [Coil(curve, current) for curve, current in zip(base_curves, base_currents)]
+        coils = [
+            Coil(curve, current) for curve, current in zip(base_curves, base_currents)
+        ]
 
         for j_coil in range(len(coils)):
             np.testing.assert_allclose(
-                base_currents[j_coil].get_value(),
-                loaded_currents[j_coil].get_value()
+                base_currents[j_coil].get_value(), loaded_currents[j_coil].get_value()
             )
-            np.testing.assert_allclose(base_curves[j_coil].x, loaded_coils[j_coil].curve.x)
+            np.testing.assert_allclose(
+                base_curves[j_coil].x, loaded_coils[j_coil].curve.x
+            )
 
         np.random.seed(1)
 
@@ -261,7 +305,12 @@ class CoilFormatConvertTesting(unittest.TestCase):
 
         # Coil group_names is a list of strings
         filecoils = os.path.join(TEST_DIR, "coils.M16N08")
-        coils = load_coils_from_makegrid_file(filecoils, order, points_per_period, group_names=["245th-coil", "100th-coil"])
+        coils = load_coils_from_makegrid_file(
+            filecoils,
+            order,
+            points_per_period,
+            group_names=["245th-coil", "100th-coil"],
+        )
         all_coils = load_coils_from_makegrid_file(filecoils, order, points_per_period)
         #     NOTE: coils will be returned in order they appear in the file, not in order of listed groups.
         #     So group_names = ["245th-coil","100th-coil"] gives the array [<coil nr 100>, <coil nr 245>]
@@ -271,7 +320,9 @@ class CoilFormatConvertTesting(unittest.TestCase):
         np.testing.assert_allclose(gamma, compare_gamma)
 
         # Coil group_names is a single string
-        coils = load_coils_from_makegrid_file(filecoils, order, points_per_period, group_names="256th-coil")
+        coils = load_coils_from_makegrid_file(
+            filecoils, order, points_per_period, group_names="256th-coil"
+        )
         all_coils = load_coils_from_makegrid_file(filecoils, order, points_per_period)
         compare_coils = [all_coils[255]]
         gamma = [coil.curve.gamma() for coil in coils]
@@ -291,11 +342,15 @@ class CoilFormatConvertTesting(unittest.TestCase):
         curves = create_equally_spaced_curves(ncoils, nfp, stellsym, R0=R0, R1=R1)
         currents = [Current(1e5) for i in range(ncoils)]
 
-        curves_planar = create_equally_spaced_planar_curves(ncoils, nfp, stellsym, R0=R0, R1=R1)
+        curves_planar = create_equally_spaced_planar_curves(
+            ncoils, nfp, stellsym, R0=R0, R1=R1
+        )
         currents_planar = [Current(1e5) for i in range(ncoils)]
 
         coils = coils_via_symmetries(curves, currents, nfp, stellsym)
-        coils_planar = coils_via_symmetries(curves_planar, currents_planar, nfp, stellsym)
+        coils_planar = coils_via_symmetries(
+            curves_planar, currents_planar, nfp, stellsym
+        )
         bs = BiotSavart(coils)
         bs_planar = BiotSavart(coils_planar)
 
@@ -333,7 +388,9 @@ class CoilFormatConvertTesting(unittest.TestCase):
 
         # With regularizations: RegularizedCoil objects, same B field
         regs = [regularization_circ(0.05) for _ in range(ncoils)]
-        coils_reg = coils_via_symmetries(curves, currents, nfp, stellsym, regularizations=regs)
+        coils_reg = coils_via_symmetries(
+            curves, currents, nfp, stellsym, regularizations=regs
+        )
         self.assertEqual(len(coils_reg), ncoils * nfp * (1 + stellsym))
         for c in coils_reg:
             self.assertIsInstance(c, RegularizedCoil)
@@ -348,8 +405,12 @@ class CoilFormatConvertTesting(unittest.TestCase):
         points = np.ascontiguousarray(np.array([x.ravel(), y.ravel(), z.ravel()]).T)
         bs.set_points(points)
         bs_reg.set_points(points)
-        np.testing.assert_allclose(bs.B(), bs_reg.B(), atol=1e-16,
-                                   err_msg="B field with regularizations should match without")
+        np.testing.assert_allclose(
+            bs.B(),
+            bs_reg.B(),
+            atol=1e-16,
+            err_msg="B field with regularizations should match without",
+        )
 
     @unittest.skipIf(pyevtk is None, "pyevtk not found")
     def test_coils_to_vtk_creates_file(self):
@@ -357,21 +418,42 @@ class CoilFormatConvertTesting(unittest.TestCase):
         Test that coils_to_vtk writes a VTK file for a simple coil setup.
         """
         from simsopt.field.coil import coils_to_vtk
-        curvetypes = ["CurveXYZFourier", "JaxCurveXYZFourier", "CurveRZFourier", "CurveHelical", "CurvePlanarFourier", "JaxCurvePlanarFourier"]
+
+        curvetypes = [
+            "CurveXYZFourier",
+            "JaxCurveXYZFourier",
+            "CurveRZFourier",
+            "CurveHelical",
+            "CurvePlanarFourier",
+            "JaxCurvePlanarFourier",
+        ]
         for coil_type in [Coil, RegularizedCoil]:
             for curvetype in curvetypes:
                 for rotated in [True, False]:
                     for close in [True, False]:
                         for extra_data in [None, {}]:
-                            curve = get_curve(curvetype, rotated=rotated, x=20)  # Give the curve more than 1 quadpoint
+                            curve = get_curve(
+                                curvetype, rotated=rotated, x=20
+                            )  # Give the curve more than 1 quadpoint
                             if coil_type == RegularizedCoil:
-                                coil = coil_type(curve, Current(1.0), regularization_circ(0.05))
+                                coil = coil_type(
+                                    curve, Current(1.0), regularization_circ(0.05)
+                                )
                             else:
                                 coil = coil_type(curve, Current(1.0))
                             filename = "test_coil"
-                            coils_to_vtk([coil], filename, close=close, extra_data=extra_data)
-                            self.assertTrue(os.path.exists(filename + '.vtu'), "VTK file was not created.")
-                            self.assertGreater(os.path.getsize(filename + '.vtu'), 0, "VTK file is empty.")
+                            coils_to_vtk(
+                                [coil], filename, close=close, extra_data=extra_data
+                            )
+                            self.assertTrue(
+                                os.path.exists(filename + ".vtu"),
+                                "VTK file was not created.",
+                            )
+                            self.assertGreater(
+                                os.path.getsize(filename + ".vtu"),
+                                0,
+                                "VTK file is empty.",
+                            )
 
 
 if __name__ == "__main__":

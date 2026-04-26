@@ -3,6 +3,7 @@ import logging
 import os
 
 import numpy as np
+
 try:
     from mpi4py import MPI
 except ImportError:
@@ -25,9 +26,9 @@ if MPI is not None:
 
 from . import TEST_DIR
 
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
-#@unittest.skip("This test won't work until a low-level issue with VMEC is fixed to allow multiple readins.")
+# @unittest.skip("This test won't work until a low-level issue with VMEC is fixed to allow multiple readins.")
 
 
 @unittest.skipIf((MPI is None), "Valid Python interface to VMEC not found")
@@ -67,7 +68,7 @@ class IntegratedTests(unittest.TestCase):
                 surf = equil.boundary
 
                 # Set the initial boundary shape. Here is one syntax:
-                surf.set('rc(0,0)', 1.0)
+                surf.set("rc(0,0)", 1.0)
                 # Here is another syntax:
                 surf.set_rc(0, 1, 0.1)
                 surf.set_zs(0, 1, 0.1)
@@ -78,13 +79,14 @@ class IntegratedTests(unittest.TestCase):
                 # VMEC parameters are all fixed by default, while surface parameters are all non-fixed by default.
                 # You can choose which parameters are optimized by setting their 'fixed' attributes.
                 surf.local_fix_all()
-                surf.unfix('rc(0,0)')
+                surf.unfix("rc(0,0)")
 
                 # Each Target is then equipped with a shift and weight, to become a
                 # term in a least-squares objective function
                 desired_volume = 0.15
                 prob = LeastSquaresProblem.from_tuples(
-                    [(equil.volume, desired_volume, 1)])
+                    [(equil.volume, desired_volume, 1)]
+                )
 
                 # Solve the minimization problem. We can choose whether to use a
                 # derivative-free or derivative-based algorithm.
@@ -107,9 +109,9 @@ class IntegratedTests(unittest.TestCase):
     @unittest.skipIf((vmec is None), "VMEC not found")
     def test_Quasisymmetry_paralellization(self):
         """
-        this test checks if the Quasisymmetry objective evaluation is correctly 
+        this test checks if the Quasisymmetry objective evaluation is correctly
         implemented to run in MPI tasks with different numbers of leaders and
-        workers. 
+        workers.
         """
         logging.getLogger(__name__)
         for ngroups in range(1, 1 + MPI.COMM_WORLD.Get_size()):
@@ -125,7 +127,7 @@ class IntegratedTests(unittest.TestCase):
                 surf = equil.boundary
 
                 # Set the initial boundary shape. Here is one syntax:
-                surf.set('rc(0,0)', 1.0)
+                surf.set("rc(0,0)", 1.0)
                 # Here is another syntax:
                 surf.set_rc(0, 1, 0.1)
                 surf.set_zs(0, 1, 0.1)
@@ -136,16 +138,20 @@ class IntegratedTests(unittest.TestCase):
                 # VMEC parameters are all fixed by default, while surface parameters are all non-fixed by default.
                 # You can choose which parameters are optimized by setting their 'fixed' attributes.
                 surf.local_fix_all()
-                surf.unfix('rc(0,0)')
-                surf.unfix('rc(1,1)')
-                surf.unfix('rc(0,1)')
+                surf.unfix("rc(0,0)")
+                surf.unfix("rc(1,1)")
+                surf.unfix("rc(0,1)")
 
-                qs = Quasisymmetry(Boozer(equil),
-                                   0.5,  # Radius to target
-                                   1, 1)  # (M, N) you want in |B|
+                qs = Quasisymmetry(
+                    Boozer(equil),
+                    0.5,  # Radius to target
+                    1,
+                    1,
+                )  # (M, N) you want in |B|
 
-                prob = LeastSquaresProblem.from_tuples([(equil.aspect, 7, 1),
-                                                        (qs.J, 0, 1)])
+                prob = LeastSquaresProblem.from_tuples(
+                    [(equil.aspect, 7, 1), (qs.J, 0, 1)]
+                )
                 # Make sure all procs run vmec:
                 least_squares_mpi_solve(prob, mpi, grad=grad, max_nfev=2)
                 ## we just want to test if the problem runs for the two fevs
@@ -163,7 +169,7 @@ class IntegratedTests(unittest.TestCase):
                 # processes is split into.
                 mpi = MpiPartition(ngroups=ngroups)
                 mpi.write()
-                filename = os.path.join(TEST_DIR, 'QH-residues.sp')
+                filename = os.path.join(TEST_DIR, "QH-residues.sp")
                 s = Spec(filename, mpi=mpi)
 
                 # Expand number of Fourier modes to include larger poloidal mode numbers:
@@ -172,8 +178,8 @@ class IntegratedTests(unittest.TestCase):
                 # small parameter space. Here we pick out just 2 Fourier modes to vary
                 # in the optimization:
                 s.boundary.fix_all()
-                s.boundary.unfix('zs(6,1)')
-                s.boundary.unfix('zs(6,2)')
+                s.boundary.unfix("zs(6,1)")
+                s.boundary.unfix("zs(6,2)")
                 logging.info(f"Initial zs(6,1):  {s.boundary.get('zs(6,1)')}")
                 logging.info(f"Initial zs(6,2):  {s.boundary.get('zs(6,2)')}")
 
@@ -186,11 +192,14 @@ class IntegratedTests(unittest.TestCase):
                 residue1 = Residue(s, p, q, s_guess=s_guess)
                 residue2 = Residue(s, p, q, s_guess=s_guess, theta=np.pi)
                 # Objective function is \sum_j residue_j ** 2
-                prob = LeastSquaresProblem.from_tuples([(residue1.J, 0, 1),
-                                                        (residue2.J, 0, 1)])
+                prob = LeastSquaresProblem.from_tuples(
+                    [(residue1.J, 0, 1), (residue2.J, 0, 1)]
+                )
 
                 # Solve for two nfevs to test if runs
-                least_squares_mpi_solve(prob, mpi=mpi, grad=grad, save_residuals=True, max_nfev=2)
+                least_squares_mpi_solve(
+                    prob, mpi=mpi, grad=grad, save_residuals=True, max_nfev=2
+                )
 
                 # No assertions, run is too short to complete, just testing if it does run
 

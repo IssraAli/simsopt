@@ -9,11 +9,12 @@ build an optimization problem in a graph like manner.
 
 from __future__ import annotations
 
+import contextvars
 import weakref
 import hashlib
 from collections.abc import Callable as ABC_Callable, Hashable
 from numbers import Real, Integral
-from typing import Union, Tuple, Dict, Callable, Sequence, List
+from typing import Union, Tuple, Dict, Callable, Sequence, List, Optional
 from functools import lru_cache
 import logging
 import json
@@ -25,10 +26,25 @@ from monty.io import zopen
 
 from .dev import SimsoptRequires
 from .types import RealArray, StrArray, BoolArray, Key
-from .util import ImmutableId, OptimizableMeta, WeakKeyDefaultDict, \
-    DofLengthMismatchError
+from .util import (
+    ImmutableId,
+    OptimizableMeta,
+    WeakKeyDefaultDict,
+    DofLengthMismatchError,
+)
 from .derivative import derivative_dec
 from .json import GSONable, SIMSON, GSONDecoder, GSONEncoder
+
+# When ``Optimizable.x`` or ``full_x`` assigns to many children in one
+# update, the DOFs of each child fire ``_flag_recompute_opt`` in sequence.
+# Without a shared *visited* set, the same large downstream graph is
+# walked once per child (N× redundant).  A ``ContextVar`` provides one
+# ``id(Optimizable)``-keyed set for the full batch of writes.
+# ``set_recompute_flag`` also uses this to deduplicate when the same
+# child is reachable through multiple parent edges in a DAG.
+_recompute_visited_during_batch: contextvars.ContextVar[Optional[set]] = (
+    contextvars.ContextVar("recompute_visited_during_batch", default=None)
+)
 
 try:
     import networkx as nx
@@ -46,8 +62,14 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-__all__ = ['Optimizable', 'make_optimizable', 'load', 'save',
-           'OptimizableSum', 'ScaledOptimizable']
+__all__ = [
+    "Optimizable",
+    "make_optimizable",
+    "load",
+    "save",
+    "OptimizableSum",
+    "ScaledOptimizable",
+]
 
 
 class DOFs(GSONable, Hashable):
@@ -72,14 +94,25 @@ class DOFs(GSONable, Hashable):
     table as properties. Additional methods to update bounds, fix/unfix DOFs,
     etc. are also defined.
     """
-    __slots__ = ["_x", "_free", "_lower_bounds", "_upper_bounds", "_names", "_dep_opts"]
 
-    def __init__(self,
-                 x: RealArray = None,  # To enable empty DOFs object
-                 names: StrArray = None,
-                 free: BoolArray = None,
-                 lower_bounds: RealArray = None,
-                 upper_bounds: RealArray = None) -> None:
+    __slots__ = [
+        "_x",
+        "_free",
+        "_lower_bounds",
+        "_upper_bounds",
+        "_names",
+        "_dep_opts",
+        "_state_version",
+    ]
+
+    def __init__(
+        self,
+        x: RealArray = None,  # To enable empty DOFs object
+        names: StrArray = None,
+        free: BoolArray = None,
+        lower_bounds: RealArray = None,
+        upper_bounds: RealArray = None,
+    ) -> None:
         """
         Args:
             x: Numeric values of the DOFs
@@ -98,7 +131,7 @@ class DOFs(GSONable, Hashable):
 
         if names is None:
             names = [f"x{i}" for i in range(len(x))]
-        assert (len(np.unique(names)) == len(names))  # DOF names should be unique
+        assert len(np.unique(names)) == len(names)  # DOF names should be unique
 
         if free is None:
             free = np.full(len(x), True)
@@ -115,16 +148,21 @@ class DOFs(GSONable, Hashable):
         else:
             upper_bounds = np.asarray(upper_bounds, np.double)
 
-        assert (len(x) == len(free) == len(lower_bounds) == len(upper_bounds)
-                == len(names))
+        assert (
+            len(x) == len(free) == len(lower_bounds) == len(upper_bounds) == len(names)
+        )
         self._x = x
         self._free = free
         self._lower_bounds = lower_bounds
         self._upper_bounds = upper_bounds
         self._names = list(names)
         self._dep_opts = []
+        # Bumped when numeric DOF data changes. Used to skip redundant
+        # ``MagneticField`` cache invalidation when the recompute walk fires
+        # multiple times for the same ``Dofs`` state (e.g. line search).
+        self._state_version: int = 0
         self._hash = id(self) % 10**32  # 32 digit int as hash
-        self.name = str(id(self))   # For serialization
+        self.name = str(id(self))  # For serialization
 
     def __hash__(self):
         return self._hash
@@ -156,13 +194,17 @@ class DOFs(GSONable, Hashable):
         Sets the recompute flag in the dependent Optimizable objects.
         This function is called whenever the DOF values are changed.
         """
+        shared = _recompute_visited_during_batch.get()
         for opt_ref in self._dep_opts:
             opt = opt_ref()
             if opt is not None:
                 if opt.local_dof_setter is not None:
                     # opt.local_dof_setter(opt, list(self._x))
                     opt.local_dof_setter(opt, self._x)
-                opt.set_recompute_flag()
+                # ``shared`` is non-``None`` only inside an ``Optimizable.x`` /
+                # ``full_x`` batch; otherwise each call gets a fresh set inside
+                # ``set_recompute_flag`` (``_visited is None``).
+                opt.set_recompute_flag(_visited=shared)
 
     def _update_opt_indices(self):
         """
@@ -172,6 +214,13 @@ class DOFs(GSONable, Hashable):
         for opt_ref in self._dep_opts:
             opt = opt_ref()
             if opt is not None:
+                # The cached ``_any_free_in_lineage`` answer in this opt and
+                # any descendants is no longer valid because a free-status bit
+                # in this DOFs object just flipped. ``update_free_dof_size_indices``
+                # below propagates the invalidation through the children, but
+                # we also clear it here at the immediate dep_opt to make the
+                # invariant local to fix/unfix.
+                opt._has_any_free_in_lineage = None
                 opt.update_free_dof_size_indices()
 
     def __len__(self):
@@ -248,7 +297,10 @@ class DOFs(GSONable, Hashable):
         """
         if isinstance(key, str):
             key = self._names.index(key)
+        if self._x[key] == val:
+            return
         self._x[key] = val
+        self._state_version += 1
         self._flag_recompute_opt()
 
     def is_free(self, key: Key) -> bool:
@@ -320,7 +372,11 @@ class DOFs(GSONable, Hashable):
         # And to prevent broadcasting of a single DOF
         if self.reduced_len != len(x):
             raise DofLengthMismatchError(len(x), self.reduced_len)
-        self._x[self._free] = np.asarray(x, dtype=np.double)
+        newv = np.asarray(x, dtype=np.double)
+        if self.reduced_len > 0 and np.array_equal(self._x[self._free], newv):
+            return
+        self._x[self._free] = newv
+        self._state_version += 1
         self._flag_recompute_opt()
 
     @property
@@ -346,7 +402,11 @@ class DOFs(GSONable, Hashable):
         # To prevent broadcasting of a single DOF
         if len(self._x) != len(x):
             raise DofLengthMismatchError(len(x), len(self._x))
-        self._x = np.asarray(x, dtype=np.double)
+        newv = np.asarray(x, dtype=np.double)
+        if len(self._x) > 0 and np.array_equal(self._x, newv):
+            return
+        self._x = newv
+        self._state_version += 1
         self._flag_recompute_opt()
 
     @property
@@ -495,6 +555,7 @@ class DOFs(GSONable, Hashable):
         Returns:
             string identifiers of the DOFs
         """
+
         @lru_cache()
         def red_names(free):
             rnames = []
@@ -502,6 +563,7 @@ class DOFs(GSONable, Hashable):
                 if f:
                     rnames.append(self._names[i])
             return rnames
+
         return red_names(tuple(self._free))
 
     @property
@@ -570,20 +632,24 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
            input objects. The return fns of the parent object needed by the child
            could be specified by using `opt_return_fns` argument
     """
+
     return_fn_map: Dict[str, Callable] = NotImplemented
 
-    def __init__(self,
-                 x0: RealArray = None,
-                 names: StrArray = None,
-                 fixed: BoolArray = None,
-                 lower_bounds: RealArray = None,
-                 upper_bounds: RealArray = None, *,
-                 dofs: DOFs = None,
-                 external_dof_setter: Callable[..., None] = None,
-                 depends_on: Sequence[Optimizable] = None,
-                 opt_return_fns: Sequence[Sequence[str]] = None,
-                 funcs_in: Sequence[Callable[..., Union[RealArray, Real]]] = None,
-                 **kwargs):
+    def __init__(
+        self,
+        x0: RealArray = None,
+        names: StrArray = None,
+        fixed: BoolArray = None,
+        lower_bounds: RealArray = None,
+        upper_bounds: RealArray = None,
+        *,
+        dofs: DOFs = None,
+        external_dof_setter: Callable[..., None] = None,
+        depends_on: Sequence[Optimizable] = None,
+        opt_return_fns: Sequence[Sequence[str]] = None,
+        funcs_in: Sequence[Callable[..., Union[RealArray, Real]]] = None,
+        **kwargs,
+    ):
         """
         Args:
             x0: Initial state (or initial values of DOFs)
@@ -623,11 +689,13 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
                 funcs_in with a property decorator
         """
         if dofs is None:
-            dofs = DOFs(x0,
-                        names,
-                        np.logical_not(fixed) if fixed is not None else None,
-                        lower_bounds,
-                        upper_bounds)
+            dofs = DOFs(
+                x0,
+                names,
+                np.logical_not(fixed) if fixed is not None else None,
+                lower_bounds,
+                upper_bounds,
+            )
         else:
             # If a DOFs object is supplied, call external dof setter if present
             if external_dof_setter is not None:
@@ -640,20 +708,30 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         # instances of same class
         self._id = ImmutableId(next(self.__class__._ids))
         self.name = self.__class__.__name__ + str(self._id.id)
-        hash_str = hashlib.sha256(self.name.encode('utf-8')).hexdigest()
+        hash_str = hashlib.sha256(self.name.encode("utf-8")).hexdigest()
         self._hash = int(hash_str, 16) % 10**32  # 32 digit int as hash
         self._children = set()  # This gets populated when the object is passed
         # as argument to another Optimizable object
-        self.return_fns = WeakKeyDefaultDict(list)  # Store return fn's required by each child
+        self.return_fns = WeakKeyDefaultDict(
+            list
+        )  # Store return fn's required by each child
+
+        # Cache for ``_any_free_in_lineage`` (see the property below). ``None``
+        # means "not yet computed / invalid"; a bool is the cached answer.
+        # Invalidated by ``update_free_dof_size_indices`` and
+        # ``_update_full_dof_size_indices`` (i.e. on every fix/unfix or
+        # parent/child structural change).
+        self._has_any_free_in_lineage: Optional[bool] = None
 
         # Assign self as child to parents
         funcs_in = list(funcs_in) if funcs_in is not None else []
         depends_on = list(depends_on) if depends_on is not None else []
-        assert (not ((len(funcs_in) > 0) and (len(depends_on) > 0)))
+        assert not ((len(funcs_in) > 0) and (len(depends_on) > 0))
 
         def binder(fn, inst):
             def func(*args, **kwargs):
                 return fn(inst, *args, **kwargs)
+
             return func
 
         if len(depends_on):
@@ -732,8 +810,11 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         return_fn_map = self.__class__.return_fn_map
 
         if child:
-            return_fns = self.return_fns[child] if self.return_fns[child] else \
-                return_fn_map.values()
+            return_fns = (
+                self.return_fns[child]
+                if self.return_fns[child]
+                else return_fn_map.values()
+            )
         else:
             return_fns = return_fn_map.values()
 
@@ -944,8 +1025,16 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
             dof_indices.append(free_dof_size)
 
         self._free_dof_size = free_dof_size
-        self.dof_indices = dict(zip(self._unique_dof_opts,
-                                    zip(dof_indices[:-1], dof_indices[1:])))
+        self.dof_indices = dict(
+            zip(self._unique_dof_opts, zip(dof_indices[:-1], dof_indices[1:]))
+        )
+
+        # Free-status may have changed (this is the path called by
+        # DOFs.fix/unfix/fix_all/unfix_all via DOFs._update_opt_indices), so
+        # invalidate the cached ``_any_free_in_lineage`` answer here. We do
+        # this for the current node and rely on the recursion below to cover
+        # descendants.
+        self._has_any_free_in_lineage = None
 
         # Update the reduced dof length of children
         for weakref_child in self._children:
@@ -971,7 +1060,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         dof_objs = set()
         self.ancestors = self._get_ancestors()
         self._unique_dof_opts = []
-        for opt in (self.ancestors + [self]):
+        for opt in self.ancestors + [self]:
             if opt.dofs not in dof_objs:
                 dof_objs.add(opt.dofs)
                 full_dof_size += opt.local_full_dof_size
@@ -979,8 +1068,13 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
                 self._unique_dof_opts.append(opt)
 
         self._full_dof_size = full_dof_size
-        self._full_dof_indices = dict(zip(self._unique_dof_opts,
-                                          zip(dof_indices[:-1], dof_indices[1:])))
+        self._full_dof_indices = dict(
+            zip(self._unique_dof_opts, zip(dof_indices[:-1], dof_indices[1:]))
+        )
+
+        # The lineage just changed, so the cached ``_any_free_in_lineage``
+        # answer is no longer trustworthy.
+        self._has_any_free_in_lineage = None
 
         # Update the full dof length of children
         for weakref_child in self._children:
@@ -1041,15 +1135,20 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         Numeric values of the free DOFs associated with the current
         Optimizable object and those of its ancestors
         """
-        return np.concatenate([opt._dofs.free_x for
-                               opt in self._unique_dof_opts])
+        return np.concatenate([opt._dofs.free_x for opt in self._unique_dof_opts])
 
     @x.setter
     def x(self, x: RealArray) -> None:
         if list(self.dof_indices.values())[-1][-1] != len(x):
             raise ValueError
-        for opt, indices in self.dof_indices.items():
-            opt.local_x = x[indices[0]:indices[1]]
+        # One shared visited set for all local_x writes: avoids an O(N_graph)
+        # recompute walk per sub-``Optimizable`` in this joint object.
+        token = _recompute_visited_during_batch.set(set())
+        try:
+            for opt, indices in self.dof_indices.items():
+                opt.local_x = x[indices[0] : indices[1]]
+        finally:
+            _recompute_visited_during_batch.reset(token)
 
     @property
     def full_x(self) -> RealArray:
@@ -1057,16 +1156,19 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         Numeric values of all the DOFs (both free and fixed) associated
         with the current Optimizable object and those of its ancestors
         """
-        return np.concatenate([opt._dofs.full_x for
-                               opt in self._unique_dof_opts])
+        return np.concatenate([opt._dofs.full_x for opt in self._unique_dof_opts])
 
     @full_x.setter
     def full_x(self, x: RealArray) -> None:
         """
         Setter used to set all the global DOF values
         """
-        for opt, indices in self._full_dof_indices.items():
-            opt.local_full_x = x[indices[0]:indices[1]]
+        token = _recompute_visited_during_batch.set(set())
+        try:
+            for opt, indices in self._full_dof_indices.items():
+                opt.local_full_x = x[indices[0] : indices[1]]
+        finally:
+            _recompute_visited_during_batch.reset(token)
 
     @property
     def local_x(self) -> RealArray:
@@ -1109,7 +1211,20 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         """
         self._dofs.full_x = x
 
-    def set_recompute_flag(self, parent=None):
+    def set_recompute_flag(self, parent=None, _visited: Optional[set] = None):
+        """
+        Mark this node and all descendants for recomputation. When
+        ``_visited`` is ``None``, a new ``set`` of ``id(Optimizable)`` keys
+        is started for this call tree. When the same set is passed (e.g. from
+        a joint ``x`` update), each node is processed at most once, which
+        deduplicates DAGs where a child is reachable from multiple parents.
+        """
+        if _visited is None:
+            _visited = set()
+        oid = id(self)
+        if oid in _visited:
+            return
+        _visited.add(oid)
         self.new_x = True
         self.recompute_bell(parent=parent)
 
@@ -1117,7 +1232,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         for weakref_child in self._children:
             child = weakref_child()
             if child is not None:
-                child.set_recompute_flag(parent=self)
+                child.set_recompute_flag(parent=self, _visited=_visited)
 
     def get(self, key: Key) -> Real:
         """
@@ -1189,7 +1304,9 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         Lower bounds of the fixed and free DOFs associated with the current
         Optimizable object and those of its ancestors
         """
-        return np.concatenate([opt._dofs.full_lower_bounds for opt in self.unique_dof_lineage])
+        return np.concatenate(
+            [opt._dofs.full_lower_bounds for opt in self.unique_dof_lineage]
+        )
 
     @full_lower_bounds.setter
     def full_lower_bounds(self, lb) -> None:
@@ -1200,7 +1317,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         if list(self.dof_indices.values())[-1][-1] != len(lb):
             raise ValueError
         for opt, indices in self.dof_indices.items():
-            opt._dofs.full_lower_bounds = lb[indices[0]:indices[1]]
+            opt._dofs.full_lower_bounds = lb[indices[0] : indices[1]]
 
     @property
     def lower_bounds(self) -> RealArray:
@@ -1208,7 +1325,9 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         Lower bounds of the free DOFs associated with the current
         Optimizable object and those of its ancestors
         """
-        return np.concatenate([opt._dofs.free_lower_bounds for opt in self.unique_dof_lineage])
+        return np.concatenate(
+            [opt._dofs.free_lower_bounds for opt in self.unique_dof_lineage]
+        )
 
     @lower_bounds.setter
     def lower_bounds(self, lb) -> None:
@@ -1219,7 +1338,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         if list(self.dof_indices.values())[-1][-1] != len(lb):
             raise ValueError
         for opt, indices in self.dof_indices.items():
-            opt._dofs.free_lower_bounds = lb[indices[0]:indices[1]]
+            opt._dofs.free_lower_bounds = lb[indices[0] : indices[1]]
 
     def set_lower_bound(self, key: Key, new_val: Real) -> None:
         """
@@ -1270,7 +1389,9 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         Upper bounds of the fixed and free DOFs associated with the current
         Optimizable object and those of its ancestors
         """
-        return np.concatenate([opt._dofs.full_upper_bounds for opt in self.unique_dof_lineage])
+        return np.concatenate(
+            [opt._dofs.full_upper_bounds for opt in self.unique_dof_lineage]
+        )
 
     @full_upper_bounds.setter
     def full_upper_bounds(self, ub) -> None:
@@ -1281,7 +1402,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         if list(self.dof_indices.values())[-1][-1] != len(ub):
             raise ValueError
         for opt, indices in self.dof_indices.items():
-            opt._dofs.full_upper_bounds = ub[indices[0]:indices[1]]
+            opt._dofs.full_upper_bounds = ub[indices[0] : indices[1]]
 
     @property
     def upper_bounds(self) -> RealArray:
@@ -1289,7 +1410,9 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         Upper bounds of the free DOFs associated with the current
         Optimizable object and those of its ancestors
         """
-        return np.concatenate([opt._dofs.free_upper_bounds for opt in self.unique_dof_lineage])
+        return np.concatenate(
+            [opt._dofs.free_upper_bounds for opt in self.unique_dof_lineage]
+        )
 
     @upper_bounds.setter
     def upper_bounds(self, ub) -> None:
@@ -1300,7 +1423,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         if list(self.dof_indices.values())[-1][-1] != len(ub):
             raise ValueError
         for opt, indices in self.dof_indices.items():
-            opt._dofs.free_upper_bounds = ub[indices[0]:indices[1]]
+            opt._dofs.free_upper_bounds = ub[indices[0] : indices[1]]
 
     def set_upper_bound(self, key: Key, new_val: Real) -> None:
         """
@@ -1390,7 +1513,39 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         current and ancestors Optimizable objects are free or not
         """
         return np.concatenate(
-            [opt._dofs.free_status for opt in self.unique_dof_lineage])
+            [opt._dofs.free_status for opt in self.unique_dof_lineage]
+        )
+
+    @property
+    def _any_free_in_lineage(self) -> bool:
+        """
+        Whether *any* DOF on this Optimizable or its (deduplicated) ancestor
+        lineage is currently free.
+
+        Functionally identical to ``bool(np.any(self.dofs_free_status))`` but
+        O(1) in the steady state: the answer is cached in
+        ``self._has_any_free_in_lineage`` and only recomputed when the cache
+        is explicitly invalidated (set to ``None``) by
+        ``update_free_dof_size_indices`` or ``_update_full_dof_size_indices``,
+        i.e. on every fix/unfix/structural change. This avoids the
+        ``np.concatenate`` over the lineage that previously dominated
+        cache-invalidation hot paths in dipole-array optimizations.
+
+        Returns
+        -------
+        bool
+            ``True`` if at least one DOF in this object's unique lineage is
+            free, otherwise ``False``.
+        """
+        cached = self._has_any_free_in_lineage
+        if cached is None:
+            cached = False
+            for opt in self._unique_dof_opts:
+                if opt._dofs._free.any():
+                    cached = True
+                    break
+            self._has_any_free_in_lineage = cached
+        return cached
 
     @property
     def local_dofs_free_status(self) -> BoolArray:
@@ -1443,7 +1598,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
     def full_fix(self, arr: Key) -> None:
         """
         Set the fixed/free attribute for all dofs on which this Optimizable object
-        depends. 
+        depends.
 
         Args:
             arr: List or array of the same length as ``full_x``, containing
@@ -1451,13 +1606,13 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
                 to fixed.
         """
         for opt, indices in self._full_dof_indices.items():
-            opt._dofs._free[:] = np.logical_not(arr[indices[0]:indices[1]])
+            opt._dofs._free[:] = np.logical_not(arr[indices[0] : indices[1]])
             opt._dofs._update_opt_indices()
 
     def full_unfix(self, arr: Key) -> None:
         """
         Set the fixed/free attribute for all dofs on which this Optimizable object
-        depends. 
+        depends.
 
         Args:
             arr: List or array of the same length as ``full_x``, containing
@@ -1465,7 +1620,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
                 to free.
         """
         for opt, indices in self._full_dof_indices.items():
-            opt._dofs._free[:] = arr[indices[0]:indices[1]]
+            opt._dofs._free[:] = arr[indices[0] : indices[1]]
             opt._dofs._update_opt_indices()
 
     def local_fix_all(self) -> None:
@@ -1501,15 +1656,15 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
             opt.local_unfix_all()
 
     def __add__(self, other):
-        """ Add two Optimizable objects """
+        """Add two Optimizable objects"""
         return OptimizableSum([self, other])
 
     def __mul__(self, other):
-        """ Multiply an Optimizable object by a scalar """
+        """Multiply an Optimizable object by a scalar"""
         return ScaledOptimizable(other, self)
 
     def __rmul__(self, other):
-        """ Multiply an Optimizable object by a scalar """
+        """Multiply an Optimizable object by a scalar"""
         return ScaledOptimizable(other, self)
 
     # https://stackoverflow.com/questions/11624955/avoiding-python-sum-default-start-arg-behavior
@@ -1524,14 +1679,14 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
     @SimsoptRequires(plt is not None, "print method for DAG requires matplotlib")
     def plot_graph(self, show=True):
         """
-        Plot the directed acyclical graph that represents the dependencies of an 
+        Plot the directed acyclical graph that represents the dependencies of an
         ``Optimizable`` on its parents. The workflow is as follows: generate a ``networkx``
         ``DiGraph`` using the ``traversal`` function defined below.  Next, call ``graphviz_layout``
         which determines sensible positions for the nodes of the graph using the ``dot``
         program of ``graphviz``. Finally, ``networkx`` plots the graph using ``matplotlib``.
 
         Note that the tool ``network2tikz`` at `https://github.com/hackl/network2tikz <https://github.com/hackl/network2tikz>`_
-        can be used to convert the networkx ``DiGraph`` and positions to a 
+        can be used to convert the networkx ``DiGraph`` and positions to a
         latex file for publication.
 
         Args:
@@ -1556,12 +1711,13 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
 
         # this command generates sensible positions for nodes of the DAG
         # using the "dot" program
-        pos = graphviz_layout(G, prog='dot')
+        pos = graphviz_layout(G, prog="dot")
         options = {
-            'node_color': 'white',
-            'arrowstyle': '-|>',
-            'arrowsize': 12,
-            'font_size': 12}
+            "node_color": "white",
+            "arrowstyle": "-|>",
+            "arrowsize": 12,
+            "font_size": 12,
+        }
         nx.draw_networkx(G, pos=pos, arrows=True, **options)
         if show:
             plt.show()
@@ -1623,7 +1779,7 @@ def load(filename, *args, **kwargs):
         Simsopt object
     """
     fname = Path(filename).suffix.lower()
-    if (not fname == '.json'):
+    if not fname == ".json":
         raise ValueError(f"Invalid format: `{str(fname[1:])}`")
 
     with zopen(filename, "rt") as fp:
@@ -1634,7 +1790,7 @@ def load(filename, *args, **kwargs):
 
 def save(simsopt_objects, filename, *args, **kwargs):
     fname = Path(filename).suffix.lower()
-    if (not fname == '.json'):
+    if not fname == ".json":
         raise ValueError(f"Invalid format: `{str(fname[1:])}`")
 
     with zopen(filename, "wt") as fp:
@@ -1670,6 +1826,7 @@ def make_optimizable(func, *args, dof_indicators=None, **kwargs):
         If ``obj`` is the returned object, pass ``obj.J`` to the
         ``LeastSquaresProblem``
     """
+
     class TempOptimizable(Optimizable):
         """
         Subclass of Optimizable class to create optimizable objects dynamically.
@@ -1683,12 +1840,12 @@ def make_optimizable(func, *args, dof_indicators=None, **kwargs):
             self.kwarg_len = len(kwargs)
             self.kwarg_keys = []
             if dof_indicators is not None:
-                assert (self.arg_len + self.kwarg_len == len(dof_indicators))
+                assert self.arg_len + self.kwarg_len == len(dof_indicators)
                 # Using dof_indicators, map args and kwargs to
                 # dofs, non_dofs, and opts
                 dofs, non_dofs, opts = [], [], []
                 for i, arg in enumerate(args):
-                    if dof_indicators[i] == 'opt':
+                    if dof_indicators[i] == "opt":
                         opts.append(arg)
                     elif dof_indicators[i] == "non-dof":
                         non_dofs.append(arg)
@@ -1698,7 +1855,7 @@ def make_optimizable(func, *args, dof_indicators=None, **kwargs):
                         raise ValueError
                 for i, k in enumerate(kwargs.keys()):
                     self.kwarg_keys.append(k)
-                    if dof_indicators[i + self.arg_len] == 'opt':
+                    if dof_indicators[i + self.arg_len] == "opt":
                         opts.append(kwargs[k])
                     elif dof_indicators[i + self.arg_len] == "non-dof":
                         non_dofs.append(kwargs[k])
@@ -1740,13 +1897,13 @@ def make_optimizable(func, *args, dof_indicators=None, **kwargs):
             non_dof_ind = 0
             dof_ind = 0
             for i in range(self.arg_len):
-                if self.dof_indicators[i] == 'opt':
+                if self.dof_indicators[i] == "opt":
                     args.append(self.parents[opt_ind])
                     opt_ind += 1
-                elif self.dof_indicators[i] == 'dof':
+                elif self.dof_indicators[i] == "dof":
                     args.append(dofs[dof_ind])
                     dof_ind += 1
-                elif self.dof_indicators[i] == 'non-dof':
+                elif self.dof_indicators[i] == "non-dof":
                     args.append(self.non_dofs[non_dof_ind])
                     non_dof_ind += 1
                 else:
@@ -1755,19 +1912,19 @@ def make_optimizable(func, *args, dof_indicators=None, **kwargs):
 
             for j in range(self.kwarg_len):
                 i = j + self.arg_len
-                if self.dof_indicators[i] == 'opt':
+                if self.dof_indicators[i] == "opt":
                     kwargs[self.kwarg_keys[j]] = self.parents[opt_ind]
                     opt_ind += 1
-                elif self.dof_indicators[i] == 'dof':
+                elif self.dof_indicators[i] == "dof":
                     kwargs[self.kwarg_keys[j]] = dofs[dof_ind]
                     dof_ind += 1
-                elif self.dof_indicators[i] == 'non-dof':
+                elif self.dof_indicators[i] == "non-dof":
                     kwargs[self.kwarg_keys[j]] = self.non_dofs[non_dof_ind]
                     non_dof_ind += 1
                 else:
                     raise ValueError
                 j += 1
-            log.info(f'reassembled args len is {len(args)}')
+            log.info(f"reassembled args len is {len(args)}")
 
             return self.func(*args, **kwargs)
 
@@ -1824,5 +1981,14 @@ class OptimizableSum(Optimizable):
 
     @derivative_dec
     def dJ(self):
-        # Next line uses __add__ function for the Derivative class
-        return sum(opt.dJ(partials=True) for opt in self.opts)
+        # Accumulate in-place via ``__iadd__`` to avoid O(n^2) dict copies
+        # from ``__add__``/``copy_numpy_dict`` when many terms are summed.
+        djs = (opt.dJ(partials=True) for opt in self.opts)
+        acc = next(djs, None)
+        if acc is None:
+            from .derivative import Derivative
+
+            return Derivative()
+        for d in djs:
+            acc += d
+        return acc

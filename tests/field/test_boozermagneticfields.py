@@ -1,12 +1,17 @@
-from simsopt.field.boozermagneticfield import BoozerRadialInterpolant, InterpolatedBoozerField, BoozerAnalytic
+from simsopt.field.boozermagneticfield import (
+    BoozerRadialInterpolant,
+    InterpolatedBoozerField,
+    BoozerAnalytic,
+)
 import numpy as np
 import unittest
 from pathlib import Path
+
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
-filename = str((TEST_DIR / 'wout_LandremanPaul2021_QA_lowres.nc').resolve())
-filename_mhd = str((TEST_DIR / 'wout_n3are_R7.75B5.7.nc').resolve())
-filename_mhd_lowres = str((TEST_DIR / 'wout_n3are_R7.75B5.7_lowres.nc').resolve())
-filename_mhd_lasym = str((TEST_DIR / 'wout_10x10.nc').resolve())
+filename = str((TEST_DIR / "wout_LandremanPaul2021_QA_lowres.nc").resolve())
+filename_mhd = str((TEST_DIR / "wout_n3are_R7.75B5.7.nc").resolve())
+filename_mhd_lowres = str((TEST_DIR / "wout_n3are_R7.75B5.7_lowres.nc").resolve())
+filename_mhd_lasym = str((TEST_DIR / "wout_10x10.nc").resolve())
 
 try:
     import vmec
@@ -36,11 +41,11 @@ class TestingAnalytic(unittest.TestCase):
 
         ntheta = 101
         nzeta = 100
-        thetas = np.linspace(0, 2*np.pi, ntheta, endpoint=False)
-        zetas = np.linspace(0, 2*np.pi, nzeta, endpoint=False)
+        thetas = np.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+        zetas = np.linspace(0, 2 * np.pi, nzeta, endpoint=False)
         [zetas, thetas] = np.meshgrid(zetas, thetas)
         points = np.zeros((len(thetas.flatten()), 3))
-        points[:, 0] = 0.5*np.ones_like(thetas.flatten())
+        points[:, 0] = 0.5 * np.ones_like(thetas.flatten())
         points[:, 1] = thetas.flatten()
         points[:, 2] = zetas.flatten()
         ba.set_points(points)
@@ -51,15 +56,19 @@ class TestingAnalytic(unittest.TestCase):
         assert np.allclose(thetas_get, thetas.flatten())
 
         # Check that angular derivatives integrate to zero
-        assert np.allclose(np.sum(ba.dmodBdtheta().reshape(np.shape(thetas)), axis=0), 0, rtol=1e-12)
-        assert np.allclose(np.sum(ba.dmodBdzeta().reshape(np.shape(thetas)), axis=1), 0, rtol=1e-12)
+        assert np.allclose(
+            np.sum(ba.dmodBdtheta().reshape(np.shape(thetas)), axis=0), 0, rtol=1e-12
+        )
+        assert np.allclose(
+            np.sum(ba.dmodBdzeta().reshape(np.shape(thetas)), axis=1), 0, rtol=1e-12
+        )
 
         # Check that zeta derivatives are small since we are QA
         assert np.allclose(ba.dmodBdzeta(), 0, atol=1e-12)
 
         # Check that (theta + zeta) derivatives are small since we are QH
         ba.set_N(1)
-        assert np.allclose(ba.dmodBdtheta()+ba.dmodBdzeta(), 0, atol=1e-12)
+        assert np.allclose(ba.dmodBdtheta() + ba.dmodBdzeta(), 0, atol=1e-12)
 
         # Check that G = G0
         assert np.allclose(ba.G(), G0, atol=1e-12)
@@ -78,7 +87,7 @@ class TestingAnalytic(unittest.TestCase):
         assert np.allclose(ba.diotads(), 0, atol=1e-12)
 
         # Check that if etabar = 0, dBdtheta = dBdzeta = dBds = 0
-        ba.set_etabar(0.)
+        ba.set_etabar(0.0)
         assert np.allclose(ba.dmodBdtheta(), 0, atol=1e-12)
         assert np.allclose(ba.dmodBdzeta(), 0, atol=1e-12)
         assert np.allclose(ba.dmodBds(), 0, atol=1e-12)
@@ -96,23 +105,23 @@ class TestingAnalytic(unittest.TestCase):
 
         # Check other set_ functions
         ba.set_B0(1.3)
-        assert (ba.B0 == 1.3)
-        ba.set_Bbar(3.)
-        assert (ba.Bbar == 3.)
+        assert ba.B0 == 1.3
+        ba.set_Bbar(3.0)
+        assert ba.Bbar == 3.0
         ba.set_G0(3.1)
-        assert (ba.G0 == 3.1)
+        assert ba.G0 == 3.1
         ba.set_I0(3.2)
-        assert (ba.I0 == 3.2)
+        assert ba.I0 == 3.2
         ba.set_G1(3.3)
-        assert (ba.G1 == 3.3)
+        assert ba.G1 == 3.3
         ba.set_I1(3.4)
-        assert (ba.I1 == 3.4)
+        assert ba.I1 == 3.4
         ba.set_iota0(3.5)
-        assert (ba.iota0 == 3.5)
+        assert ba.iota0 == 3.5
         ba.set_psi0(3.6)
-        assert (ba.psi0 == 3.6)
+        assert ba.psi0 == 3.6
         ba.set_K1(3.7)
-        assert (ba.K1 == 3.7)
+        assert ba.K1 == 3.7
 
 
 @unittest.skipIf(vmec is None, "vmec python package is not found")
@@ -128,8 +137,8 @@ class TestingVmec(unittest.TestCase):
         ns_delete = 1
         ntheta = 21
         nzeta = 20
-        thetas = np.linspace(0, 2*np.pi, ntheta, endpoint=False)
-        zetas = np.linspace(0, 2*np.pi/vmec_sym.wout.nfp, nzeta, endpoint=False)
+        thetas = np.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+        zetas = np.linspace(0, 2 * np.pi / vmec_sym.wout.nfp, nzeta, endpoint=False)
 
         thetas, zetas = np.meshgrid(thetas, zetas)
         thetas_flat = thetas.flatten()
@@ -144,8 +153,9 @@ class TestingVmec(unittest.TestCase):
             for rescale in [True, False]:
                 # First, do not initialize grid
                 booz = Boozer(vmec, mpol=1, ntor=1)
-                bri = BoozerRadialInterpolant(booz, order, rescale=rescale,
-                                              ns_delete=ns_delete, mpol=1, ntor=1)
+                bri = BoozerRadialInterpolant(
+                    booz, order, rescale=rescale, ns_delete=ns_delete, mpol=1, ntor=1
+                )
 
                 s_0 = np.copy(bri.s_half_ext)
                 G_0 = bri.G_spline(0.5)
@@ -154,8 +164,9 @@ class TestingVmec(unittest.TestCase):
                 booz = Boozer(vmec, mpol=1, ntor=1)
                 booz.register(vmec.s_half_grid[0:5])
                 booz.run()
-                bri = BoozerRadialInterpolant(booz, order, rescale=False,
-                                              ns_delete=ns_delete, mpol=1, ntor=1)
+                bri = BoozerRadialInterpolant(
+                    booz, order, rescale=False, ns_delete=ns_delete, mpol=1, ntor=1
+                )
 
                 s_1 = np.copy(bri.s_half_ext)
                 G_1 = bri.G_spline(0.5)
@@ -163,11 +174,12 @@ class TestingVmec(unittest.TestCase):
                 # Next, intialize correct size, but wrong values
                 booz = Boozer(vmec, mpol=1, ntor=1)
                 s_grid = np.asarray(vmec.s_half_grid)
-                s_grid[0] = s_grid[0]*0.5
+                s_grid[0] = s_grid[0] * 0.5
                 booz.register(s_grid)
                 booz.run()
-                bri = BoozerRadialInterpolant(booz, order, rescale=False,
-                                              ns_delete=ns_delete, mpol=1, ntor=1)
+                bri = BoozerRadialInterpolant(
+                    booz, order, rescale=False, ns_delete=ns_delete, mpol=1, ntor=1
+                )
 
                 s_2 = np.copy(bri.s_half_ext)
                 G_2 = bri.G_spline(0.5)
@@ -187,10 +199,10 @@ class TestingVmec(unittest.TestCase):
             booz.register(vmec.s_half_grid)
             booz.run()
             for rescale in [False, True]:
-                bri = BoozerRadialInterpolant(booz, order, rescale=rescale,
-                                              ns_delete=ns_delete, mpol=20,
-                                              ntor=18)
-                isurf = round(0.75*len(vmec.s_full_grid))
+                bri = BoozerRadialInterpolant(
+                    booz, order, rescale=rescale, ns_delete=ns_delete, mpol=20, ntor=18
+                )
+                isurf = round(0.75 * len(vmec.s_full_grid))
 
                 """
                 These evaluation points test that the Jacobian sqrtg = (G + iota I)/B^2
@@ -207,23 +219,23 @@ class TestingVmec(unittest.TestCase):
                 I = bri.I()[:, 0]
                 iota = bri.iota()[:, 0]
                 B = bri.modB()[:, 0]
-                sqrtg = (G + iota * I)/(B*B)
+                sqrtg = (G + iota * I) / (B * B)
 
                 R = bri.R()[:, 0]
                 dRdtheta = bri.dRdtheta()[:, 0]
                 dRdzeta = bri.dRdzeta()[:, 0]
-                dRdpsi = bri.dRds()[:, 0]/bri.psi0
+                dRdpsi = bri.dRds()[:, 0] / bri.psi0
                 dZdtheta = bri.dZdtheta()[:, 0]
                 dZdzeta = bri.dZdzeta()[:, 0]
-                dZdpsi = bri.dZds()[:, 0]/bri.psi0
+                dZdpsi = bri.dZds()[:, 0] / bri.psi0
                 nu = bri.nu()[:, 0]
                 dnudtheta = bri.dnudtheta()[:, 0]
                 dnudzeta = bri.dnudzeta()[:, 0]
-                dnudpsi = bri.dnuds()[:, 0]/bri.psi0
+                dnudpsi = bri.dnuds()[:, 0] / bri.psi0
 
                 phi = zetas_flat - nu
-                dphidpsi = - dnudpsi
-                dphidtheta = - dnudtheta
+                dphidpsi = -dnudpsi
+                dphidtheta = -dnudtheta
                 dphidzeta = 1 - dnudzeta
 
                 dXdtheta = dRdtheta * np.cos(phi) - R * np.sin(phi) * dphidtheta
@@ -234,23 +246,31 @@ class TestingVmec(unittest.TestCase):
                 dYdzeta = dRdzeta * np.sin(phi) + R * np.cos(phi) * dphidzeta
 
                 gpsipsi = dXdpsi**2 + dYdpsi**2 + dZdpsi**2
-                gpsitheta = dXdpsi*dXdtheta + dYdpsi*dYdtheta + dZdpsi*dZdtheta
-                gpsizeta = dXdpsi*dXdzeta + dYdpsi*dYdzeta + dZdpsi*dZdzeta
+                gpsitheta = dXdpsi * dXdtheta + dYdpsi * dYdtheta + dZdpsi * dZdtheta
+                gpsizeta = dXdpsi * dXdzeta + dYdpsi * dYdzeta + dZdpsi * dZdzeta
                 gthetatheta = dXdtheta**2 + dYdtheta**2 + dZdtheta**2
-                gthetazeta = dXdtheta*dXdzeta + dYdtheta*dYdzeta + dZdtheta*dZdzeta
+                gthetazeta = (
+                    dXdtheta * dXdzeta + dYdtheta * dYdzeta + dZdtheta * dZdzeta
+                )
                 gzetazeta = dXdzeta**2 + dYdzeta**2 + dZdzeta**2
 
-                detg = gpsipsi*(gthetatheta*gzetazeta - gthetazeta**2) \
-                    - gpsitheta*(gpsitheta*gzetazeta - gthetazeta*gpsizeta) \
-                    + gpsizeta*(gpsitheta*gthetazeta - gpsizeta*gthetatheta)
+                detg = (
+                    gpsipsi * (gthetatheta * gzetazeta - gthetazeta**2)
+                    - gpsitheta * (gpsitheta * gzetazeta - gthetazeta * gpsizeta)
+                    + gpsizeta * (gpsitheta * gthetazeta - gpsizeta * gthetatheta)
+                )
 
-                assert np.allclose(np.sqrt(detg)/np.mean(np.abs(sqrtg)), np.abs(sqrtg)/np.mean(np.abs(sqrtg)), atol=1e-2)
+                assert np.allclose(
+                    np.sqrt(detg) / np.mean(np.abs(sqrtg)),
+                    np.abs(sqrtg) / np.mean(np.abs(sqrtg)),
+                    atol=1e-2,
+                )
 
                 """
                 These evluation points test that K() satisfies the magnetic differential
                 equation: iota dK/dtheta + dK/dzeta = sqrt(g) mu0*p'(psi) + G'(psi) + iota*I'(psi)
                 """
-                isurf = round(0.75*len(vmec.s_full_grid))
+                isurf = round(0.75 * len(vmec.s_full_grid))
                 points = np.zeros((len(thetas_flat), 3))
                 points[:, 0] = vmec.s_full_grid[isurf]
                 points[:, 1] = thetas_flat
@@ -270,19 +290,19 @@ class TestingVmec(unittest.TestCase):
                 G = bri.G()[:, 0]
                 iota = bri.iota()[:, 0]
                 modB = bri.modB()[:, 0]
-                sqrtg = (G + iota*I)/(modB*modB)
-                dGdpsi = bri.dGds()[:, 0]/bri.psi0
-                dIdpsi = bri.dIds()[:, 0]/bri.psi0
+                sqrtg = (G + iota * I) / (modB * modB)
+                dGdpsi = bri.dGds()[:, 0] / bri.psi0
+                dIdpsi = bri.dIds()[:, 0] / bri.psi0
 
                 pres = vmec.wout.pres  # on half grid
-                dpdpsi = (pres[isurf+1] - pres[isurf-1])/(2*vmec.ds*bri.psi0)
-                mu0 = 4*np.pi*1e-7
-                rhs = mu0*dpdpsi*sqrtg + dGdpsi + iota*dIdpsi
+                dpdpsi = (pres[isurf + 1] - pres[isurf - 1]) / (2 * vmec.ds * bri.psi0)
+                mu0 = 4 * np.pi * 1e-7
+                rhs = mu0 * dpdpsi * sqrtg + dGdpsi + iota * dIdpsi
 
                 K = K.reshape(np.shape(thetas))
                 dKdtheta = dKdtheta.reshape(np.shape(thetas))
                 dKdzeta = dKdzeta.reshape(np.shape(zetas))
-                lhs = iota.reshape(np.shape(thetas))*dKdtheta + dKdzeta
+                lhs = iota.reshape(np.shape(thetas)) * dKdtheta + dKdzeta
 
                 assert np.allclose(rhs, lhs.flatten(), atol=1e-2)
 
@@ -299,9 +319,15 @@ class TestingVmec(unittest.TestCase):
             else:
                 vmec = Vmec(filename)
             for rescale in [True, False]:
-                bri = BoozerRadialInterpolant(vmec, order, mpol=20, ntor=18,
-                                              rescale=rescale, ns_delete=ns_delete,
-                                              no_K=True)
+                bri = BoozerRadialInterpolant(
+                    vmec,
+                    order,
+                    mpol=20,
+                    ntor=18,
+                    rescale=rescale,
+                    ns_delete=ns_delete,
+                    no_K=True,
+                )
 
                 """
                 These evaluation points test G(), iota(), modB(), R(), and
@@ -309,24 +335,31 @@ class TestingVmec(unittest.TestCase):
                 vmec full grid.
                 """
                 # Perform interpolation from full grid
-                points = np.zeros((len(vmec.s_half_grid)-1, 3))
+                points = np.zeros((len(vmec.s_half_grid) - 1, 3))
                 points[:, 0] = vmec.s_full_grid[1:-1]
                 bri.set_points(points)
                 # Check with linear interpolation from half grid
-                G_full = (vmec.wout.bvco[1:-1]+vmec.wout.bvco[2::])/2.
-                iota_full = (vmec.wout.iotas[1:-1]+vmec.wout.iotas[2::])/2.
+                G_full = (vmec.wout.bvco[1:-1] + vmec.wout.bvco[2::]) / 2.0
+                iota_full = (vmec.wout.iotas[1:-1] + vmec.wout.iotas[2::]) / 2.0
                 # magnitude of B at theta = 0, zeta = 0
                 modB00 = np.sum(bri.booz.bx.bmnc_b, axis=0)
-                modB_full = (modB00[0:-1]+modB00[1::])/2
+                modB_full = (modB00[0:-1] + modB00[1::]) / 2
 
                 # Compare splines of derivatives with spline derivatives
                 from scipy.interpolate import InterpolatedUnivariateSpline
-                G_spline = InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bvco[1::])
-                iota_spline = InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.iotas[1::])
+
+                G_spline = InterpolatedUnivariateSpline(
+                    vmec.s_half_grid, vmec.wout.bvco[1::]
+                )
+                iota_spline = InterpolatedUnivariateSpline(
+                    vmec.s_half_grid, vmec.wout.iotas[1::]
+                )
                 modB00_spline = InterpolatedUnivariateSpline(vmec.s_half_grid, modB00)
 
                 rmnc_half = bri.booz.bx.rmnc_b
-                rmnc_full = 0.5*(bri.booz.bx.rmnc_b[:, 0:-1] + bri.booz.bx.rmnc_b[:, 1::])
+                rmnc_full = 0.5 * (
+                    bri.booz.bx.rmnc_b[:, 0:-1] + bri.booz.bx.rmnc_b[:, 1::]
+                )
                 # major radius at theta = 0, zeta = 0
                 R00_half = np.sum(rmnc_half, axis=0)
                 R00_full = np.sum(rmnc_full, axis=0)
@@ -345,20 +378,36 @@ class TestingVmec(unittest.TestCase):
                     # This is a vacuum case, so dGds is close to zero
                     mean_dGds = 1
 
-                assert np.allclose(bri.dGds()[5::, 0]/mean_dGds, G_spline.derivative()(vmec.s_full_grid[6:-1])/mean_dGds, atol=1e-2)
+                assert np.allclose(
+                    bri.dGds()[5::, 0] / mean_dGds,
+                    G_spline.derivative()(vmec.s_full_grid[6:-1]) / mean_dGds,
+                    atol=1e-2,
+                )
                 mean_diotads = np.mean(np.abs(bri.diotads()[5::, 0]))
-                assert np.allclose(bri.diotads()[5::, 0]/mean_diotads, iota_spline.derivative()(vmec.s_full_grid[6:-1])/mean_diotads, atol=1e-2)
-                assert np.allclose(bri.dmodBds()[5::, 0], modB00_spline.derivative()(vmec.s_full_grid[6:-1]), rtol=1e-2)
+                assert np.allclose(
+                    bri.diotads()[5::, 0] / mean_diotads,
+                    iota_spline.derivative()(vmec.s_full_grid[6:-1]) / mean_diotads,
+                    atol=1e-2,
+                )
+                assert np.allclose(
+                    bri.dmodBds()[5::, 0],
+                    modB00_spline.derivative()(vmec.s_full_grid[6:-1]),
+                    rtol=1e-2,
+                )
                 mean_dRds = np.mean(np.abs(bri.dRds()))
-                assert np.allclose(bri.dRds()[5::, 0]/mean_dRds, R00_spline.derivative()(vmec.s_full_grid[6:-1])/mean_dRds, atol=1e-2)
+                assert np.allclose(
+                    bri.dRds()[5::, 0] / mean_dRds,
+                    R00_spline.derivative()(vmec.s_full_grid[6:-1]) / mean_dRds,
+                    atol=1e-2,
+                )
 
                 """
                 The next evaluation points test Z() and nu()
                 """
                 points = np.zeros((len(vmec.s_half_grid), 3))
                 points[:, 0] = vmec.s_half_grid
-                points[:, 1] = 0.
-                points[:, 2] = np.pi/3
+                points[:, 1] = 0.0
+                points[:, 2] = np.pi / 3
                 bri.set_points(points)
 
                 nu = bri.nu()
@@ -367,14 +416,14 @@ class TestingVmec(unittest.TestCase):
                 # zmns/zmnc on full grid
                 # lmnc/lmns on half grid
                 # zmns_full = vmec.wout.zmns[:, 1:]
-                zmns_half = 0.5*(vmec.wout.zmns[:, 0:-1] + vmec.wout.zmns[:, 1::])
+                zmns_half = 0.5 * (vmec.wout.zmns[:, 0:-1] + vmec.wout.zmns[:, 1::])
                 # lmns_full = 0.5*(vmec.wout.lmns[:, 1:-1] + vmec.wout.lmns[:, 2::])
                 lmns_half = vmec.wout.lmns[:, 1::]
                 if not bri.stellsym:
                     # lmnc_full = 0.5*(vmec.wout.lmnc[:, 1:-1] + vmec.wout.lmnc[:, 2::])
                     lmnc_half = vmec.wout.lmnc[:, 1::]
                     # zmnc_full = vmec.wout.zmnc[:, 1:-1]
-                    zmnc_half = 0.5*(vmec.wout.zmnc[:, 0:-1] + vmec.wout.zmnc[:, 1::])
+                    zmnc_half = 0.5 * (vmec.wout.zmnc[:, 0:-1] + vmec.wout.zmnc[:, 1::])
                 else:
                     # lmnc_full = np.zeros_like(lmns_full)
                     # zmnc_full = np.zeros_like(zmns_full)
@@ -387,25 +436,52 @@ class TestingVmec(unittest.TestCase):
                 # theta + lambda - iota * (pi/3 - nu) = - iota * pi/3
                 # theta + lambda + iota * nu = 0
                 def theta_diff(theta, isurf):
-                    lam = np.sum(lmns_half[:, isurf] * np.sin(vmec.wout.xm*theta-vmec.wout.xn*(np.pi/3-nu[isurf, 0]))
-                                 + lmnc_half[:, isurf] * np.cos(vmec.wout.xm*theta-vmec.wout.xn*(np.pi/3-nu[isurf, 0])), axis=0)
-                    return ((theta + lam) + iota[isurf, 0]*(nu[isurf, 0]))**2
+                    lam = np.sum(
+                        lmns_half[:, isurf]
+                        * np.sin(
+                            vmec.wout.xm * theta
+                            - vmec.wout.xn * (np.pi / 3 - nu[isurf, 0])
+                        )
+                        + lmnc_half[:, isurf]
+                        * np.cos(
+                            vmec.wout.xm * theta
+                            - vmec.wout.xn * (np.pi / 3 - nu[isurf, 0])
+                        ),
+                        axis=0,
+                    )
+                    return ((theta + lam) + iota[isurf, 0] * (nu[isurf, 0])) ** 2
 
                 from scipy.optimize import minimize
+
                 thetas_vmec = np.zeros((len(vmec.s_half_grid),))
                 for isurf in range(len(vmec.s_half_grid)):
                     opt = minimize(theta_diff, 0, args=(isurf))
                     thetas_vmec[isurf] = opt.x[0]
 
                 # Compute Z at theta_b = 0, zeta_b = pi/2  and compare with vmec result
-                Z0pi = np.sum(zmns_half * np.sin(vmec.wout.xm[:, None]*thetas_vmec[None, :]-vmec.wout.xn[:, None]*(np.pi/3-nu[None, :, 0]))
-                              + zmnc_half * np.cos(vmec.wout.xm[:, None]*thetas_vmec[None, :]-vmec.wout.xn[:, None]*(np.pi/3-nu[None, :, 0])), axis=0)
+                Z0pi = np.sum(
+                    zmns_half
+                    * np.sin(
+                        vmec.wout.xm[:, None] * thetas_vmec[None, :]
+                        - vmec.wout.xn[:, None] * (np.pi / 3 - nu[None, :, 0])
+                    )
+                    + zmnc_half
+                    * np.cos(
+                        vmec.wout.xm[:, None] * thetas_vmec[None, :]
+                        - vmec.wout.xn[:, None] * (np.pi / 3 - nu[None, :, 0])
+                    ),
+                    axis=0,
+                )
                 Z0pi_spline = InterpolatedUnivariateSpline(vmec.s_half_grid, Z0pi)
 
                 mean_dZds = np.mean(np.abs(bri.dZds()[5::, 0]))
 
                 assert np.allclose(bri.Z()[:, 0], Z0pi, atol=1e-2)
-                assert np.allclose(bri.dZds()[5::, 0]/mean_dZds, Z0pi_spline.derivative()(vmec.s_half_grid[5::])/mean_dZds, atol=5e-2)
+                assert np.allclose(
+                    bri.dZds()[5::, 0] / mean_dZds,
+                    Z0pi_spline.derivative()(vmec.s_half_grid[5::]) / mean_dZds,
+                    atol=5e-2,
+                )
 
                 """
                 The next evaluation points test the derivatives of modB, R, Z, and nu
@@ -417,11 +493,11 @@ class TestingVmec(unittest.TestCase):
                 # Check that angular derivatives integrate to zero
                 ntheta = 101
                 nzeta = 100
-                thetas = np.linspace(0, 2*np.pi, ntheta, endpoint=False)
-                zetas = np.linspace(0, 2*np.pi, nzeta, endpoint=False)
+                thetas = np.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+                zetas = np.linspace(0, 2 * np.pi, nzeta, endpoint=False)
                 [zetas, thetas] = np.meshgrid(zetas, thetas)
                 points = np.zeros((len(thetas.flatten()), 3))
-                points[:, 0] = 0.5*np.ones_like(thetas.flatten())
+                points[:, 0] = 0.5 * np.ones_like(thetas.flatten())
                 points[:, 1] = thetas.flatten()
                 points[:, 2] = zetas.flatten()
                 bri.set_points(points)
@@ -429,16 +505,56 @@ class TestingVmec(unittest.TestCase):
                 points_get = bri.get_points()
                 thetas_get = points_get[:, 1]
                 assert np.allclose(thetas_get, thetas.flatten())
-                assert np.allclose(np.sum(bri.dmodBdtheta().reshape(np.shape(thetas)), axis=0), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dmodBdzeta().reshape(np.shape(thetas)), axis=1), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dRdtheta().reshape(np.shape(thetas)), axis=0), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dRdzeta().reshape(np.shape(thetas)), axis=1), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dZdtheta().reshape(np.shape(thetas)), axis=0), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dZdzeta().reshape(np.shape(thetas)), axis=1), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dnudtheta().reshape(np.shape(thetas)), axis=0), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dnudzeta().reshape(np.shape(thetas)), axis=1), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dKdtheta().reshape(np.shape(thetas)), axis=0), 0, rtol=1e-12)
-                assert np.allclose(np.sum(bri.dKdzeta().reshape(np.shape(thetas)), axis=1), 0, rtol=1e-12)
+                assert np.allclose(
+                    np.sum(bri.dmodBdtheta().reshape(np.shape(thetas)), axis=0),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dmodBdzeta().reshape(np.shape(thetas)), axis=1),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dRdtheta().reshape(np.shape(thetas)), axis=0),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dRdzeta().reshape(np.shape(thetas)), axis=1),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dZdtheta().reshape(np.shape(thetas)), axis=0),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dZdzeta().reshape(np.shape(thetas)), axis=1),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dnudtheta().reshape(np.shape(thetas)), axis=0),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dnudzeta().reshape(np.shape(thetas)), axis=1),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dKdtheta().reshape(np.shape(thetas)), axis=0),
+                    0,
+                    rtol=1e-12,
+                )
+                assert np.allclose(
+                    np.sum(bri.dKdzeta().reshape(np.shape(thetas)), axis=1),
+                    0,
+                    rtol=1e-12,
+                )
                 # Check that zeta derivatives are small since we are close to QA
                 if not asym:
                     assert np.allclose(bri.dmodBdzeta(), 0, atol=1e-2)
@@ -475,23 +591,30 @@ class TestingVmec(unittest.TestCase):
         thetamax = np.pi
         thetasteps = n
         zetamin = 0
-        zetamax = 2*np.pi/(nfp)
-        zetasteps = n*2
+        zetamax = 2 * np.pi / (nfp)
+        zetasteps = n * 2
         bsh = InterpolatedBoozerField(
-            bri, 4, [smin, smax, ssteps], [thetamin, thetamax, thetasteps], [zetamin, zetamax, zetasteps],
-            True, stellsym=True, nfp=nfp)
+            bri,
+            4,
+            [smin, smax, ssteps],
+            [thetamin, thetamax, thetasteps],
+            [zetamin, zetamax, zetasteps],
+            True,
+            stellsym=True,
+            nfp=nfp,
+        )
 
         # Compute points outside of interpolation range
         N = 10
         np.random.seed(2)
         points = np.random.uniform(size=(N, 3))
         thetamin = -np.pi
-        thetamax = 2*np.pi
-        zetamin = -2*np.pi/nfp
-        zetamax = 4*np.pi/nfp
-        points[:, 0] = points[:, 0]*(smax-smin) + smin
-        points[:, 1] = points[:, 1]*(thetamax-thetamin) + thetamin
-        points[:, 2] = points[:, 2]*(zetamax-zetamin) + zetamin
+        thetamax = 2 * np.pi
+        zetamin = -2 * np.pi / nfp
+        zetamax = 4 * np.pi / nfp
+        points[:, 0] = points[:, 0] * (smax - smin) + smin
+        points[:, 1] = points[:, 1] * (thetamax - thetamin) + thetamin
+        points[:, 2] = points[:, 2] * (zetamax - zetamin) + zetamin
 
         bri.set_points(points)
         modB = bri.modB()
@@ -549,11 +672,17 @@ class TestingVmec(unittest.TestCase):
 
         assert np.allclose(K, Kh, rtol=1e-3)
         assert np.allclose(dKdtheta, dKdthetah, rtol=1e-3)
-        assert np.allclose((dKdzeta - dKdzetah)/np.mean(np.abs(dKdzeta)), 0, atol=1e-3)
+        assert np.allclose(
+            (dKdzeta - dKdzetah) / np.mean(np.abs(dKdzeta)), 0, atol=1e-3
+        )
 
         assert np.allclose(modB, modBh, rtol=1e-3)
-        assert np.allclose((dmodBds - dmodBdsh)/np.mean(np.abs(dmodBds)), 0, atol=1e-2)
-        assert np.allclose((dmodBdtheta - dmodBdthetah)/np.mean(np.abs(dmodBdtheta)), 0, atol=1e-2)
+        assert np.allclose(
+            (dmodBds - dmodBdsh) / np.mean(np.abs(dmodBds)), 0, atol=1e-2
+        )
+        assert np.allclose(
+            (dmodBdtheta - dmodBdthetah) / np.mean(np.abs(dmodBdtheta)), 0, atol=1e-2
+        )
         assert np.allclose(dmodBdzeta - dmodBdzetah, 0, atol=1e-3)
 
         assert np.allclose(R, Rh, rtol=1e-3)
@@ -609,36 +738,54 @@ class TestingVmec(unittest.TestCase):
         smax = 0.6
         ssteps = n
         thetamin = 0
-        thetamax = 2*np.pi
+        thetamax = 2 * np.pi
         thetasteps = n
         zetamin = 0
-        zetamax = 2*np.pi
-        zetasteps = n*2
+        zetamax = 2 * np.pi
+        zetasteps = n * 2
 
         with self.assertRaises(ValueError):
             bsh = InterpolatedBoozerField(
-                bri, 4, [smin, smax, ssteps], [-np.pi, 0, thetasteps], [zetamin, zetamax, zetasteps],
-                True, stellsym=False)
+                bri,
+                4,
+                [smin, smax, ssteps],
+                [-np.pi, 0, thetasteps],
+                [zetamin, zetamax, zetasteps],
+                True,
+                stellsym=False,
+            )
         with self.assertRaises(ValueError):
             bsh = InterpolatedBoozerField(
-                bri, 4, [smin, smax, ssteps], [thetamin, thetamax, thetasteps], [-np.pi, 0, zetasteps],
-                True, stellsym=False)
+                bri,
+                4,
+                [smin, smax, ssteps],
+                [thetamin, thetamax, thetasteps],
+                [-np.pi, 0, zetasteps],
+                True,
+                stellsym=False,
+            )
 
         bsh = InterpolatedBoozerField(
-            bri, 4, [smin, smax, ssteps], [thetamin, thetamax, thetasteps], [zetamin, zetamax, zetasteps],
-            True, stellsym=False)
+            bri,
+            4,
+            [smin, smax, ssteps],
+            [thetamin, thetamax, thetasteps],
+            [zetamin, zetamax, zetasteps],
+            True,
+            stellsym=False,
+        )
 
         # Compute points outside of interpolation range
         N = 10
         np.random.seed(2)
         points = np.random.uniform(size=(N, 3))
-        thetamin = -2*np.pi
-        thetamax = 4*np.pi
-        zetamin = -2*np.pi
-        zetamax = 4*np.pi
-        points[:, 0] = points[:, 0]*(smax-smin) + smin
-        points[:, 1] = points[:, 1]*(thetamax-thetamin) + thetamin
-        points[:, 2] = points[:, 2]*(zetamax-zetamin) + zetamin
+        thetamin = -2 * np.pi
+        thetamax = 4 * np.pi
+        zetamin = -2 * np.pi
+        zetamax = 4 * np.pi
+        points[:, 0] = points[:, 0] * (smax - smin) + smin
+        points[:, 1] = points[:, 1] * (thetamax - thetamin) + thetamin
+        points[:, 2] = points[:, 2] * (zetamax - zetamin) + zetamin
 
         bri.set_points(points)
         modB = bri.modB()
@@ -696,27 +843,43 @@ class TestingVmec(unittest.TestCase):
 
         assert np.allclose(K, Kh, rtol=1e-3)
         assert np.allclose(dKdtheta, dKdthetah, rtol=1e-3)
-        assert np.allclose((dKdzeta - dKdzetah)/np.mean(np.abs(dKdzeta)), 0, atol=1e-2)
+        assert np.allclose(
+            (dKdzeta - dKdzetah) / np.mean(np.abs(dKdzeta)), 0, atol=1e-2
+        )
 
         assert np.allclose(modB, modBh, rtol=1e-3)
-        assert np.allclose((dmodBds - dmodBdsh)/np.mean(np.abs(dmodBds)), 0, atol=1e-2)
-        assert np.allclose((dmodBdtheta - dmodBdthetah)/np.mean(np.abs(dmodBdtheta)), 0, atol=1e-2)
+        assert np.allclose(
+            (dmodBds - dmodBdsh) / np.mean(np.abs(dmodBds)), 0, atol=1e-2
+        )
+        assert np.allclose(
+            (dmodBdtheta - dmodBdthetah) / np.mean(np.abs(dmodBdtheta)), 0, atol=1e-2
+        )
         assert np.allclose(dmodBdzeta - dmodBdzetah, 0, atol=1e-3)
 
         assert np.allclose(R, Rh, rtol=1e-3)
-        assert np.allclose((dRds - dRdsh)/np.mean(np.abs(dRds)), 0, atol=1e-3)
-        assert np.allclose((dRdtheta - dRdthetah)/np.mean(np.abs(dRdtheta)), 0, atol=1e-3)
-        assert np.allclose((dRdtheta - dRdthetah)/np.mean(np.abs(dRdtheta)), 0, atol=1e-3)
+        assert np.allclose((dRds - dRdsh) / np.mean(np.abs(dRds)), 0, atol=1e-3)
+        assert np.allclose(
+            (dRdtheta - dRdthetah) / np.mean(np.abs(dRdtheta)), 0, atol=1e-3
+        )
+        assert np.allclose(
+            (dRdtheta - dRdthetah) / np.mean(np.abs(dRdtheta)), 0, atol=1e-3
+        )
 
         assert np.allclose(Z, Zh, rtol=1e-3)
-        assert np.allclose((dZds - dZdsh)/np.mean(np.abs(dZds)), 0, atol=1e-3)
-        assert np.allclose((dZdtheta - dZdthetah)/np.mean(np.abs(dZdtheta)), 0, atol=1e-3)
-        assert np.allclose((dZdtheta - dZdthetah)/np.mean(np.abs(dZdtheta)), 0, atol=1e-3)
+        assert np.allclose((dZds - dZdsh) / np.mean(np.abs(dZds)), 0, atol=1e-3)
+        assert np.allclose(
+            (dZdtheta - dZdthetah) / np.mean(np.abs(dZdtheta)), 0, atol=1e-3
+        )
+        assert np.allclose(
+            (dZdtheta - dZdthetah) / np.mean(np.abs(dZdtheta)), 0, atol=1e-3
+        )
 
         assert np.allclose(nu, nuh, rtol=1e-3)
         assert np.allclose(dnuds, dnudsh, rtol=1e-3)
         assert np.allclose(dnudtheta, dnudthetah, rtol=1e-3)
-        assert np.allclose((dnudzeta - dnudzetah)/np.mean(np.abs(dnudzeta)), 0, atol=1e-3)
+        assert np.allclose(
+            (dnudzeta - dnudzetah) / np.mean(np.abs(dnudzeta)), 0, atol=1e-3
+        )
 
         assert np.allclose(iota, iotah, rtol=1e-3)
         assert np.allclose(G, Gh, rtol=1e-3)
@@ -751,17 +914,17 @@ class TestingVmec(unittest.TestCase):
         bri = BoozerRadialInterpolant(vmec, order, mpol=10, ntor=10)
 
         # Perform interpolation from full grid
-        points = np.zeros((len(vmec.s_half_grid)-1, 3))
+        points = np.zeros((len(vmec.s_half_grid) - 1, 3))
         points[:, 0] = vmec.s_full_grid[1:-1]
         bri.set_points(points)
 
         nfp = vmec.wout.nfp
         smin = 0.1
         smax = 0.9
-        thetamin = np.pi*(1/4)
-        thetamax = np.pi*(3/4)
-        zetamin = 2*np.pi/(4*nfp)
-        zetamax = 2*np.pi*3/(4*nfp)
+        thetamin = np.pi * (1 / 4)
+        thetamax = np.pi * (3 / 4)
+        zetamin = 2 * np.pi / (4 * nfp)
+        zetamax = 2 * np.pi * 3 / (4 * nfp)
         old_err_modB = 1e6
         old_err_I = 1e6
         old_err_G = 1e6
@@ -775,8 +938,15 @@ class TestingVmec(unittest.TestCase):
             thetasteps = n
             zetasteps = n
             bsh = InterpolatedBoozerField(
-                bri, 1, [smin, smax, ssteps], [thetamin, thetamax, thetasteps], [zetamin, zetamax, zetasteps],
-                True, nfp=nfp, stellsym=True)
+                bri,
+                1,
+                [smin, smax, ssteps],
+                [thetamin, thetamax, thetasteps],
+                [zetamin, zetamax, zetasteps],
+                True,
+                nfp=nfp,
+                stellsym=True,
+            )
             err_modB = np.mean(bsh.estimate_error_modB(1000))
             err_I = np.mean(bsh.estimate_error_I(1000))
             err_G = np.mean(bsh.estimate_error_G(1000))

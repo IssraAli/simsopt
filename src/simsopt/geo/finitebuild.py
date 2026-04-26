@@ -1,28 +1,33 @@
 import numpy as np
 
-from .framedcurve import FramedCurve, FrameRotation, ZeroRotation, FramedCurveCentroid, FramedCurveFrenet
+from .framedcurve import (
+    FramedCurve,
+    FrameRotation,
+    ZeroRotation,
+    FramedCurveCentroid,
+    FramedCurveFrenet,
+)
 
 """
 The functions and classes in this model are used to deal with multifilament
 approximation of finite build coils.
 """
 
-__all__ = ['create_multifilament_grid', 'CurveFilament']
+__all__ = ["create_multifilament_grid", "CurveFilament"]
 
 
 class CurveFilament(FramedCurve):
-
     def __init__(self, framedcurve, dn, db):
         """
         Given a FramedCurve, defining a normal and
-        binormal vector, create a grid of curves by shifting 
-        along the normal and binormal vector. 
+        binormal vector, create a grid of curves by shifting
+        along the normal and binormal vector.
 
         The idea is explained well in Figure 1 in the reference:
 
         Singh et al, "Optimization of finite-build stellarator coils",
         Journal of Plasma Physics 86 (2020),
-        doi:10.1017/S0022377820000756. 
+        doi:10.1017/S0022377820000756.
 
         Args:
             curve: the underlying curve
@@ -55,9 +60,11 @@ class CurveFilament(FramedCurve):
         vgd = self.framedcurve.rotated_frame_dcoeff_vjp(v, self.dn, self.db, 1)
         vgdd = self.framedcurve.rotated_frame_dcoeff_vjp(v, self.dn, self.db, 2)
         va = self.framedcurve.rotated_frame_dcoeff_vjp(v, self.dn, self.db, 3)
-        out = self.curve.dgamma_by_dcoeff_vjp(v + vg) \
-            + self.curve.dgammadash_by_dcoeff_vjp(vgd) \
+        out = (
+            self.curve.dgamma_by_dcoeff_vjp(v + vg)
+            + self.curve.dgammadash_by_dcoeff_vjp(vgd)
             + self.rotation.dalpha_by_dcoeff_vjp(self.curve.quadpoints, va)
+        )
         if vgdd is not None:
             out += self.curve.dgammadashdash_by_dcoeff_vjp(vgdd)
         return out
@@ -70,18 +77,28 @@ class CurveFilament(FramedCurve):
         vgddd = self.framedcurve.rotated_frame_dash_dcoeff_vjp(v, self.dn, self.db, 3)
         va = self.framedcurve.rotated_frame_dash_dcoeff_vjp(v, self.dn, self.db, 4)
         vad = self.framedcurve.rotated_frame_dash_dcoeff_vjp(v, self.dn, self.db, 5)
-        out = self.curve.dgamma_by_dcoeff_vjp(vg) \
-            + self.curve.dgammadash_by_dcoeff_vjp(v+vgd) \
-            + self.curve.dgammadashdash_by_dcoeff_vjp(vgdd) \
-            + self.rotation.dalpha_by_dcoeff_vjp(self.curve.quadpoints, va) \
+        out = (
+            self.curve.dgamma_by_dcoeff_vjp(vg)
+            + self.curve.dgammadash_by_dcoeff_vjp(v + vgd)
+            + self.curve.dgammadashdash_by_dcoeff_vjp(vgdd)
+            + self.rotation.dalpha_by_dcoeff_vjp(self.curve.quadpoints, va)
             + self.rotation.dalphadash_by_dcoeff_vjp(self.curve.quadpoints, vad)
+        )
         if vgddd is not None:
             out += self.curve.dgammadashdashdash_by_dcoeff_vjp(vgddd)
         return out
 
 
-def create_multifilament_grid(curve, numfilaments_n, numfilaments_b, gapsize_n, gapsize_b,
-                              rotation_order=None, rotation_scaling=None, frame='centroid'):
+def create_multifilament_grid(
+    curve,
+    numfilaments_n,
+    numfilaments_b,
+    gapsize_n,
+    gapsize_b,
+    rotation_order=None,
+    rotation_scaling=None,
+    frame="centroid",
+):
     """
     Create a regular grid of ``numfilaments_n * numfilaments_b`` many
     filaments to approximate a finite-build coil.
@@ -104,25 +121,27 @@ def create_multifilament_grid(curve, numfilaments_n, numfilaments_b, gapsize_n, 
                            is used.
         frame: orthonormal frame to define normal and binormal before rotation (either 'centroid' or 'frenet')
     """
-    assert frame in ['centroid', 'frenet']
+    assert frame in ["centroid", "frenet"]
     if numfilaments_n % 2 == 1:
-        shifts_n = np.arange(numfilaments_n) - numfilaments_n//2
+        shifts_n = np.arange(numfilaments_n) - numfilaments_n // 2
     else:
-        shifts_n = np.arange(numfilaments_n) - numfilaments_n/2 + 0.5
+        shifts_n = np.arange(numfilaments_n) - numfilaments_n / 2 + 0.5
     shifts_n = shifts_n * gapsize_n
     if numfilaments_b % 2 == 1:
-        shifts_b = np.arange(numfilaments_b) - numfilaments_b//2
+        shifts_b = np.arange(numfilaments_b) - numfilaments_b // 2
     else:
-        shifts_b = np.arange(numfilaments_b) - numfilaments_b/2 + 0.5
+        shifts_b = np.arange(numfilaments_b) - numfilaments_b / 2 + 0.5
     shifts_b = shifts_b * gapsize_b
 
     if rotation_scaling is None:
-        rotation_scaling = 1/max(gapsize_n, gapsize_b)
+        rotation_scaling = 1 / max(gapsize_n, gapsize_b)
     if rotation_order is None:
         rotation = ZeroRotation(curve.quadpoints)
     else:
-        rotation = FrameRotation(curve.quadpoints, rotation_order, scale=rotation_scaling)
-    if frame == 'frenet':
+        rotation = FrameRotation(
+            curve.quadpoints, rotation_order, scale=rotation_scaling
+        )
+    if frame == "frenet":
         framedcurve = FramedCurveFrenet(curve, rotation)
     else:
         framedcurve = FramedCurveCentroid(curve, rotation)

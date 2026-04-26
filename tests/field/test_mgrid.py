@@ -16,12 +16,11 @@ from simsopt.field import MGrid
 from simsopt.mhd import Vmec
 
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
-test_file = TEST_DIR / 'mgrid.pnas-qa-test-lowres-standard.nc'
-test_file2 = TEST_DIR / 'mgrid_ncsx_lowres_test.nc'
+test_file = TEST_DIR / "mgrid.pnas-qa-test-lowres-standard.nc"
+test_file2 = TEST_DIR / "mgrid_ncsx_lowres_test.nc"
 
 
 class Testing(unittest.TestCase):
-
     def test_from_file(self):
         mgrid = MGrid.from_file(test_file)
 
@@ -31,7 +30,7 @@ class Testing(unittest.TestCase):
 
         names = mgrid.coil_names
         assert len(names) == 1
-        assert names[0] == '________simsopt_coils_________'
+        assert names[0] == "________simsopt_coils_________"
 
         assert mgrid.br_arr.shape == (1, 6, 11, 11)
         assert mgrid.br[0, 0, 0] == -1.0633399551863771  # -0.9946816978184079
@@ -45,31 +44,31 @@ class Testing(unittest.TestCase):
     def test_add_field_cylinder(self):
         N_points = 5
         br = np.ones(N_points)
-        bp = br*2
-        bz = br*3
+        bp = br * 2
+        bz = br * 3
         name = "test_coil"
 
         mgrid = MGrid()
         mgrid.add_field_cylindrical(br, bp, bz, name=name)
         assert mgrid.n_ext_cur == 1
-        assert mgrid.coil_names[0] == '__________test_coil___________'
+        assert mgrid.coil_names[0] == "__________test_coil___________"
         assert np.allclose(mgrid.br_arr[0], br)
 
     def test_write(self):
         mgrid = MGrid.from_file(test_file)
         with ScratchDir("."):
-            filename = 'mgrid.test.nc'
+            filename = "mgrid.test.nc"
             mgrid.write(filename)
 
             with netcdf_file(filename, mmap=False) as f:
-                np.testing.assert_allclose(f.variables['zmin'][()], -0.5)
-                assert f.variables['nextcur'][()] == 1
-                assert f.variables['br_001'][:].shape == (6, 11, 11)
-                assert f.variables['mgrid_mode'][:][0].decode('ascii') == 'N'
+                np.testing.assert_allclose(f.variables["zmin"][()], -0.5)
+                assert f.variables["nextcur"][()] == 1
+                assert f.variables["br_001"][:].shape == (6, 11, 11)
+                assert f.variables["mgrid_mode"][:][0].decode("ascii") == "N"
 
-                byte_string = f.variables['coil_group'][:]
-                message = "".join([x.decode('ascii') for x in byte_string])
-                assert message == '________simsopt_coils_________'
+                byte_string = f.variables["coil_group"][:]
+                message = "".join([x.decode("ascii") for x in byte_string])
+                assert message == "________simsopt_coils_________"
 
     def test_plot(self):
         mgrid = MGrid.from_file(test_file)
@@ -85,7 +84,7 @@ class VmecTests(unittest.TestCase):
         """
         input_file = str(TEST_DIR / "input.W7-X_standard_configuration")
 
-        base_curves, base_currents, magnetic_axis, nfp, bs  = get_data("w7x")
+        base_curves, base_currents, magnetic_axis, nfp, bs = get_data("w7x")
         eq = Vmec(input_file)
         nphi = 24
         with ScratchDir("."):

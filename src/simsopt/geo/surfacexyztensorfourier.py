@@ -4,11 +4,10 @@ import simsoptpp as sopp
 from .surface import Surface
 from .surfacerzfourier import SurfaceRZFourier
 
-__all__ = ['SurfaceXYZTensorFourier']
+__all__ = ["SurfaceXYZTensorFourier"]
 
 
 class SurfaceXYZTensorFourier(sopp.SurfaceXYZTensorFourier, Surface):
-
     r"""
     `SurfaceXYZTensorFourier` is a surface that is represented in cartesian
     coordinates using the following Fourier series:
@@ -55,28 +54,49 @@ class SurfaceXYZTensorFourier(sopp.SurfaceXYZTensorFourier, Surface):
         quadpoints_theta: Set this to a list or 1D array to set the :math:`\theta_j` grid points directly.
     """
 
-    def __init__(self, nfp=1, stellsym=True, mpol=1, ntor=1,
-                 clamped_dims=[False, False, False],
-                 quadpoints_phi=None, quadpoints_theta=None,
-                 dofs=None):
+    def __init__(
+        self,
+        nfp=1,
+        stellsym=True,
+        mpol=1,
+        ntor=1,
+        clamped_dims=[False, False, False],
+        quadpoints_phi=None,
+        quadpoints_theta=None,
+        dofs=None,
+    ):
 
         if quadpoints_theta is None:
             quadpoints_theta = Surface.get_theta_quadpoints()
         if quadpoints_phi is None:
             quadpoints_phi = Surface.get_phi_quadpoints(nfp=nfp)
 
-        sopp.SurfaceXYZTensorFourier.__init__(self, mpol, ntor, nfp, stellsym,
-                                              clamped_dims, quadpoints_phi,
-                                              quadpoints_theta)
+        sopp.SurfaceXYZTensorFourier.__init__(
+            self,
+            mpol,
+            ntor,
+            nfp,
+            stellsym,
+            clamped_dims,
+            quadpoints_phi,
+            quadpoints_theta,
+        )
         self.xcs[0, 0] = 1.0
         self.xcs[1, 0] = 0.1
-        self.zcs[mpol+1, 0] = 0.1
+        self.zcs[mpol + 1, 0] = 0.1
         if dofs is None:
-            Surface.__init__(self, x0=self.get_dofs(), names=self._make_names(),
-                             external_dof_setter=SurfaceXYZTensorFourier.set_dofs_impl)
+            Surface.__init__(
+                self,
+                x0=self.get_dofs(),
+                names=self._make_names(),
+                external_dof_setter=SurfaceXYZTensorFourier.set_dofs_impl,
+            )
         else:
-            Surface.__init__(self, dofs=dofs,
-                             external_dof_setter=SurfaceXYZTensorFourier.set_dofs_impl)
+            Surface.__init__(
+                self,
+                dofs=dofs,
+                external_dof_setter=SurfaceXYZTensorFourier.set_dofs_impl,
+            )
 
     def _make_names(self):
         """
@@ -85,9 +105,11 @@ class SurfaceXYZTensorFourier(sopp.SurfaceXYZTensorFourier, Surface):
         order in ``set_dofs_impl()`` and ``get_dofs()`` in
         ``src/simsoptpp/surfacexyztensorfourier.h``.
         """
-        names = self._make_names_helper('x') \
-            + self._make_names_helper('y') \
-            + self._make_names_helper('z')
+        names = (
+            self._make_names_helper("x")
+            + self._make_names_helper("y")
+            + self._make_names_helper("z")
+        )
 
         return names
 
@@ -105,7 +127,7 @@ class SurfaceXYZTensorFourier(sopp.SurfaceXYZTensorFourier, Surface):
             for j in range(2 * self.ntor + 1):
                 if self.skip(coord, i, j):
                     continue
-                names += [coord + '(' + str(i) + ',' + str(j) + ')']
+                names += [coord + "(" + str(i) + "," + str(j) + ")"]
         return names
 
     def skip(self, coord, i, j):
@@ -121,10 +143,14 @@ class SurfaceXYZTensorFourier(sopp.SurfaceXYZTensorFourier, Surface):
         """
         if not self.stellsym:
             return False
-        if coord == 'x':
-            return (j <= self.ntor and i > self.mpol) or (j > self.ntor and i <= self.mpol)
+        if coord == "x":
+            return (j <= self.ntor and i > self.mpol) or (
+                j > self.ntor and i <= self.mpol
+            )
         else:
-            return (j <= self.ntor and i <= self.mpol) or (j > self.ntor and i > self.mpol)
+            return (j <= self.ntor and i <= self.mpol) or (
+                j > self.ntor and i > self.mpol
+            )
 
     def get_dofs(self):
         """
@@ -148,12 +174,14 @@ class SurfaceXYZTensorFourier(sopp.SurfaceXYZTensorFourier, Surface):
         """
         ntor = self.ntor
         mpol = self.mpol
-        surf = SurfaceRZFourier(nfp=self.nfp,
-                                stellsym=self.stellsym,
-                                mpol=mpol,
-                                ntor=ntor,
-                                quadpoints_phi=self.quadpoints_phi,
-                                quadpoints_theta=self.quadpoints_theta)
+        surf = SurfaceRZFourier(
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=self.quadpoints_phi,
+            quadpoints_theta=self.quadpoints_theta,
+        )
 
         gamma = np.zeros((surf.quadpoints_phi.size, surf.quadpoints_theta.size, 3))
         for idx in range(gamma.shape[0]):
@@ -203,18 +231,23 @@ class SurfaceXYZTensorFourier(sopp.SurfaceXYZTensorFourier, Surface):
         def npsame(a, b):
             return a.shape == b.shape and np.allclose(a, b)
 
-        if npsame(phis, np.linspace(0, 1/self.nfp, 2*ntor+1, endpoint=False)) and \
-                npsame(thetas, np.linspace(0, 1, 2*mpol+1, endpoint=False)):
-            mask[:, mpol+1:] = False
-            mask[ntor+1:, 0] = False
-        elif npsame(phis, np.linspace(0, 1/self.nfp, 2*ntor+1, endpoint=False)) and \
-                npsame(thetas, np.linspace(0, 0.5, mpol+1, endpoint=False)):
-            mask[ntor+1:, 0] = False
-        elif npsame(phis, np.linspace(0, 1/(2*self.nfp), ntor+1, endpoint=False)) and \
-                npsame(thetas, np.linspace(0, 1, 2*mpol+1, endpoint=False)):
-            mask[0, mpol+1:] = False
+        if npsame(
+            phis, np.linspace(0, 1 / self.nfp, 2 * ntor + 1, endpoint=False)
+        ) and npsame(thetas, np.linspace(0, 1, 2 * mpol + 1, endpoint=False)):
+            mask[:, mpol + 1 :] = False
+            mask[ntor + 1 :, 0] = False
+        elif npsame(
+            phis, np.linspace(0, 1 / self.nfp, 2 * ntor + 1, endpoint=False)
+        ) and npsame(thetas, np.linspace(0, 0.5, mpol + 1, endpoint=False)):
+            mask[ntor + 1 :, 0] = False
+        elif npsame(
+            phis, np.linspace(0, 1 / (2 * self.nfp), ntor + 1, endpoint=False)
+        ) and npsame(thetas, np.linspace(0, 1, 2 * mpol + 1, endpoint=False)):
+            mask[0, mpol + 1 :] = False
         else:
-            raise Exception('Stellarator symmetric BoozerExact surfaces require a specific set of quadrature points on the surface.  See the SurfaceXYZTensorFourier.get_stellsym_mask() docstring for more information.')
+            raise Exception(
+                "Stellarator symmetric BoozerExact surfaces require a specific set of quadrature points on the surface.  See the SurfaceXYZTensorFourier.get_stellsym_mask() docstring for more information."
+            )
         return mask
 
     def extend_via_normal(self, distance):

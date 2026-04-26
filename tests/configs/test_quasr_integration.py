@@ -67,7 +67,7 @@ class QuasrIntegrationTests(unittest.TestCase):
         Uses ID=952 as a known good configuration.
         """
         surfaces, coils = download_ID_from_QUASR_database(
-            952, return_style='quasr-style'
+            952, return_style="quasr-style"
         )
 
         # Verify return types

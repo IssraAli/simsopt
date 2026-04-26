@@ -27,7 +27,7 @@ from ..geo.surface import best_nphi_over_ntheta
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['VirtualCasing']
+__all__ = ["VirtualCasing"]
 
 
 class VirtualCasing:
@@ -121,7 +121,17 @@ class VirtualCasing:
     """
 
     @classmethod
-    def from_vmec(cls, vmec, src_nphi, src_ntheta=None, trgt_nphi=None, trgt_ntheta=None, use_stellsym=True, digits=6, filename="auto"):
+    def from_vmec(
+        cls,
+        vmec,
+        src_nphi,
+        src_ntheta=None,
+        trgt_nphi=None,
+        trgt_ntheta=None,
+        use_stellsym=True,
+        digits=6,
+        filename="auto",
+    ):
         """
         Given a :obj:`~simsopt.mhd.vmec.Vmec` object, compute the contribution
         to the total magnetic field due to currents outside the plasma.
@@ -169,11 +179,18 @@ class VirtualCasing:
         nfp = vmec.wout.nfp
         stellsym = (not bool(vmec.wout.lasym)) and use_stellsym
         if vmec.wout.lasym:
-            raise RuntimeError('virtual casing presently only works for stellarator symmetry')
+            raise RuntimeError(
+                "virtual casing presently only works for stellarator symmetry"
+            )
 
         if src_ntheta is None:
-            src_ntheta = int((1+int(stellsym)) * nfp * src_nphi / best_nphi_over_ntheta(vmec.boundary))
-            logger.info(f'new src_ntheta: {src_ntheta}')
+            src_ntheta = int(
+                (1 + int(stellsym))
+                * nfp
+                * src_nphi
+                / best_nphi_over_ntheta(vmec.boundary)
+            )
+            logger.info(f"new src_ntheta: {src_ntheta}")
 
         # The requested nphi and ntheta may not match the quadrature
         # points in vmec.boundary, and the range may not be "full torus",
@@ -182,26 +199,46 @@ class VirtualCasing:
             ran = "half period"
         else:
             ran = "field period"
-        surf = SurfaceRZFourier.from_nphi_ntheta(mpol=vmec.wout.mpol, ntor=vmec.wout.ntor, nfp=nfp,
-                                                 nphi=src_nphi, ntheta=src_ntheta, range=ran)
+        surf = SurfaceRZFourier.from_nphi_ntheta(
+            mpol=vmec.wout.mpol,
+            ntor=vmec.wout.ntor,
+            nfp=nfp,
+            nphi=src_nphi,
+            ntheta=src_ntheta,
+            range=ran,
+        )
         for jmn in range(vmec.wout.mnmax):
-            surf.set_rc(int(vmec.wout.xm[jmn]), int(vmec.wout.xn[jmn] / nfp), vmec.wout.rmnc[jmn, -1])
-            surf.set_zs(int(vmec.wout.xm[jmn]), int(vmec.wout.xn[jmn] / nfp), vmec.wout.zmns[jmn, -1])
+            surf.set_rc(
+                int(vmec.wout.xm[jmn]),
+                int(vmec.wout.xn[jmn] / nfp),
+                vmec.wout.rmnc[jmn, -1],
+            )
+            surf.set_zs(
+                int(vmec.wout.xm[jmn]),
+                int(vmec.wout.xn[jmn] / nfp),
+                vmec.wout.zmns[jmn, -1],
+            )
         Bxyz = B_cartesian(vmec, nphi=src_nphi, ntheta=src_ntheta, range=ran)
         gamma = surf.gamma()
-        logger.debug(f'gamma.shape: {gamma.shape}')
-        logger.debug(f'Bxyz[0].shape: {Bxyz[0].shape}')
+        logger.debug(f"gamma.shape: {gamma.shape}")
+        logger.debug(f"Bxyz[0].shape: {Bxyz[0].shape}")
 
         if trgt_nphi is None:
             trgt_nphi = src_nphi
         if trgt_ntheta is None:
             trgt_ntheta = src_ntheta
-        trgt_surf = SurfaceRZFourier.from_nphi_ntheta(mpol=vmec.wout.mpol, ntor=vmec.wout.ntor, nfp=nfp,
-                                                      nphi=trgt_nphi, ntheta=trgt_ntheta, range=ran)
+        trgt_surf = SurfaceRZFourier.from_nphi_ntheta(
+            mpol=vmec.wout.mpol,
+            ntor=vmec.wout.ntor,
+            nfp=nfp,
+            nphi=trgt_nphi,
+            ntheta=trgt_ntheta,
+            range=ran,
+        )
         trgt_surf.x = surf.x
 
         unit_normal = trgt_surf.unitnormal()
-        logger.debug(f'unit_normal.shape: {unit_normal.shape}')
+        logger.debug(f"unit_normal.shape: {unit_normal.shape}")
 
         # virtual_casing wants all input arrays to be 1D. The order is
         # {x11, x12, ..., x1Np, x21, x22, ... , xNtNp, y11, ... , z11, ...}
@@ -210,8 +247,12 @@ class VirtualCasing:
         B1d = np.zeros(src_nphi * src_ntheta * 3)
         B3d = np.zeros((src_nphi, src_ntheta, 3))
         for jxyz in range(3):
-            gamma1d[jxyz * src_nphi * src_ntheta: (jxyz + 1) * src_nphi * src_ntheta] = gamma[:, :, jxyz].flatten(order='C')
-            B1d[jxyz * src_nphi * src_ntheta: (jxyz + 1) * src_nphi * src_ntheta] = Bxyz[jxyz].flatten(order='C')
+            gamma1d[
+                jxyz * src_nphi * src_ntheta : (jxyz + 1) * src_nphi * src_ntheta
+            ] = gamma[:, :, jxyz].flatten(order="C")
+            B1d[jxyz * src_nphi * src_ntheta : (jxyz + 1) * src_nphi * src_ntheta] = (
+                Bxyz[jxyz].flatten(order="C")
+            )
             B3d[:, :, jxyz] = Bxyz[jxyz]
 
         """
@@ -227,17 +268,26 @@ class VirtualCasing:
 
         vcasing = vc_module.VirtualCasing()
         vcasing.setup(
-            digits, nfp, stellsym,
-            src_nphi, src_ntheta, gamma1d,
-            src_nphi, src_ntheta,
-            trgt_nphi, trgt_ntheta)
+            digits,
+            nfp,
+            stellsym,
+            src_nphi,
+            src_ntheta,
+            gamma1d,
+            src_nphi,
+            src_ntheta,
+            trgt_nphi,
+            trgt_ntheta,
+        )
         # This next line launches the main computation:
         Bexternal1d = np.array(vcasing.compute_external_B(B1d))
 
         # Unpack 1D array results:
         Bexternal3d = np.zeros((trgt_nphi, trgt_ntheta, 3))
         for jxyz in range(3):
-            Bexternal3d[:, :, jxyz] = Bexternal1d[jxyz * trgt_nphi * trgt_ntheta: (jxyz + 1) * trgt_nphi * trgt_ntheta].reshape((trgt_nphi, trgt_ntheta), order='C')
+            Bexternal3d[:, :, jxyz] = Bexternal1d[
+                jxyz * trgt_nphi * trgt_ntheta : (jxyz + 1) * trgt_nphi * trgt_ntheta
+            ].reshape((trgt_nphi, trgt_ntheta), order="C")
 
         """
         # Check order:
@@ -269,16 +319,28 @@ class VirtualCasing:
         vc.B_external = Bexternal3d
         vc.B_external_normal = Bexternal_normal
 
-        Bexternal_normal_with_last_point = np.hstack((Bexternal_normal, Bexternal_normal[:, [0]]))
-        Bexternal_normal_with_last_point = np.vstack((Bexternal_normal_with_last_point, -np.flip(np.flip(Bexternal_normal_with_last_point, axis=0), axis=1)[0]))
+        Bexternal_normal_with_last_point = np.hstack(
+            (Bexternal_normal, Bexternal_normal[:, [0]])
+        )
+        Bexternal_normal_with_last_point = np.vstack(
+            (
+                Bexternal_normal_with_last_point,
+                -np.flip(np.flip(Bexternal_normal_with_last_point, axis=0), axis=1)[0],
+            )
+        )
         flipped_B = -np.flip(np.flip(Bexternal_normal_with_last_point, axis=0), axis=1)
-        vc.B_external_normal_extended = np.concatenate([np.concatenate((Bexternal_normal, flipped_B[:-1, :-1])) for i in range(nfp)])
+        vc.B_external_normal_extended = np.concatenate(
+            [
+                np.concatenate((Bexternal_normal, flipped_B[:-1, :-1]))
+                for i in range(nfp)
+            ]
+        )
 
         if filename is not None:
-            if filename == 'auto':
+            if filename == "auto":
                 directory, basefile = os.path.split(vmec.output_file)
-                filename = os.path.join(directory, 'vcasing' + basefile[4:])
-                logger.debug(f'New filename: {filename}')
+                filename = os.path.join(directory, "vcasing" + basefile[4:])
+                logger.debug(f"New filename: {filename}")
             vc.save(filename)
 
         return vc
@@ -290,89 +352,105 @@ class VirtualCasing:
         Args:
             filename: Name of the file to create.
         """
-        with netcdf_file(filename, 'w') as f:
-            f.history = 'This file created by simsopt on ' + datetime.now().strftime("%B %d %Y, %H:%M:%S")
-            f.createDimension('src_ntheta', self.src_ntheta)
-            f.createDimension('src_nphi', self.src_nphi)
-            f.createDimension('trgt_ntheta', self.trgt_ntheta)
-            f.createDimension('trgt_nphi', self.trgt_nphi)
-            f.createDimension('trgt_nphi_extended', self.trgt_nphi * 2 * self.nfp)
-            f.createDimension('xyz', 3)
+        with netcdf_file(filename, "w") as f:
+            f.history = "This file created by simsopt on " + datetime.now().strftime(
+                "%B %d %Y, %H:%M:%S"
+            )
+            f.createDimension("src_ntheta", self.src_ntheta)
+            f.createDimension("src_nphi", self.src_nphi)
+            f.createDimension("trgt_ntheta", self.trgt_ntheta)
+            f.createDimension("trgt_nphi", self.trgt_nphi)
+            f.createDimension("trgt_nphi_extended", self.trgt_nphi * 2 * self.nfp)
+            f.createDimension("xyz", 3)
 
-            src_ntheta = f.createVariable('src_ntheta', 'i', tuple())
+            src_ntheta = f.createVariable("src_ntheta", "i", tuple())
             src_ntheta.data[()] = self.src_ntheta
-            src_ntheta.description = 'Number of grid points in the poloidal angle theta for source B field and surface shape'
-            src_ntheta.units = 'Dimensionless'
+            src_ntheta.description = "Number of grid points in the poloidal angle theta for source B field and surface shape"
+            src_ntheta.units = "Dimensionless"
 
-            trgt_ntheta = f.createVariable('trgt_ntheta', 'i', tuple())
+            trgt_ntheta = f.createVariable("trgt_ntheta", "i", tuple())
             trgt_ntheta.data[()] = self.trgt_ntheta
-            trgt_ntheta.description = 'Number of grid points in the poloidal angle theta for resulting B_external'
-            trgt_ntheta.units = 'Dimensionless'
+            trgt_ntheta.description = "Number of grid points in the poloidal angle theta for resulting B_external"
+            trgt_ntheta.units = "Dimensionless"
 
-            src_nphi = f.createVariable('src_nphi', 'i', tuple())
+            src_nphi = f.createVariable("src_nphi", "i", tuple())
             src_nphi.data[()] = self.src_nphi
-            src_nphi.description = 'Number of grid points in the toroidal angle phi for source B field and surface shape'
-            src_nphi.units = 'Dimensionless'
+            src_nphi.description = "Number of grid points in the toroidal angle phi for source B field and surface shape"
+            src_nphi.units = "Dimensionless"
 
-            trgt_nphi = f.createVariable('trgt_nphi', 'i', tuple())
+            trgt_nphi = f.createVariable("trgt_nphi", "i", tuple())
             trgt_nphi.data[()] = self.trgt_nphi
-            trgt_nphi.description = 'Number of grid points in the toroidal angle phi for resulting B_external'
-            trgt_nphi.units = 'Dimensionless'
+            trgt_nphi.description = "Number of grid points in the toroidal angle phi for resulting B_external"
+            trgt_nphi.units = "Dimensionless"
 
-            nfp = f.createVariable('nfp', 'i', tuple())
+            nfp = f.createVariable("nfp", "i", tuple())
             nfp.data[()] = self.nfp
-            nfp.description = 'Periodicity in toroidal direction'
-            nfp.units = 'Dimensionless'
+            nfp.description = "Periodicity in toroidal direction"
+            nfp.units = "Dimensionless"
 
-            src_theta = f.createVariable('src_theta', 'd', ('src_ntheta',))
+            src_theta = f.createVariable("src_theta", "d", ("src_ntheta",))
             src_theta[:] = self.src_theta
-            src_theta.description = 'Grid points in the poloidal angle theta for source B field and surface shape. Note that theta extends over [0, 1) not [0, 2pi).'
-            src_theta.units = 'Dimensionless'
+            src_theta.description = "Grid points in the poloidal angle theta for source B field and surface shape. Note that theta extends over [0, 1) not [0, 2pi)."
+            src_theta.units = "Dimensionless"
 
-            trgt_theta = f.createVariable('trgt_theta', 'd', ('trgt_ntheta',))
+            trgt_theta = f.createVariable("trgt_theta", "d", ("trgt_ntheta",))
             trgt_theta[:] = self.trgt_theta
-            trgt_theta.description = 'Grid points in the poloidal angle theta for resulting B_external. Note that theta extends over [0, 1) not [0, 2pi).'
-            trgt_theta.units = 'Dimensionless'
+            trgt_theta.description = "Grid points in the poloidal angle theta for resulting B_external. Note that theta extends over [0, 1) not [0, 2pi)."
+            trgt_theta.units = "Dimensionless"
 
-            src_phi = f.createVariable('src_phi', 'd', ('src_nphi',))
+            src_phi = f.createVariable("src_phi", "d", ("src_nphi",))
             src_phi[:] = self.src_phi
-            src_phi.description = 'Grid points in the toroidal angle phi for source B field and surface shape. Note that phi extends over [0, 1) not [0, 2pi).'
-            src_phi.units = 'Dimensionless'
+            src_phi.description = "Grid points in the toroidal angle phi for source B field and surface shape. Note that phi extends over [0, 1) not [0, 2pi)."
+            src_phi.units = "Dimensionless"
 
-            trgt_phi = f.createVariable('trgt_phi', 'd', ('trgt_nphi',))
+            trgt_phi = f.createVariable("trgt_phi", "d", ("trgt_nphi",))
             trgt_phi[:] = self.trgt_phi
-            trgt_phi.description = 'Grid points in the toroidal angle phi for resulting B_external. Note that phi extends over [0, 1) not [0, 2pi).'
-            trgt_phi.units = 'Dimensionless'
+            trgt_phi.description = "Grid points in the toroidal angle phi for resulting B_external. Note that phi extends over [0, 1) not [0, 2pi)."
+            trgt_phi.units = "Dimensionless"
 
-            gamma = f.createVariable('gamma', 'd', ('src_nphi', 'src_ntheta', 'xyz'))
+            gamma = f.createVariable("gamma", "d", ("src_nphi", "src_ntheta", "xyz"))
             gamma[:, :, :] = self.gamma
-            gamma.description = 'Position vector on the boundary surface'
-            gamma.units = 'meter'
+            gamma.description = "Position vector on the boundary surface"
+            gamma.units = "meter"
 
-            unit_normal = f.createVariable('unit_normal', 'd', ('trgt_nphi', 'trgt_ntheta', 'xyz'))
+            unit_normal = f.createVariable(
+                "unit_normal", "d", ("trgt_nphi", "trgt_ntheta", "xyz")
+            )
             unit_normal[:, :, :] = self.unit_normal
-            unit_normal.description = 'Unit-length normal vector on the boundary surface'
-            unit_normal.units = 'Dimensionless'
+            unit_normal.description = (
+                "Unit-length normal vector on the boundary surface"
+            )
+            unit_normal.units = "Dimensionless"
 
-            B_total = f.createVariable('B_total', 'd', ('src_nphi', 'src_ntheta', 'xyz'))
+            B_total = f.createVariable(
+                "B_total", "d", ("src_nphi", "src_ntheta", "xyz")
+            )
             B_total[:, :, :] = self.B_total
-            B_total.description = 'Total magnetic field vector on the surface, including currents both inside and outside of the surface'
-            B_total.units = 'Tesla'
+            B_total.description = "Total magnetic field vector on the surface, including currents both inside and outside of the surface"
+            B_total.units = "Tesla"
 
-            B_external = f.createVariable('B_external', 'd', ('trgt_nphi', 'trgt_ntheta', 'xyz'))
+            B_external = f.createVariable(
+                "B_external", "d", ("trgt_nphi", "trgt_ntheta", "xyz")
+            )
             B_external[:, :, :] = self.B_external
-            B_external.description = 'Contribution to the magnetic field vector on the surface due only to currents outside the surface'
-            B_external.units = 'Tesla'
+            B_external.description = "Contribution to the magnetic field vector on the surface due only to currents outside the surface"
+            B_external.units = "Tesla"
 
-            B_external_normal = f.createVariable('B_external_normal', 'd', ('trgt_nphi', 'trgt_ntheta'))
+            B_external_normal = f.createVariable(
+                "B_external_normal", "d", ("trgt_nphi", "trgt_ntheta")
+            )
             B_external_normal[:, :] = self.B_external_normal
-            B_external_normal.description = 'Component of B_external normal to the surface'
-            B_external_normal.units = 'Tesla'
+            B_external_normal.description = (
+                "Component of B_external normal to the surface"
+            )
+            B_external_normal.units = "Tesla"
 
-            B_external_normal_extended = f.createVariable('B_external_normal_extended', 'd', ('trgt_nphi_extended', 'trgt_ntheta'))
+            B_external_normal_extended = f.createVariable(
+                "B_external_normal_extended", "d", ("trgt_nphi_extended", "trgt_ntheta")
+            )
             B_external_normal_extended[:, :] = self.B_external_normal_extended
-            B_external_normal_extended.description = 'Component of B_external normal to the surface, repeated to cover the full torus'
-            B_external_normal_extended.units = 'Tesla'
+            B_external_normal_extended.description = "Component of B_external normal to the surface, repeated to cover the full torus"
+            B_external_normal_extended.units = "Tesla"
 
     @classmethod
     def load(cls, filename):
@@ -405,14 +483,17 @@ class VirtualCasing:
             An axis which could be passed to a further call to matplotlib if desired.
         """
         import matplotlib.pyplot as plt
+
         if ax is None:
             fig, ax = plt.subplots()
         else:
             fig = plt.gcf()
-        contours = ax.contourf(self.trgt_phi, self.trgt_theta, self.B_external_normal.T, 25)
-        ax.set_xlabel(r'$\phi$')
-        ax.set_ylabel(r'$\theta$')
-        ax.set_title('B_external_normal [Tesla]')
+        contours = ax.contourf(
+            self.trgt_phi, self.trgt_theta, self.B_external_normal.T, 25
+        )
+        ax.set_xlabel(r"$\phi$")
+        ax.set_ylabel(r"$\theta$")
+        ax.set_title("B_external_normal [Tesla]")
         fig.colorbar(contours)
         fig.tight_layout()
 
@@ -424,9 +505,9 @@ class VirtualCasing:
             self.B_external_normal_extended.T,
             25,
         )
-        ax1.set_xlabel(r'$\phi$')
-        ax1.set_ylabel(r'$\theta$')
-        ax1.set_title('B_external_normal_extended [Tesla]')
+        ax1.set_xlabel(r"$\phi$")
+        ax1.set_ylabel(r"$\theta$")
+        ax1.set_title("B_external_normal_extended [Tesla]")
         fig1.colorbar(contours)
         fig1.tight_layout()
 

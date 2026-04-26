@@ -23,6 +23,38 @@ Ideal-diamagnetic passive bulk (cylindrical pucks) and :class:`PassiveBulkField`
   full ``vmap``; positive int = block width). See the constructor
   docstring for ``jax_pair_row_chunk``.
 
+- ``SIMSOPT_PSC_PAIR_FAR_KAPPA`` (``0`` = off): center-distance ratio
+  above which per-pair blocks use the W2 dipole mutual-inductance kernel.
+- ``SIMSOPT_PSC_TF_LOADING`` (``bn_quad`` default): ``bn_quad`` (surface
+  B_n quadrature), ``a_quad`` (dipole / ``m·B`` at centroid), or
+  ``a_taylor`` (``m·B + Q:∇B``).
+- ``SIMSOPT_PSC_SOLVE_MODE`` (``eigenfloor`` or ``eigk``): reduced solve
+  via Cholesky-eigenfloor or floored-eigenbasis + triangular solve.
+- ``SIMSOPT_PSC_EIGK_TRIGGER``: relative Frobenius drift of ``L_red`` vs the
+  cached anchor to refresh the host eigendecomposition in
+  :meth:`PSCBulkArray.recompute_currents` (``0`` disables the drift check).
+- ``SIMSOPT_PSC_W1_ENVELOPE`` (default ``1``): when truthy, the reduced
+  free-DOF forward uses :func:`_B_eval_reduced_free_dof_body_v2`, which wraps
+  the ``alpha`` solve in a ``jax.custom_vjp`` whose backward differentiates
+  the scalar envelope adjoint
+  ``E_adj(theta) = lam.T @ f_r(theta) - lam.T @ L_r(theta) @ alpha``
+  with ``lam = L_r^{-1} ct_alpha``.  This avoids JAX retracing through the
+  linear solve in the backward pass and gives the correct gradient through
+  ``L_r`` even when the eigK forward branch reuses a host-cached
+  :math:`(U,\\Lambda)` snapshot.  Set ``=0`` to fall back to the legacy v1
+  body for diagnostics.
+
+**Recommended fast profile** (see ``examples/3_Advanced/passive_bulks_bottleneck_timing.py``
+``--profiles combo_fast``): ``SIMSOPT_PSC_PAIR_FAR_KAPPA=3``,
+``SIMSOPT_PSC_TF_LOADING=a_quad``, ``SIMSOPT_PSC_BS_EVAL_FAR_KAPPA=3``,
+``SIMSOPT_PSC_SOLVE_MODE=eigk``.  ``SIMSOPT_PSC_W1_ENVELOPE`` is on by
+default and supplies the implicit-function backward; the legacy
+``SIMSOPT_PSC_FREE_SOLVE_VJP=implicit`` knob is now redundant for the reduced
+free-DOF path.
+- ``SIMSOPT_PSC_BS_EVAL_FAR_KAPPA`` (``0`` = off): distance / local
+  shell-radius ratio for the W7 far-eval dipole / shell Biot–Savart blend
+  in the free-DoF JAX forward.
+
 Puck geometry DOFs (center, quaternion orientation, radius, thickness per
 base puck) are exposed through the :class:`~simsopt._core.optimizable.Optimizable`
 framework.  All puck DOFs are **fixed by default**; unfix them with
@@ -72,15 +104,26 @@ from .bulk_inductance import (
     shell_biot_savart_stacked_pure,
     shell_cholesky_pure,
     shell_eigenfloor_cholesky_pure,
+    shell_eigendecomposition_floored,
     shell_inductance_matrix_blockwise,
     shell_inductance_matrix_symmetric_reduced,
     shell_loading_vector_stacked_pure,
     shell_normal_field_basis_matrix,
     shell_solve_eigenfloor_pure,
+    shell_solve_eigK_pure,
     shell_solve_prefactored_pure,
 )
+from .bulk_multipole import (
+    magnetic_dipole_moments_stacked,
+    magnetic_field_dipole_points,
+    pair_inductance_multipole,
+    quadrupole_magnetic_symmetric_stacked,
+)
 from .biotsavart import BiotSavart
-from .force import _B_at_point_from_coil_set_pure
+from .force import (
+    _B_at_point_from_coil_set_pure,
+    _grad_B_at_point_from_coil_set_pure,
+)
 from .magneticfield import MagneticField
 from .puck_basis import (
     PuckBasisData,
@@ -102,6 +145,22 @@ _USE_JAX_TF_VJP = False
 def _psc_bulk_timing_enabled() -> bool:
     """Return True when fine-grained :meth:`PSCBulkArray._rebuild` timing is on."""
     return os.environ.get("SIMSOPT_PSCBULK_TIMING", "0") == "1"
+
+
+def _timing_block_until_ready(value: Any) -> None:
+    """Synchronize JAX values before stopping a timing span."""
+    if value is None:
+        return
+    block = getattr(value, "block_until_ready", None)
+    if callable(block):
+        block()
+        return
+    if isinstance(value, (tuple, list)):
+        for item in value:
+            _timing_block_until_ready(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _timing_block_until_ready(item)
 
 
 # Persistent XLA compilation cache (speeds cold starts; optional).
@@ -178,6 +237,149 @@ def _psc_jax_pair_chunk_from_env() -> Optional[int]:
     except ValueError:
         return None
     return max(0, v)
+
+
+def _psc_bs_eval_chunk_from_env() -> Optional[int]:
+    """Parse :envvar:`SIMSOPT_PSC_BS_EVAL_CHUNK` (free-DOF shell-B batching).
+
+    * Unset: ``None`` -> defer to :class:`PSCBulkArray` heuristics.
+    * ``"0"``: force monolithic ``vmap`` over all evaluation points.
+    * Positive: evaluate padded fixed-size chunks of this many points.
+    """
+    raw = os.environ.get("SIMSOPT_PSC_BS_EVAL_CHUNK")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        v = int(str(raw).strip(), 10)
+    except ValueError:
+        return None
+    return max(0, v)
+
+
+def _psc_free_vjp_probe_env() -> str:
+    """Return the free-DOF VJP attribution probe mode."""
+    mode = os.environ.get("SIMSOPT_PSC_FREE_VJP_PROBE", "full").strip().lower()
+    allowed = {
+        "full",
+        "stop_l",
+        "stop_bn",
+        "stop_solve",
+        "shell_only",
+        "beta_only",
+    }
+    return mode if mode in allowed else "full"
+
+
+def _psc_free_solve_vjp_env() -> str:
+    """Return the free-DOF solve VJP mode.
+
+    ``envelope`` currently uses the same kernel as ``implicit`` (adjoint
+    through the eigenfloor regularized system without an ``eig``-based VJP
+    of the Cholesky path); a fully distinct envelope implementation can be
+    layered here later.
+    """
+    mode = os.environ.get("SIMSOPT_PSC_FREE_SOLVE_VJP", "eigh").strip().lower()
+    allowed = {"eigh", "implicit", "envelope"}
+    m = mode if mode in allowed else "eigh"
+    if m == "envelope":
+        return "implicit"
+    return m
+
+
+def _psc_tf_loading_env() -> str:
+    """TF loading in free-DOF JAX path: ``Bn_quad`` (default), ``A_quad``, ``A_taylor``."""
+    mode = os.environ.get("SIMSOPT_PSC_TF_LOADING", "Bn_quad").strip().lower()
+    allowed = {"bn_quad", "a_quad", "a_taylor"}
+    m = mode.replace("-", "_")
+    return m if m in allowed else "bn_quad"
+
+
+def _psc_pair_far_kappa_env() -> float:
+    """Distance / (sum of effective radii) above which dipole pair inductance is used."""
+    raw = os.environ.get("SIMSOPT_PSC_PAIR_FAR_KAPPA", "0").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.0
+    return max(0.0, v)
+
+
+def _psc_bs_eval_far_kappa_env() -> float:
+    """Eval distance / puck scale for dipole far-field B (``0`` = off)."""
+    raw = os.environ.get("SIMSOPT_PSC_BS_EVAL_FAR_KAPPA", "0").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.0
+    return max(0.0, v)
+
+
+def _psc_solve_mode_env() -> str:
+    """Reduced solve: ``eigenfloor`` (default) or ``eigk`` (eigendecomp + divide)."""
+    mode = os.environ.get("SIMSOPT_PSC_SOLVE_MODE", "eigenfloor").strip().lower()
+    allowed = {"eigenfloor", "eigk"}
+    return mode if mode in allowed else "eigenfloor"
+
+
+def _psc_eigk_trigger_env() -> float:
+    """Relative Frobenius drift to refresh a host-side eigK reference (future use)."""
+    raw = os.environ.get("SIMSOPT_PSC_EIGK_TRIGGER", "1e-3").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 1e-3
+
+
+def _psc_w1_envelope_env() -> bool:
+    """Select the W1 envelope-theorem ``custom_vjp`` body for the reduced free-DOF path.
+
+    When ``True`` (the default), :func:`B_at_points` and the three reduced VJP
+    runners dispatch through :func:`_B_eval_reduced_free_dof_body_v2`, which
+    wraps the ``alpha = L_r^{-1} f_r`` solve in a ``jax.custom_vjp`` whose
+    backward differentiates the *scalar* envelope adjoint instead of retracing
+    through the linear solve.  Set ``SIMSOPT_PSC_W1_ENVELOPE=0`` to fall back
+    to the legacy v1 body (``_B_eval_reduced_free_dof_body``).
+    """
+    raw = os.environ.get("SIMSOPT_PSC_W1_ENVELOPE", "1").strip().lower()
+    if raw in ("0", "false", "no", "off", ""):
+        return False
+    return raw in ("1", "true", "yes", "on")
+
+
+def _reduced_free_dof_extras_for_jax() -> Tuple[bool, float, str, str, float]:
+    """Bundle env-driven reduced forward/VJP options for symmetry-reduced free DOFs.
+
+    Returns:
+        ``(use_far_dipole_pair, pair_far_kappa, tf_loading, solve_mode_reduced,
+        bs_eval_far_kappa)`` with normalized strings for JIT static-arg hashing.
+    """
+    pk = float(_psc_pair_far_kappa_env())
+    tfm = str(_psc_tf_loading_env()).lower().replace("-", "_")
+    sm = str(_psc_solve_mode_env()).lower()
+    return (
+        bool(pk > 0.0),
+        pk,
+        tfm,
+        sm,
+        float(_psc_bs_eval_far_kappa_env()),
+    )
+
+
+def _psc_cache_free_vjp_env() -> bool:
+    """Return whether to cache a reduced free-DOF VJP pullback after ``B``."""
+    return os.environ.get("SIMSOPT_PSC_CACHE_FREE_VJP", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _psc_free_vjp_geometry_env() -> str:
+    """Return the free-DOF VJP geometry argument selection mode."""
+    mode = os.environ.get("SIMSOPT_PSC_FREE_VJP_GEOMETRY", "auto").strip().lower()
+    allowed = {"auto", "full"}
+    return mode if mode in allowed else "auto"
 
 
 def _psc_lcache_enabled() -> bool:
@@ -966,6 +1168,500 @@ def _B_eval_from_bn_body(
 _B_eval_from_bn_jitted = jax.jit(_B_eval_from_bn_body)
 
 
+def _shell_biot_savart_flat_chunked(
+    k_flat: jnp.ndarray,
+    source_pts: jnp.ndarray,
+    source_w: jnp.ndarray,
+    pts_eval: jnp.ndarray,
+    eval_chunk: int = 0,
+) -> jnp.ndarray:
+    """Evaluate shell Biot-Savart from flattened sources with optional chunking."""
+
+    def b_at(x: jnp.ndarray) -> jnp.ndarray:
+        rvec = x[None, :] - source_pts
+        rn = jnp.sqrt(jnp.sum(rvec**2, axis=-1) + _EPS_BS**2)
+        integr = jnp.cross(k_flat, rvec) / (rn[:, None] ** 3)
+        return MU0_OVER_4PI * jnp.sum(integr * source_w[:, None], axis=0)
+
+    pts = jnp.asarray(pts_eval)
+    n_eval = int(pts.shape[0])
+    chunk = int(eval_chunk)
+    if chunk <= 0 or chunk >= n_eval:
+        return jax.vmap(b_at)(pts)
+
+    n_chunks = (n_eval + chunk - 1) // chunk
+    pad = n_chunks * chunk - n_eval
+    pts_pad = jnp.pad(pts, ((0, pad), (0, 0)))
+    pts_blocks = pts_pad.reshape(n_chunks, chunk, 3)
+
+    def one_block(block: jnp.ndarray) -> jnp.ndarray:
+        return jax.vmap(b_at)(block)
+
+    return jax.lax.map(one_block, pts_blocks).reshape(n_chunks * chunk, 3)[:n_eval]
+
+
+def _eigenfloor_regularized_matrix(
+    L: jnp.ndarray,
+    threshold: float = 1e-10,
+    jitter: float = 1e-10,
+) -> jnp.ndarray:
+    """Regularize ``L`` with the same eigenfloor used by the free-DOF solve."""
+    lam, V = jnp.linalg.eigh(L)
+    max_abs = jnp.max(jnp.abs(lam))
+    floor = threshold * max_abs
+    lam_floor = jnp.maximum(lam, floor)
+    L_reg = (V * lam_floor[None, :]) @ V.T
+    return L_reg + jitter * jnp.eye(L.shape[0], dtype=L.dtype)
+
+
+@jax.custom_vjp
+def _solve_eigenfloor_implicit_vjp(
+    L: jnp.ndarray,
+    f: jnp.ndarray,
+    threshold: float = 1e-10,
+) -> jnp.ndarray:
+    """Solve with eigenfloor primal and implicit linear-solve VJP."""
+    L_reg = _eigenfloor_regularized_matrix(L, threshold=threshold, jitter=1e-10)
+    return jnp.linalg.solve(L_reg, f)
+
+
+def _solve_eigenfloor_implicit_vjp_fwd(
+    L: jnp.ndarray,
+    f: jnp.ndarray,
+    threshold: float = 1e-10,
+) -> Tuple[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]:
+    L_reg = _eigenfloor_regularized_matrix(L, threshold=threshold, jitter=1e-10)
+    alpha = jnp.linalg.solve(L_reg, f)
+    return alpha, (L_reg, alpha)
+
+
+def _solve_eigenfloor_implicit_vjp_bwd(
+    res: Tuple[jnp.ndarray, jnp.ndarray],
+    ct_alpha: jnp.ndarray,
+) -> Tuple[jnp.ndarray, jnp.ndarray, None]:
+    L_reg, alpha = res
+    lam_f = jnp.linalg.solve(L_reg.T, ct_alpha)
+    lam_L = -0.5 * (jnp.outer(lam_f, alpha) + jnp.outer(alpha, lam_f))
+    return lam_L, lam_f, None
+
+
+_solve_eigenfloor_implicit_vjp.defvjp(
+    _solve_eigenfloor_implicit_vjp_fwd,
+    _solve_eigenfloor_implicit_vjp_bwd,
+)
+
+
+@jax.custom_vjp
+def _eigK_solve_with_correct_vjp(
+    L: jnp.ndarray,
+    U_cached: jnp.ndarray,
+    lambda_cached: jnp.ndarray,
+    f: jnp.ndarray,
+    threshold: float = 1e-10,
+) -> jnp.ndarray:
+    """Forward uses cached eigenbasis; backward applies the implicit-function VJP.
+
+    The forward solve ``alpha = U (U^T f / lambda)`` is the cheap eigK shortcut
+    using a pre-eigendecomposition cached on the host.  The backward
+    differentiates through ``L`` and ``f`` exactly the same way as
+    :func:`_solve_eigenfloor_implicit_vjp` (regularize ``L`` with the same
+    eigenfloor and solve ``L_reg lam = ct_alpha``), so gradients flow correctly
+    through the *current* ``L`` even when ``(U_cached, lambda_cached)`` are
+    NumPy-host snapshots from an earlier ``L``.
+
+    Args:
+        L: Current symmetric reduced inductance matrix ``(n, n)``.
+        U_cached: ``(n, k)`` host-derived eigenvectors (treated as constants by autodiff).
+        lambda_cached: ``(k,)`` host-derived floored eigenvalues (treated as constants).
+        f: Reduced load vector ``(n,)``.
+        threshold: Same eigenfloor used for the implicit backward.
+
+    Returns:
+        ``alpha`` of shape ``(n,)``.
+
+    """
+    return shell_solve_eigK_pure(U_cached, lambda_cached, f)
+
+
+def _eigK_solve_with_correct_vjp_fwd(
+    L: jnp.ndarray,
+    U_cached: jnp.ndarray,
+    lambda_cached: jnp.ndarray,
+    f: jnp.ndarray,
+    threshold: float = 1e-10,
+) -> Tuple[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]:
+    alpha = shell_solve_eigK_pure(U_cached, lambda_cached, f)
+    L_reg = _eigenfloor_regularized_matrix(L, threshold=threshold, jitter=1e-10)
+    return alpha, (L_reg, alpha)
+
+
+def _eigK_solve_with_correct_vjp_bwd(
+    res: Tuple[jnp.ndarray, jnp.ndarray],
+    ct_alpha: jnp.ndarray,
+) -> Tuple[jnp.ndarray, None, None, jnp.ndarray, None]:
+    L_reg, alpha = res
+    lam_f = jnp.linalg.solve(L_reg.T, ct_alpha)
+    lam_L = -0.5 * (jnp.outer(lam_f, alpha) + jnp.outer(alpha, lam_f))
+    return lam_L, None, None, lam_f, None
+
+
+_eigK_solve_with_correct_vjp.defvjp(
+    _eigK_solve_with_correct_vjp_fwd,
+    _eigK_solve_with_correct_vjp_bwd,
+)
+
+
+def _assemble_L_red_inner(
+    centers_base: jnp.ndarray,
+    quats_base: jnp.ndarray,
+    local_pts_base: jnp.ndarray,
+    local_K_base: jnp.ndarray,
+    local_n_base: jnp.ndarray,
+    local_w_base: jnp.ndarray,
+    Q_c_base: jnp.ndarray,
+    base_indices: jnp.ndarray,
+    base_reps: jnp.ndarray,
+    G_float: jnp.ndarray,
+    nfp: int,
+    stellsym: bool,
+    delta_reg: float,
+    adaptive_self_reg: bool,
+    checkpoint_L_pairs: bool = False,
+    pair_row_chunk: int = 0,
+    use_far_dipole_pair: bool = False,
+    pair_far_kappa: float = 0.0,
+    m_local_base: Optional[jnp.ndarray] = None,
+) -> jnp.ndarray:
+    """Pure assembly of the symmetry-reduced inductance matrix ``L_red = Q_c^T L_base Q_c``.
+
+    Used both inside the W1 envelope ``custom_vjp`` (for primal and adjoint
+    retraces) and in regression tests.  Mirrors the L-assembly block of
+    :func:`_B_eval_reduced_free_dof_body` exactly.
+
+    Args:
+        centers_base: ``(n_base, 3)`` base puck centers.
+        quats_base: ``(n_base, 4)`` base puck quaternions.
+        local_pts_base, local_K_base, local_n_base, local_w_base: per-base local stacks.
+        Q_c_base: ``(n_base*nd, n_red)`` continuity constraint range basis.
+        base_indices: ``(n_all,)`` map from replica index to base index.
+        base_reps: ``(n_base,)`` representative replica index for each base.
+        G_float: scalar ``(|G|,)`` symmetry order, used as a fold weight.
+        nfp, stellsym, delta_reg, adaptive_self_reg: assembly statics.
+        checkpoint_L_pairs: ``jax.checkpoint`` per pair block when ``True``.
+        pair_row_chunk: positive integer enables ``lax.scan`` over base rows.
+        use_far_dipole_pair, pair_far_kappa, m_local_base: W2 multipole shortcut.
+
+    Returns:
+        ``(n_red, n_red)`` reduced inductance ``L_red``.
+
+    """
+    n_base = int(local_pts_base.shape[0])
+    nd = int(local_K_base.shape[2])
+    n_all = int(base_indices.shape[0])
+    centers_all, quats_all, signs = _replicate_pucks_jax(
+        centers_base, quats_base, nfp, stellsym
+    )
+    pts_stack, K_stack, _n_stack, w_stack = _transform_local_to_all_replicas(
+        centers_all,
+        quats_all,
+        local_pts_base,
+        local_K_base,
+        local_n_base,
+        local_w_base,
+        base_indices,
+    )
+    r_rel = pts_stack - centers_all[:, None, :]
+    R_est_rep = jnp.max(jnp.linalg.norm(r_rel, axis=-1), axis=1)
+    if m_local_base is None:
+        m_local_base = jnp.zeros((n_base, nd, 3), dtype=K_stack.dtype)
+
+    def l_block_pair(i_rep: jnp.ndarray, j_rep: jnp.ndarray) -> jnp.ndarray:
+        return _pair_inductance_block(
+            pts_stack,
+            K_stack,
+            w_stack,
+            i_rep,
+            j_rep,
+            float(delta_reg),
+            bool(adaptive_self_reg),
+        )
+
+    l_fn: Any = l_block_pair
+    if checkpoint_L_pairs and not use_far_dipole_pair:
+        l_fn = jax.checkpoint(l_block_pair)
+
+    if use_far_dipole_pair and pair_far_kappa > 0.0:
+
+        def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
+            i_rep = base_reps[ib.astype(jnp.int32)]
+            j_reps = jnp.arange(n_all, dtype=jnp.int32)
+
+            def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
+                blk_d = l_fn(i_rep, jr)
+                Rij = centers_all[jr] - centers_all[i_rep]
+                dist = jnp.linalg.norm(Rij) + 1e-20
+                cap = pair_far_kappa * (R_est_rep[i_rep] + R_est_rep[jr] + 1e-12)
+                use_far = dist > cap
+                Ri = _rotation_matrix_from_quat_jax(quats_all[i_rep])
+                Rj = _rotation_matrix_from_quat_jax(quats_all[jr])
+                bi = ib.astype(jnp.int32)
+                bj = base_indices[jr.astype(jnp.int32)]
+                m_i = jnp.einsum("ij,nj->ni", Ri, m_local_base[bi, :, :])
+                m_j = jnp.einsum("ij,nj->ni", Rj, m_local_base[bj, :, :])
+                blk_f = pair_inductance_multipole(m_i, m_j, Rij, order=1)
+                blk = jnp.where(use_far, blk_f, blk_d)
+                return G_float * signs[jr] * blk
+
+            blocks = jax.vmap(scaled_block)(j_reps)
+            return jax.ops.segment_sum(
+                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+            )
+    else:
+
+        def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
+            i_rep = base_reps[ib.astype(jnp.int32)]
+            j_reps = jnp.arange(n_all, dtype=jnp.int32)
+
+            def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
+                blk = l_fn(i_rep, jr)
+                return G_float * signs[jr] * blk
+
+            blocks = jax.vmap(scaled_block)(j_reps)
+            return jax.ops.segment_sum(
+                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+            )
+
+    n_chunk = int(pair_row_chunk)
+    if n_chunk > 0 and n_chunk < n_base:
+
+        def _scan_one_chunk(_: None, ic: jnp.ndarray) -> Tuple[None, jnp.ndarray]:
+            start = ic * n_chunk
+            idx = start + jnp.arange(n_chunk, dtype=jnp.int32)
+            valid = idx < n_base
+            idx_safe = jnp.where(valid, idx, 0)
+            rows_b = jax.vmap(one_row_f)(idx_safe)
+            rows_b = rows_b * valid[:, None, None, None].astype(rows_b.dtype)
+            return None, rows_b
+
+        n_c = (n_base + n_chunk - 1) // n_chunk
+        _, row_blocks = jax.lax.scan(
+            _scan_one_chunk, None, jnp.arange(n_c, dtype=jnp.int32)
+        )
+        l_rows = row_blocks.reshape(n_c * n_chunk, n_base, nd, nd)[:n_base, ...]
+    else:
+        l_rows = jax.vmap(one_row_f)(jnp.arange(n_base, dtype=jnp.int32))
+    l_base = l_rows.transpose(0, 2, 1, 3).reshape(n_base * nd, n_base * nd)
+    l_base = 0.5 * (l_base + l_base.T)
+    return Q_c_base.T @ l_base @ Q_c_base
+
+
+def _assemble_f_red_inner(
+    centers_base: jnp.ndarray,
+    quats_base: jnp.ndarray,
+    g_tf: jnp.ndarray,
+    gd_tf: jnp.ndarray,
+    I_tf: jnp.ndarray,
+    local_pts_base: jnp.ndarray,
+    local_K_base: jnp.ndarray,
+    local_n_base: jnp.ndarray,
+    local_w_base: jnp.ndarray,
+    local_phi_base: jnp.ndarray,
+    Q_c_base: jnp.ndarray,
+    base_indices: jnp.ndarray,
+    nfp: int,
+    stellsym: bool,
+    tf_loading: str,
+    m_local_base: Optional[jnp.ndarray] = None,
+    Q_sym_local: Optional[jnp.ndarray] = None,
+) -> jnp.ndarray:
+    """Pure assembly of the symmetry-reduced load vector ``f_red = Q_c^T f_base``.
+
+    Selects between ``bn_quad`` (default surface-quadrature dot product),
+    ``a_quad`` (dipole closed-shell ``f = m·B``), and ``a_taylor``
+    (``f = m·B + Q : ∇B``).  Used in tandem with
+    :func:`_assemble_L_red_inner` inside the W1 envelope ``custom_vjp``.
+
+    Args:
+        centers_base, quats_base: base DoFs (differentiable).
+        g_tf, gd_tf, I_tf: TF coil set arrays (differentiable).
+        local_pts_base, local_K_base, local_n_base, local_w_base, local_phi_base:
+            base-puck local geometry stacks.
+        Q_c_base: continuity-constraint reduction matrix.
+        base_indices: ``(n_all,)`` replica-to-base map.
+        nfp, stellsym: symmetry tags.
+        tf_loading: ``bn_quad``/``a_quad``/``a_taylor``.
+        m_local_base: ``(n_base, nd, 3)`` local-frame magnetic moments (W3).
+        Q_sym_local: ``(n_base, nd, 3, 3)`` local-frame quadrupoles (W3 a_taylor).
+
+    Returns:
+        ``(n_red,)`` reduced load vector ``f_red``.
+
+    """
+    n_base = int(local_pts_base.shape[0])
+    nq = int(local_pts_base.shape[1])
+    nd = int(local_K_base.shape[2])
+    centers_all, quats_all, signs = _replicate_pucks_jax(
+        centers_base, quats_base, nfp, stellsym
+    )
+    pts_stack, _K_stack, n_stack, _w_stack = _transform_local_to_all_replicas(
+        centers_all,
+        quats_all,
+        local_pts_base,
+        local_K_base,
+        local_n_base,
+        local_w_base,
+        base_indices,
+    )
+    gammas_tf = jnp.asarray(g_tf)
+    gammadash_tf = jnp.asarray(gd_tf)
+    currents_tf = jnp.asarray(I_tf)
+    all_flat_pts = pts_stack.reshape(-1, 3)
+    all_flat_n = n_stack.reshape(-1, 3)
+    if m_local_base is None:
+        m_local_base = jnp.zeros((n_base, nd, 3), dtype=local_K_base.dtype)
+
+    tfm = (tf_loading or "bn_quad").lower().replace("-", "_")
+    if tfm == "a_taylor":
+        Qsl = (
+            Q_sym_local
+            if Q_sym_local is not None
+            else jnp.zeros((n_base, nd, 3, 3), dtype=local_K_base.dtype)
+        )
+
+        def f_row_taylor(ib: jnp.ndarray) -> jnp.ndarray:
+            c = centers_base[ib]
+            Rm = quats_base[ib]
+            Ri = _rotation_matrix_from_quat_jax(Rm)
+            B0 = _B_at_point_from_coil_set_pure(
+                c, gammas_tf, gammadash_tf, currents_tf, -1, _EPS_BS
+            )
+            gB = _grad_B_at_point_from_coil_set_pure(
+                c, gammas_tf, gammadash_tf, currents_tf, -1, _EPS_BS
+            )
+            Gsym = 0.5 * (gB + gB.T)
+            m_g = jnp.einsum("ij,nj->ni", Ri, m_local_base[ib, :, :])
+            Qb = Qsl[ib, :, :, :]
+            Qg = jnp.einsum("ik,nkl,jl->nij", Ri, Qb, Ri)
+            return jnp.einsum("na, a->n", m_g, B0) + jnp.einsum("nab, ab->n", Qg, Gsym)
+
+        f = jax.vmap(f_row_taylor)(jnp.arange(n_base, dtype=jnp.int32)).reshape(-1)
+    elif tfm == "a_quad":
+
+        def f_row_aquad(ib: jnp.ndarray) -> jnp.ndarray:
+            c = centers_base[ib]
+            Rm = quats_base[ib]
+            Ri = _rotation_matrix_from_quat_jax(Rm)
+            b0 = _B_at_point_from_coil_set_pure(
+                c, gammas_tf, gammadash_tf, currents_tf, -1, _EPS_BS
+            )
+            m_g = jnp.einsum("ij, nj->ni", Ri, m_local_base[ib, :, :])
+            return jnp.einsum("na, a->n", m_g, b0)
+
+        f = jax.vmap(f_row_aquad)(jnp.arange(n_base, dtype=jnp.int32)).reshape(-1)
+    else:
+
+        def Bn_at_q(q_idx: jnp.ndarray) -> jnp.ndarray:
+            B = _B_at_point_from_coil_set_pure(
+                all_flat_pts[q_idx],
+                gammas_tf,
+                gammadash_tf,
+                currents_tf,
+                -1,
+                _EPS_BS,
+            )
+            return jnp.dot(B, all_flat_n[q_idx])
+
+        Bn = jax.vmap(Bn_at_q)(jnp.arange(all_flat_pts.shape[0]))
+        Bn_w = _fold_Bn_to_work(
+            Bn,
+            base_indices.astype(jnp.int32),
+            signs.astype(Bn.dtype),
+            n_base,
+            nq,
+        )
+        f = -jnp.sum(local_phi_base * (local_w_base * Bn_w)[..., None], axis=1).reshape(
+            -1
+        )
+
+    return Q_c_base.T @ f
+
+
+def _post_solve_to_B(
+    alpha: jnp.ndarray,
+    Q_c_base: jnp.ndarray,
+    base_indices: jnp.ndarray,
+    signs: jnp.ndarray,
+    K_stack: jnp.ndarray,
+    pts_stack: jnp.ndarray,
+    w_stack: jnp.ndarray,
+    centers_all: jnp.ndarray,
+    quats_all: jnp.ndarray,
+    R_est_rep: jnp.ndarray,
+    m_local_base: jnp.ndarray,
+    pts_eval: jnp.ndarray,
+    eval_chunk: int,
+    bs_eval_far_kappa: float,
+    n_all: int,
+    nd: int,
+) -> jnp.ndarray:
+    """Map reduced ``alpha`` to ``B`` at evaluation points (Biot-Savart shell + W7 dipole tail).
+
+    Wraps :math:`\\beta = Q_c \\alpha`, gather to replicas, sheet-current
+    Biot-Savart, and the optional far-eval dipole blend (W7) used by
+    :func:`_B_eval_reduced_free_dof_body_v2`.
+
+    Args:
+        alpha: ``(n_red,)`` reduced solve output.
+        Q_c_base: continuity reduction matrix.
+        base_indices, signs: replica fold maps.
+        K_stack, pts_stack, w_stack: per-replica stacks (rotated to globals).
+        centers_all, quats_all: all-replica centers / quats.
+        R_est_rep: ``(n_all,)`` replica radii estimates for the W7 blend.
+        m_local_base: ``(n_base, nd, 3)`` local-frame moments (W7).
+        pts_eval: ``(n_eval, 3)`` evaluation points.
+        eval_chunk: chunk width for the shell BS sum.
+        bs_eval_far_kappa: ``0`` disables the W7 far-eval dipole blend.
+        n_all, nd: shapes (Python ints).
+
+    Returns:
+        ``B`` of shape ``(n_eval, 3)``.
+
+    """
+    beta = Q_c_base @ alpha
+    beta_all = _gather_beta_work_to_all(beta, base_indices, signs, nd)
+    b_stack = beta_all.reshape(n_all, nd)
+    k_at_quad = jnp.einsum("pqdi,pd->pqi", K_stack, b_stack)
+    k_flat = k_at_quad.reshape(-1, 3)
+    w_flat = w_stack.reshape(-1)
+    all_flat_pts = pts_stack.reshape(-1, 3)
+    b_shell = _shell_biot_savart_flat_chunked(
+        k_flat, all_flat_pts, w_flat, pts_eval, int(eval_chunk)
+    )
+    if float(bs_eval_far_kappa) <= 0.0:
+        return b_shell
+
+    m_loc_on_rep = m_local_base[base_indices.astype(jnp.int32)]
+
+    def _m_total_rep(r: jnp.ndarray) -> jnp.ndarray:
+        rm = _rotation_matrix_from_quat_jax(quats_all[r])
+        m_g = jnp.einsum("ij,dj->di", rm, m_loc_on_rep[r])
+        return jnp.einsum("d, di->i", b_stack[r], m_g)
+
+    m_rep = jax.vmap(_m_total_rep)(jnp.arange(n_all, dtype=jnp.int32))
+    dmat = (
+        jnp.linalg.norm(pts_eval[:, None, :] - centers_all[None, :, :], axis=-1) + 1e-20
+    )
+    cap = float(bs_eval_far_kappa) * (R_est_rep[None, :] + 1e-12)
+    ratio = dmat / cap
+    s_pt = jnp.min(jax.nn.sigmoid(10.0 * (ratio - 1.0)), axis=1)[:, None]
+
+    def _dip(p: jnp.ndarray) -> jnp.ndarray:
+        return magnetic_field_dipole_points(m_rep[p], pts_eval, centers_all[p])
+
+    b_dip = jnp.sum(jax.vmap(_dip)(jnp.arange(n_all, dtype=jnp.int32)), axis=0)
+    return s_pt * b_dip + (1.0 - s_pt) * b_shell
+
+
 def _B_eval_full_body(
     local_pts_stack: jnp.ndarray,
     local_K_stack: jnp.ndarray,
@@ -984,6 +1680,7 @@ def _B_eval_full_body(
     adaptive_self_reg: bool = False,
     full_L_band_size: int = 32,
     checkpoint_L_pairs: bool = False,
+    eval_chunk: int = 0,
 ) -> jnp.ndarray:
     """Full forward: assemble :math:`L` in JAX, rim-continuity-projected
     eigenfloor solve, and Biot–Savart.
@@ -1125,13 +1822,9 @@ def _B_eval_full_body(
     K_flat = K_at_quad.reshape(-1, 3)
     all_flat_w = local_w_stack.reshape(-1)
 
-    def B_at_x(x):
-        r = x[None, :] - all_flat_pts
-        rn = jnp.sqrt(jnp.sum(r**2, axis=-1) + _EPS_BS**2)
-        integrand = jnp.cross(K_flat, r) / (rn[:, None] ** 3)
-        return MU0_OVER_4PI * jnp.sum(integrand * all_flat_w[:, None], axis=0)
-
-    return jax.vmap(B_at_x)(jnp.asarray(pts_eval))
+    return _shell_biot_savart_flat_chunked(
+        K_flat, all_flat_pts, all_flat_w, pts_eval, int(eval_chunk)
+    )
 
 
 def _B_eval_reduced_free_dof_body(
@@ -1147,6 +1840,8 @@ def _B_eval_reduced_free_dof_body(
     gd_tf: jnp.ndarray,
     I_tf: jnp.ndarray,
     pts_eval: jnp.ndarray,
+    L_red_eig_U: jnp.ndarray,
+    L_red_eig_lam: jnp.ndarray,
     base_indices: jnp.ndarray,
     base_reps: jnp.ndarray,
     G_float: jnp.ndarray,
@@ -1157,6 +1852,17 @@ def _B_eval_reduced_free_dof_body(
     adaptive_self_reg: bool,
     checkpoint_L_pairs: bool = False,
     pair_row_chunk: int = 0,
+    eval_chunk: int = 0,
+    vjp_probe_mode: str = "full",
+    solve_vjp_mode: str = "eigh",
+    use_far_dipole_pair: bool = False,
+    pair_far_kappa: float = 0.0,
+    m_local_base: Optional[jnp.ndarray] = None,
+    Q_sym_local: Optional[jnp.ndarray] = None,
+    tf_loading: str = "bn_quad",
+    solve_mode_reduced: str = "eigenfloor",
+    bs_eval_far_kappa: float = 0.0,
+    use_w1_envelope: bool = False,
 ) -> jnp.ndarray:
     """Symmetry-reduced free-puck-DoF forward: fold ``L`` to base replicas only.
 
@@ -1187,6 +1893,11 @@ def _B_eval_reduced_free_dof_body(
         base_indices,
     )
 
+    r_rel = pts_stack - centers_all[:, None, :]
+    R_est_rep = jnp.max(jnp.linalg.norm(r_rel, axis=-1), axis=1)
+    if m_local_base is None:
+        m_local_base = jnp.zeros((n_base, nd, 3), dtype=K_stack.dtype)
+
     def l_block_pair(i_rep: jnp.ndarray, j_rep: jnp.ndarray) -> jnp.ndarray:
         return _pair_inductance_block(
             pts_stack,
@@ -1199,21 +1910,49 @@ def _B_eval_reduced_free_dof_body(
         )
 
     l_fn: Any = l_block_pair
-    if checkpoint_L_pairs:
+    if checkpoint_L_pairs and not use_far_dipole_pair:
         l_fn = jax.checkpoint(l_block_pair)
 
-    def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
-        i_rep = base_reps[ib.astype(jnp.int32)]
-        j_reps = jnp.arange(n_all, dtype=jnp.int32)
+    if use_far_dipole_pair and pair_far_kappa > 0.0:
 
-        def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
-            blk = l_fn(i_rep, jr)
-            return G_float * signs[jr] * blk
+        def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
+            i_rep = base_reps[ib.astype(jnp.int32)]
+            j_reps = jnp.arange(n_all, dtype=jnp.int32)
 
-        blocks = jax.vmap(scaled_block)(j_reps)
-        return jax.ops.segment_sum(
-            blocks, base_indices.astype(jnp.int32), num_segments=n_base
-        )
+            def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
+                blk_d = l_fn(i_rep, jr)
+                Rij = centers_all[jr] - centers_all[i_rep]
+                dist = jnp.linalg.norm(Rij) + 1e-20
+                cap = pair_far_kappa * (R_est_rep[i_rep] + R_est_rep[jr] + 1e-12)
+                use_far = dist > cap
+                Ri = _rotation_matrix_from_quat_jax(quats_all[i_rep])
+                Rj = _rotation_matrix_from_quat_jax(quats_all[jr])
+                bi = ib.astype(jnp.int32)
+                bj = base_indices[jr.astype(jnp.int32)]
+                m_i = jnp.einsum("ij,nj->ni", Ri, m_local_base[bi, :, :])
+                m_j = jnp.einsum("ij,nj->ni", Rj, m_local_base[bj, :, :])
+                blk_f = pair_inductance_multipole(m_i, m_j, Rij, order=1)
+                blk = jnp.where(use_far, blk_f, blk_d)
+                return G_float * signs[jr] * blk
+
+            blocks = jax.vmap(scaled_block)(j_reps)
+            return jax.ops.segment_sum(
+                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+            )
+    else:
+
+        def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
+            i_rep = base_reps[ib.astype(jnp.int32)]
+            j_reps = jnp.arange(n_all, dtype=jnp.int32)
+
+            def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
+                blk = l_fn(i_rep, jr)
+                return G_float * signs[jr] * blk
+
+            blocks = jax.vmap(scaled_block)(j_reps)
+            return jax.ops.segment_sum(
+                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+            )
 
     n_chunk = int(pair_row_chunk)
     if n_chunk > 0 and n_chunk < n_base:
@@ -1236,6 +1975,8 @@ def _B_eval_reduced_free_dof_body(
         l_rows = jax.vmap(one_row_f)(jnp.arange(n_base, dtype=jnp.int32))
     l_base = l_rows.transpose(0, 2, 1, 3).reshape(n_base * nd, n_base * nd)
     l_base = 0.5 * (l_base + l_base.T)
+    if vjp_probe_mode == "stop_l":
+        l_base = jax.lax.stop_gradient(l_base)
 
     gammas_tf = jnp.asarray(g_tf)
     gammadash_tf = jnp.asarray(gd_tf)
@@ -1243,49 +1984,475 @@ def _B_eval_reduced_free_dof_body(
     all_flat_pts = pts_stack.reshape(-1, 3)
     all_flat_n = n_stack.reshape(-1, 3)
 
-    def Bn_at_q(q_idx: jnp.ndarray) -> jnp.ndarray:
-        B = _B_at_point_from_coil_set_pure(
-            all_flat_pts[q_idx],
-            gammas_tf,
-            gammadash_tf,
-            currents_tf,
-            -1,
-            _EPS_BS,
+    tfm = (tf_loading or "bn_quad").lower().replace("-", "_")
+    if tfm == "a_taylor":
+        Qsl = (
+            Q_sym_local
+            if Q_sym_local is not None
+            else jnp.zeros((n_base, nd, 3, 3), dtype=K_stack.dtype)
         )
-        return jnp.dot(B, all_flat_n[q_idx])
 
-    Bn = jax.vmap(Bn_at_q)(jnp.arange(all_flat_pts.shape[0]))
-    Bn_w = _fold_Bn_to_work(
-        Bn,
-        base_indices.astype(jnp.int32),
-        signs.astype(Bn.dtype),
-        n_base,
-        nq,
-    )
-    f = -jnp.sum(local_phi_base * (local_w_base * Bn_w)[..., None], axis=1).reshape(-1)
+        def f_row_taylor(ib: jnp.ndarray) -> jnp.ndarray:
+            c = centers_base[ib]
+            Rm = quats_base[ib]
+            Ri = _rotation_matrix_from_quat_jax(Rm)
+            B0 = _B_at_point_from_coil_set_pure(
+                c, gammas_tf, gammadash_tf, currents_tf, -1, _EPS_BS
+            )
+            gB = _grad_B_at_point_from_coil_set_pure(
+                c, gammas_tf, gammadash_tf, currents_tf, -1, _EPS_BS
+            )
+            Gsym = 0.5 * (gB + gB.T)
+            m_g = jnp.einsum("ij,nj->ni", Ri, m_local_base[ib, :, :])
+            Qb = Qsl[ib, :, :, :]
+            Qg = jnp.einsum("ik,nkl,jl->nij", Ri, Qb, Ri)
+            return jnp.einsum("na, a->n", m_g, B0) + jnp.einsum("nab, ab->n", Qg, Gsym)
+
+        f = jax.vmap(f_row_taylor)(jnp.arange(n_base, dtype=jnp.int32)).reshape(-1)
+    elif tfm == "a_quad":
+        # Leading closed-shell / Galerkin identity: f_a ≈ m_a · B_TF(c) (dipole only).
+        def f_row_aquad(ib: jnp.ndarray) -> jnp.ndarray:
+            c = centers_base[ib]
+            Rm = quats_base[ib]
+            Ri = _rotation_matrix_from_quat_jax(Rm)
+            b0 = _B_at_point_from_coil_set_pure(
+                c, gammas_tf, gammadash_tf, currents_tf, -1, _EPS_BS
+            )
+            m_g = jnp.einsum("ij, nj->ni", Ri, m_local_base[ib, :, :])
+            return jnp.einsum("na, a->n", m_g, b0)
+
+        f = jax.vmap(f_row_aquad)(jnp.arange(n_base, dtype=jnp.int32)).reshape(-1)
+    else:
+
+        def Bn_at_q(q_idx: jnp.ndarray) -> jnp.ndarray:
+            B = _B_at_point_from_coil_set_pure(
+                all_flat_pts[q_idx],
+                gammas_tf,
+                gammadash_tf,
+                currents_tf,
+                -1,
+                _EPS_BS,
+            )
+            return jnp.dot(B, all_flat_n[q_idx])
+
+        Bn = jax.vmap(Bn_at_q)(jnp.arange(all_flat_pts.shape[0]))
+        if vjp_probe_mode == "stop_bn":
+            Bn = jax.lax.stop_gradient(Bn)
+        Bn_w = _fold_Bn_to_work(
+            Bn,
+            base_indices.astype(jnp.int32),
+            signs.astype(Bn.dtype),
+            n_base,
+            nq,
+        )
+        f = -jnp.sum(local_phi_base * (local_w_base * Bn_w)[..., None], axis=1).reshape(
+            -1
+        )
 
     l_r = Q_c_base.T @ l_base @ Q_c_base
     f_r = Q_c_base.T @ f
-    alpha = shell_solve_eigenfloor_pure(
-        l_r,
-        f_r,
-        threshold=eigenfloor_threshold,
-        jitter=1e-10,
-    )
+    eigs = str(solve_mode_reduced).lower() == "eigk"
+    if eigs and L_red_eig_U.shape[0] == f_r.shape[0] and L_red_eig_U.shape[0] > 0:
+        alpha = _eigK_solve_with_correct_vjp(
+            l_r, L_red_eig_U, L_red_eig_lam, f_r, eigenfloor_threshold
+        )
+    elif eigs:
+        Lreg, _, _ = shell_eigendecomposition_floored(
+            l_r, threshold=eigenfloor_threshold, jitter=1e-10
+        )
+        alpha = jnp.linalg.solve(Lreg, f_r)
+    elif solve_vjp_mode == "implicit" or use_w1_envelope:
+        alpha = _solve_eigenfloor_implicit_vjp(
+            l_r,
+            f_r,
+            eigenfloor_threshold,
+        )
+    else:
+        alpha = shell_solve_eigenfloor_pure(
+            l_r,
+            f_r,
+            threshold=eigenfloor_threshold,
+            jitter=1e-10,
+        )
     beta = Q_c_base @ alpha
+    if vjp_probe_mode in ("stop_solve", "shell_only"):
+        beta = jax.lax.stop_gradient(beta)
     beta_all = _gather_beta_work_to_all(beta, base_indices, signs, nd)
     b_stack = beta_all.reshape(n_all, nd)
-    k_at_quad = jnp.einsum("pqdi,pd->pqi", K_stack, b_stack)
+    K_for_shell = (
+        jax.lax.stop_gradient(K_stack) if vjp_probe_mode == "beta_only" else K_stack
+    )
+    k_at_quad = jnp.einsum("pqdi,pd->pqi", K_for_shell, b_stack)
     k_flat = k_at_quad.reshape(-1, 3)
-    w_flat = w_stack.reshape(-1)
+    source_pts = (
+        jax.lax.stop_gradient(all_flat_pts)
+        if vjp_probe_mode == "beta_only"
+        else all_flat_pts
+    )
+    w_source = (
+        jax.lax.stop_gradient(w_stack) if vjp_probe_mode == "beta_only" else w_stack
+    )
+    w_flat = w_source.reshape(-1)
 
-    def b_at(x: jnp.ndarray) -> jnp.ndarray:
-        rvec = x[None, :] - all_flat_pts
-        rn = jnp.sqrt(jnp.sum(rvec**2, axis=-1) + _EPS_BS**2)
-        integr = jnp.cross(k_flat, rvec) / (rn[:, None] ** 3)
-        return MU0_OVER_4PI * jnp.sum(integr * w_flat[:, None], axis=0)
+    b_shell = _shell_biot_savart_flat_chunked(
+        k_flat, source_pts, w_flat, pts_eval, int(eval_chunk)
+    )
+    if float(bs_eval_far_kappa) <= 0.0:
+        return b_shell
+    m_loc_on_rep = m_local_base[base_indices.astype(jnp.int32)]
 
-    return jax.vmap(b_at)(jnp.asarray(pts_eval))
+    def _m_total_rep(r: jnp.ndarray) -> jnp.ndarray:
+        rm = _rotation_matrix_from_quat_jax(quats_all[r])
+        m_g = jnp.einsum("ij,dj->di", rm, m_loc_on_rep[r])
+        return jnp.einsum("d, di->i", b_stack[r], m_g)
+
+    m_rep = jax.vmap(_m_total_rep)(jnp.arange(n_all, dtype=jnp.int32))
+    dmat = (
+        jnp.linalg.norm(pts_eval[:, None, :] - centers_all[None, :, :], axis=-1) + 1e-20
+    )
+    cap = float(bs_eval_far_kappa) * (R_est_rep[None, :] + 1e-12)
+    ratio = dmat / cap
+    s_pt = jnp.min(jax.nn.sigmoid(10.0 * (ratio - 1.0)), axis=1)[:, None]
+
+    def _dip(p: jnp.ndarray) -> jnp.ndarray:
+        return magnetic_field_dipole_points(m_rep[p], pts_eval, centers_all[p])
+
+    b_dip = jnp.sum(jax.vmap(_dip)(jnp.arange(n_all, dtype=jnp.int32)), axis=0)
+    return s_pt * b_dip + (1.0 - s_pt) * b_shell
+
+
+def _B_eval_reduced_free_dof_body_v2(
+    local_pts_base: jnp.ndarray,
+    local_K_base: jnp.ndarray,
+    local_n_base: jnp.ndarray,
+    local_w_base: jnp.ndarray,
+    local_phi_base: jnp.ndarray,
+    Q_c_base: jnp.ndarray,
+    centers_base: jnp.ndarray,
+    quats_base: jnp.ndarray,
+    g_tf: jnp.ndarray,
+    gd_tf: jnp.ndarray,
+    I_tf: jnp.ndarray,
+    pts_eval: jnp.ndarray,
+    L_red_eig_U: jnp.ndarray,
+    L_red_eig_lam: jnp.ndarray,
+    base_indices: jnp.ndarray,
+    base_reps: jnp.ndarray,
+    G_float: jnp.ndarray,
+    nfp: int,
+    stellsym: bool,
+    delta_reg: float,
+    eigenfloor_threshold: float,
+    adaptive_self_reg: bool,
+    checkpoint_L_pairs: bool = False,
+    pair_row_chunk: int = 0,
+    eval_chunk: int = 0,
+    use_far_dipole_pair: bool = False,
+    pair_far_kappa: float = 0.0,
+    m_local_base: Optional[jnp.ndarray] = None,
+    Q_sym_local: Optional[jnp.ndarray] = None,
+    tf_loading: str = "bn_quad",
+    solve_mode_reduced: str = "eigenfloor",
+    bs_eval_far_kappa: float = 0.0,
+) -> jnp.ndarray:
+    """W1 envelope variant: ``alpha`` solve via ``jax.custom_vjp`` envelope theorem.
+
+    Same forward semantics as :func:`_B_eval_reduced_free_dof_body` (when
+    ``vjp_probe_mode='full'``), but the ``alpha = L_r^{-1} f_r`` step is wrapped
+    in a custom ``custom_vjp`` whose backward differentiates the *scalar*
+    ``E_adj(theta) = lam.T @ f_r(theta) - lam.T @ L_r(theta) @ alpha`` with
+    ``lam = L_r^{-1} ct_alpha``.  This avoids JAX retracing through the linear
+    solve in the backward pass and enables a cleaner adjoint when the eigK
+    cache is used (forward path can pick the cached basis without poisoning the
+    backward).  Drops the diagnostic ``vjp_probe_mode`` / ``solve_vjp_mode``
+    knobs from v1; gate selection v1 vs v2 via :func:`_psc_w1_envelope_env`.
+    """
+    n_base = int(local_pts_base.shape[0])
+    nd = int(local_K_base.shape[2])
+    n_all = int(base_indices.shape[0])
+
+    centers_all, quats_all, signs = _replicate_pucks_jax(
+        centers_base, quats_base, nfp, stellsym
+    )
+    pts_stack, K_stack, _n_stack, w_stack = _transform_local_to_all_replicas(
+        centers_all,
+        quats_all,
+        local_pts_base,
+        local_K_base,
+        local_n_base,
+        local_w_base,
+        base_indices,
+    )
+    r_rel = pts_stack - centers_all[:, None, :]
+    R_est_rep = jnp.max(jnp.linalg.norm(r_rel, axis=-1), axis=1)
+    if m_local_base is None:
+        m_local_base = jnp.zeros((n_base, nd, 3), dtype=K_stack.dtype)
+
+    def L_assemble(c_b: jnp.ndarray, q_b: jnp.ndarray) -> jnp.ndarray:
+        return _assemble_L_red_inner(
+            c_b,
+            q_b,
+            local_pts_base,
+            local_K_base,
+            local_n_base,
+            local_w_base,
+            Q_c_base,
+            base_indices,
+            base_reps,
+            G_float,
+            nfp,
+            stellsym,
+            delta_reg,
+            adaptive_self_reg,
+            checkpoint_L_pairs=checkpoint_L_pairs,
+            pair_row_chunk=pair_row_chunk,
+            use_far_dipole_pair=use_far_dipole_pair,
+            pair_far_kappa=pair_far_kappa,
+            m_local_base=m_local_base,
+        )
+
+    def f_assemble(
+        c_b: jnp.ndarray,
+        q_b: jnp.ndarray,
+        g: jnp.ndarray,
+        gd: jnp.ndarray,
+        I: jnp.ndarray,
+    ) -> jnp.ndarray:
+        return _assemble_f_red_inner(
+            c_b,
+            q_b,
+            g,
+            gd,
+            I,
+            local_pts_base,
+            local_K_base,
+            local_n_base,
+            local_w_base,
+            local_phi_base,
+            Q_c_base,
+            base_indices,
+            nfp,
+            stellsym,
+            tf_loading,
+            m_local_base=m_local_base,
+            Q_sym_local=Q_sym_local,
+        )
+
+    eigk_mode = str(solve_mode_reduced).lower() == "eigk"
+    cache_n = int(L_red_eig_U.shape[0])
+
+    @jax.custom_vjp
+    def _alpha_from_q(
+        c_b: jnp.ndarray,
+        q_b: jnp.ndarray,
+        g: jnp.ndarray,
+        gd: jnp.ndarray,
+        I: jnp.ndarray,
+    ) -> jnp.ndarray:
+        L_r = L_assemble(c_b, q_b)
+        f_r = f_assemble(c_b, q_b, g, gd, I)
+        if eigk_mode and cache_n > 0 and cache_n == f_r.shape[0]:
+            return shell_solve_eigK_pure(L_red_eig_U, L_red_eig_lam, f_r)
+        return _solve_eigenfloor_implicit_vjp(L_r, f_r, eigenfloor_threshold)
+
+    def _alpha_from_q_fwd(
+        c_b: jnp.ndarray,
+        q_b: jnp.ndarray,
+        g: jnp.ndarray,
+        gd: jnp.ndarray,
+        I: jnp.ndarray,
+    ) -> Tuple[
+        jnp.ndarray,
+        Tuple[
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+        ],
+    ]:
+        L_r = L_assemble(c_b, q_b)
+        f_r = f_assemble(c_b, q_b, g, gd, I)
+        if eigk_mode and cache_n > 0 and cache_n == f_r.shape[0]:
+            alpha = shell_solve_eigK_pure(L_red_eig_U, L_red_eig_lam, f_r)
+        else:
+            alpha = _solve_eigenfloor_implicit_vjp(L_r, f_r, eigenfloor_threshold)
+        return alpha, (c_b, q_b, g, gd, I, L_r, alpha)
+
+    def _alpha_from_q_bwd(
+        residuals: Tuple[
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+            jnp.ndarray,
+        ],
+        ct_alpha: jnp.ndarray,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        c_b, q_b, g, gd, I, L_r, alpha = residuals
+        L_reg = _eigenfloor_regularized_matrix(
+            L_r, threshold=eigenfloor_threshold, jitter=1e-10
+        )
+        lam = jnp.linalg.solve(L_reg, ct_alpha)
+
+        def E_adj(
+            c: jnp.ndarray,
+            q: jnp.ndarray,
+            gg: jnp.ndarray,
+            ggd: jnp.ndarray,
+            II: jnp.ndarray,
+        ) -> jnp.ndarray:
+            Lc = L_assemble(c, q)
+            fc = f_assemble(c, q, gg, ggd, II)
+            return jnp.dot(lam, fc) - jnp.dot(lam, Lc @ alpha)
+
+        return jax.grad(E_adj, argnums=(0, 1, 2, 3, 4))(c_b, q_b, g, gd, I)
+
+    _alpha_from_q.defvjp(_alpha_from_q_fwd, _alpha_from_q_bwd)
+
+    alpha = _alpha_from_q(centers_base, quats_base, g_tf, gd_tf, I_tf)
+
+    return _post_solve_to_B(
+        alpha,
+        Q_c_base,
+        base_indices,
+        signs,
+        K_stack,
+        pts_stack,
+        w_stack,
+        centers_all,
+        quats_all,
+        R_est_rep,
+        m_local_base,
+        pts_eval,
+        eval_chunk,
+        bs_eval_far_kappa,
+        n_all,
+        nd,
+    )
+
+
+def _B_eval_reduced_free_dof_dispatch(
+    local_pts_base: jnp.ndarray,
+    local_K_base: jnp.ndarray,
+    local_n_base: jnp.ndarray,
+    local_w_base: jnp.ndarray,
+    local_phi_base: jnp.ndarray,
+    Q_c_base: jnp.ndarray,
+    centers_base: jnp.ndarray,
+    quats_base: jnp.ndarray,
+    g_tf: jnp.ndarray,
+    gd_tf: jnp.ndarray,
+    I_tf: jnp.ndarray,
+    pts_eval: jnp.ndarray,
+    L_red_eig_U: jnp.ndarray,
+    L_red_eig_lam: jnp.ndarray,
+    base_indices: jnp.ndarray,
+    base_reps: jnp.ndarray,
+    G_float: jnp.ndarray,
+    nfp: int,
+    stellsym: bool,
+    delta_reg: float,
+    eigenfloor_threshold: float,
+    adaptive_self_reg: bool,
+    checkpoint_L_pairs: bool = False,
+    pair_row_chunk: int = 0,
+    eval_chunk: int = 0,
+    vjp_probe_mode: str = "full",
+    solve_vjp_mode: str = "eigh",
+    use_far_dipole_pair: bool = False,
+    pair_far_kappa: float = 0.0,
+    m_local_base: Optional[jnp.ndarray] = None,
+    Q_sym_local: Optional[jnp.ndarray] = None,
+    tf_loading: str = "bn_quad",
+    solve_mode_reduced: str = "eigenfloor",
+    bs_eval_far_kappa: float = 0.0,
+    use_w1_envelope: bool = False,
+) -> jnp.ndarray:
+    """Static dispatch between v1 and v2 reduced free-DOF bodies.
+
+    ``use_w1_envelope=True`` selects :func:`_B_eval_reduced_free_dof_body_v2`
+    (envelope-theorem ``custom_vjp`` for ``alpha``).  ``False`` keeps the
+    legacy ``_B_eval_reduced_free_dof_body`` path with ``vjp_probe_mode`` /
+    ``solve_vjp_mode`` diagnostics.  Branch is on a JIT-static argument so each
+    branch compiles separately.
+    """
+    if use_w1_envelope:
+        return _B_eval_reduced_free_dof_body_v2(
+            local_pts_base,
+            local_K_base,
+            local_n_base,
+            local_w_base,
+            local_phi_base,
+            Q_c_base,
+            centers_base,
+            quats_base,
+            g_tf,
+            gd_tf,
+            I_tf,
+            pts_eval,
+            L_red_eig_U,
+            L_red_eig_lam,
+            base_indices,
+            base_reps,
+            G_float,
+            nfp,
+            stellsym,
+            delta_reg,
+            eigenfloor_threshold,
+            adaptive_self_reg,
+            checkpoint_L_pairs=checkpoint_L_pairs,
+            pair_row_chunk=pair_row_chunk,
+            eval_chunk=eval_chunk,
+            use_far_dipole_pair=use_far_dipole_pair,
+            pair_far_kappa=pair_far_kappa,
+            m_local_base=m_local_base,
+            Q_sym_local=Q_sym_local,
+            tf_loading=tf_loading,
+            solve_mode_reduced=solve_mode_reduced,
+            bs_eval_far_kappa=bs_eval_far_kappa,
+        )
+    return _B_eval_reduced_free_dof_body(
+        local_pts_base,
+        local_K_base,
+        local_n_base,
+        local_w_base,
+        local_phi_base,
+        Q_c_base,
+        centers_base,
+        quats_base,
+        g_tf,
+        gd_tf,
+        I_tf,
+        pts_eval,
+        L_red_eig_U,
+        L_red_eig_lam,
+        base_indices,
+        base_reps,
+        G_float,
+        nfp,
+        stellsym,
+        delta_reg,
+        eigenfloor_threshold,
+        adaptive_self_reg,
+        checkpoint_L_pairs=checkpoint_L_pairs,
+        pair_row_chunk=pair_row_chunk,
+        eval_chunk=eval_chunk,
+        vjp_probe_mode=vjp_probe_mode,
+        solve_vjp_mode=solve_vjp_mode,
+        use_far_dipole_pair=use_far_dipole_pair,
+        pair_far_kappa=pair_far_kappa,
+        m_local_base=m_local_base,
+        Q_sym_local=Q_sym_local,
+        tf_loading=tf_loading,
+        solve_mode_reduced=solve_mode_reduced,
+        bs_eval_far_kappa=bs_eval_far_kappa,
+        use_w1_envelope=False,
+    )
 
 
 _B_eval_full_jitted = jax.jit(
@@ -1296,10 +2463,11 @@ _B_eval_full_jitted = jax.jit(
         "adaptive_self_reg",
         "full_L_band_size",
         "checkpoint_L_pairs",
+        "eval_chunk",
     ),
 )
 _B_eval_reduced_free_dof_jitted = jax.jit(
-    _B_eval_reduced_free_dof_body,
+    _B_eval_reduced_free_dof_dispatch,
     static_argnames=(
         "nfp",
         "stellsym",
@@ -1308,6 +2476,15 @@ _B_eval_reduced_free_dof_jitted = jax.jit(
         "adaptive_self_reg",
         "checkpoint_L_pairs",
         "pair_row_chunk",
+        "eval_chunk",
+        "vjp_probe_mode",
+        "solve_vjp_mode",
+        "use_far_dipole_pair",
+        "pair_far_kappa",
+        "tf_loading",
+        "solve_mode_reduced",
+        "bs_eval_far_kappa",
+        "use_w1_envelope",
     ),
 )
 
@@ -1380,6 +2557,7 @@ def _vjp_full_run(
     adaptive_self_reg: bool = False,
     full_L_band_size: int = 32,
     checkpoint_L_pairs: bool = False,
+    eval_chunk: int = 0,
 ) -> Tuple[
     jnp.ndarray,
     jnp.ndarray,
@@ -1417,6 +2595,7 @@ def _vjp_full_run(
             adaptive_self_reg,
             full_L_band_size,
             checkpoint_L_pairs,
+            eval_chunk,
         )
 
     fwd_run = jax.checkpoint(fwd, prevent_cse=False) if checkpoint_L_pairs else fwd
@@ -1432,6 +2611,7 @@ _vjp_full_jitted = jax.jit(
         "adaptive_self_reg",
         "full_L_band_size",
         "checkpoint_L_pairs",
+        "eval_chunk",
     ),
 )
 
@@ -1449,6 +2629,8 @@ def _vjp_reduced_free_dof_run(
     gd_tf: jnp.ndarray,
     I_tf: jnp.ndarray,
     pts_eval: jnp.ndarray,
+    L_red_eig_U: jnp.ndarray,
+    L_red_eig_lam: jnp.ndarray,
     v_B: jnp.ndarray,
     base_indices: jnp.ndarray,
     base_reps: jnp.ndarray,
@@ -1460,11 +2642,22 @@ def _vjp_reduced_free_dof_run(
     adaptive_self_reg: bool,
     checkpoint_L_pairs: bool,
     pair_row_chunk: int,
+    eval_chunk: int,
+    vjp_probe_mode: str,
+    solve_vjp_mode: str,
+    m_local_base: jnp.ndarray,
+    Q_sym_local: jnp.ndarray,
+    use_far_dipole_pair: bool,
+    pair_far_kappa: float,
+    tf_loading: str,
+    solve_mode_reduced: str,
+    bs_eval_far_kappa: float,
+    use_w1_envelope: bool = False,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """VJP for :func:`_B_eval_reduced_free_dof_body` w.r.t. base centers, quats, TF."""
+    """VJP for :func:`_B_eval_reduced_free_dof_dispatch` w.r.t. base centers, quats, TF."""
 
     def fwd(c_b, q_b, g, gd, I):
-        return _B_eval_reduced_free_dof_body(
+        return _B_eval_reduced_free_dof_dispatch(
             local_pts_base,
             local_K_base,
             local_n_base,
@@ -1477,6 +2670,8 @@ def _vjp_reduced_free_dof_run(
             gd,
             I,
             pts_eval,
+            L_red_eig_U,
+            L_red_eig_lam,
             base_indices,
             base_reps,
             G_float,
@@ -1487,6 +2682,17 @@ def _vjp_reduced_free_dof_run(
             adaptive_self_reg,
             checkpoint_L_pairs,
             pair_row_chunk,
+            eval_chunk,
+            vjp_probe_mode,
+            solve_vjp_mode,
+            use_far_dipole_pair,
+            pair_far_kappa,
+            m_local_base,
+            Q_sym_local,
+            tf_loading,
+            solve_mode_reduced,
+            bs_eval_far_kappa,
+            use_w1_envelope,
         )
 
     fwd_run = jax.checkpoint(fwd, prevent_cse=False) if checkpoint_L_pairs else fwd
@@ -1504,6 +2710,229 @@ _vjp_reduced_free_dof_jitted = jax.jit(
         "adaptive_self_reg",
         "checkpoint_L_pairs",
         "pair_row_chunk",
+        "eval_chunk",
+        "vjp_probe_mode",
+        "solve_vjp_mode",
+        "use_far_dipole_pair",
+        "pair_far_kappa",
+        "tf_loading",
+        "solve_mode_reduced",
+        "bs_eval_far_kappa",
+        "use_w1_envelope",
+    ),
+)
+
+
+def _vjp_reduced_free_quat_only_run(
+    local_pts_base: jnp.ndarray,
+    local_K_base: jnp.ndarray,
+    local_n_base: jnp.ndarray,
+    local_w_base: jnp.ndarray,
+    local_phi_base: jnp.ndarray,
+    Q_c_base: jnp.ndarray,
+    centers_base: jnp.ndarray,
+    quats_base: jnp.ndarray,
+    g_tf: jnp.ndarray,
+    gd_tf: jnp.ndarray,
+    I_tf: jnp.ndarray,
+    pts_eval: jnp.ndarray,
+    L_red_eig_U: jnp.ndarray,
+    L_red_eig_lam: jnp.ndarray,
+    v_B: jnp.ndarray,
+    base_indices: jnp.ndarray,
+    base_reps: jnp.ndarray,
+    G_float: jnp.ndarray,
+    nfp: int,
+    stellsym: bool,
+    delta_reg: float,
+    eigenfloor_threshold: float,
+    adaptive_self_reg: bool,
+    checkpoint_L_pairs: bool,
+    pair_row_chunk: int,
+    eval_chunk: int,
+    vjp_probe_mode: str,
+    solve_vjp_mode: str,
+    m_local_base: jnp.ndarray,
+    Q_sym_local: jnp.ndarray,
+    use_far_dipole_pair: bool,
+    pair_far_kappa: float,
+    tf_loading: str,
+    solve_mode_reduced: str,
+    bs_eval_far_kappa: float,
+    use_w1_envelope: bool = False,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Reduced VJP when only puck quaternion DOFs are active."""
+
+    def fwd(q_b, g, gd, I):
+        return _B_eval_reduced_free_dof_dispatch(
+            local_pts_base,
+            local_K_base,
+            local_n_base,
+            local_w_base,
+            local_phi_base,
+            Q_c_base,
+            centers_base,
+            q_b,
+            g,
+            gd,
+            I,
+            pts_eval,
+            L_red_eig_U,
+            L_red_eig_lam,
+            base_indices,
+            base_reps,
+            G_float,
+            nfp,
+            stellsym,
+            delta_reg,
+            eigenfloor_threshold,
+            adaptive_self_reg,
+            checkpoint_L_pairs,
+            pair_row_chunk,
+            eval_chunk,
+            vjp_probe_mode,
+            solve_vjp_mode,
+            use_far_dipole_pair,
+            pair_far_kappa,
+            m_local_base,
+            Q_sym_local,
+            tf_loading,
+            solve_mode_reduced,
+            bs_eval_far_kappa,
+            use_w1_envelope,
+        )
+
+    fwd_run = jax.checkpoint(fwd, prevent_cse=False) if checkpoint_L_pairs else fwd
+    _, vjp_fn = vjp(fwd_run, quats_base, g_tf, gd_tf, I_tf)
+    return vjp_fn(v_B)
+
+
+_vjp_reduced_free_quat_only_jitted = jax.jit(
+    _vjp_reduced_free_quat_only_run,
+    static_argnames=(
+        "nfp",
+        "stellsym",
+        "delta_reg",
+        "eigenfloor_threshold",
+        "adaptive_self_reg",
+        "checkpoint_L_pairs",
+        "pair_row_chunk",
+        "eval_chunk",
+        "vjp_probe_mode",
+        "solve_vjp_mode",
+        "use_far_dipole_pair",
+        "pair_far_kappa",
+        "tf_loading",
+        "solve_mode_reduced",
+        "bs_eval_far_kappa",
+        "use_w1_envelope",
+    ),
+)
+
+
+def _vjp_reduced_free_center_only_run(
+    local_pts_base: jnp.ndarray,
+    local_K_base: jnp.ndarray,
+    local_n_base: jnp.ndarray,
+    local_w_base: jnp.ndarray,
+    local_phi_base: jnp.ndarray,
+    Q_c_base: jnp.ndarray,
+    centers_base: jnp.ndarray,
+    quats_base: jnp.ndarray,
+    g_tf: jnp.ndarray,
+    gd_tf: jnp.ndarray,
+    I_tf: jnp.ndarray,
+    pts_eval: jnp.ndarray,
+    L_red_eig_U: jnp.ndarray,
+    L_red_eig_lam: jnp.ndarray,
+    v_B: jnp.ndarray,
+    base_indices: jnp.ndarray,
+    base_reps: jnp.ndarray,
+    G_float: jnp.ndarray,
+    nfp: int,
+    stellsym: bool,
+    delta_reg: float,
+    eigenfloor_threshold: float,
+    adaptive_self_reg: bool,
+    checkpoint_L_pairs: bool,
+    pair_row_chunk: int,
+    eval_chunk: int,
+    vjp_probe_mode: str,
+    solve_vjp_mode: str,
+    m_local_base: jnp.ndarray,
+    Q_sym_local: jnp.ndarray,
+    use_far_dipole_pair: bool,
+    pair_far_kappa: float,
+    tf_loading: str,
+    solve_mode_reduced: str,
+    bs_eval_far_kappa: float,
+    use_w1_envelope: bool = False,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Reduced VJP when only puck center DOFs are active."""
+
+    def fwd(c_b, g, gd, I):
+        return _B_eval_reduced_free_dof_dispatch(
+            local_pts_base,
+            local_K_base,
+            local_n_base,
+            local_w_base,
+            local_phi_base,
+            Q_c_base,
+            c_b,
+            quats_base,
+            g,
+            gd,
+            I,
+            pts_eval,
+            L_red_eig_U,
+            L_red_eig_lam,
+            base_indices,
+            base_reps,
+            G_float,
+            nfp,
+            stellsym,
+            delta_reg,
+            eigenfloor_threshold,
+            adaptive_self_reg,
+            checkpoint_L_pairs,
+            pair_row_chunk,
+            eval_chunk,
+            vjp_probe_mode,
+            solve_vjp_mode,
+            use_far_dipole_pair,
+            pair_far_kappa,
+            m_local_base,
+            Q_sym_local,
+            tf_loading,
+            solve_mode_reduced,
+            bs_eval_far_kappa,
+            use_w1_envelope,
+        )
+
+    fwd_run = jax.checkpoint(fwd, prevent_cse=False) if checkpoint_L_pairs else fwd
+    _, vjp_fn = vjp(fwd_run, centers_base, g_tf, gd_tf, I_tf)
+    return vjp_fn(v_B)
+
+
+_vjp_reduced_free_center_only_jitted = jax.jit(
+    _vjp_reduced_free_center_only_run,
+    static_argnames=(
+        "nfp",
+        "stellsym",
+        "delta_reg",
+        "eigenfloor_threshold",
+        "adaptive_self_reg",
+        "checkpoint_L_pairs",
+        "pair_row_chunk",
+        "eval_chunk",
+        "vjp_probe_mode",
+        "solve_vjp_mode",
+        "use_far_dipole_pair",
+        "pair_far_kappa",
+        "tf_loading",
+        "solve_mode_reduced",
+        "bs_eval_far_kappa",
+        "use_w1_envelope",
     ),
 )
 
@@ -1785,6 +3214,7 @@ class PSCBulkArray(Optimizable):
         self._local_stacks_valid: bool = False
         self._timing_rows: Optional[List[Dict[str, Any]]] = None
         self._structural_key: Optional[tuple] = None
+        self._free_vjp_cache: Optional[Dict[str, Any]] = None
         # Detect whether the TF coil set is a faithful image of its first
         # ``n_base`` entries under the ``(nfp, stellsym)`` group used to
         # replicate pucks.  When ``True``, ``_rebuild`` routes through the
@@ -2160,15 +3590,33 @@ class PSCBulkArray(Optimizable):
         """Start wall-clock slice for :meth:`_rebuild` when timing is enabled."""
         return time.perf_counter() if _psc_bulk_timing_enabled() else None
 
-    def _mark_phase_end(self, name: str, t0: Optional[float]) -> None:
+    def _mark_phase_end(
+        self, name: str, t0: Optional[float], value: Any = None
+    ) -> None:
         """Append ``{phase, seconds}`` to :attr:`_timing_rows`."""
         if t0 is None:
             return
+        _timing_block_until_ready(value)
         if self._timing_rows is None:
             self._timing_rows = []
         self._timing_rows.append(
             {"phase": name, "seconds": float(time.perf_counter() - t0)}
         )
+
+    def _refresh_L_red_eig_host_cache(self, Lr: np.ndarray) -> None:
+        """Recompute host NumPy eigensystem of :math:`L_\\text{red}` for eigK cache (W4)."""
+        Lr = np.asarray(Lr, dtype=np.float64)
+        if Lr.size == 0:
+            self._L_red_eig_U_np = None
+            self._L_red_eig_lam_np = None
+            self._L_red_eig_anchor_np = None
+            return
+        w, v = np.linalg.eigh(0.5 * (Lr + Lr.T))
+        mx = float(np.max(np.abs(w)))
+        th = float(self._eigenfloor_threshold) * max(mx, 1e-30)
+        self._L_red_eig_lam_np = np.maximum(w, th)
+        self._L_red_eig_U_np = v
+        self._L_red_eig_anchor_np = Lr.copy()
 
     def _rebuild(
         self,
@@ -2654,6 +4102,7 @@ class PSCBulkArray(Optimizable):
                 cache_hit_payload["Lr_eigf_chol"], dtype=np.float64
             )
             self._jax_Lr_eigf_chol = jnp.asarray(Lr_eigf_chol)
+            self._refresh_L_red_eig_host_cache(Lr)
         else:
             # Gauge projection on top of the continuity-restricted subspace:
             # drop the remaining exact null modes (constant per puck) of L.
@@ -2672,6 +4121,7 @@ class PSCBulkArray(Optimizable):
                 threshold=float(self._eigenfloor_threshold),
                 jitter=1e-10,
             )
+            self._refresh_L_red_eig_host_cache(Lr)
             if lcache_enabled and cache_key is not None:
                 try:
                     _psc_lcache_store(
@@ -2785,6 +4235,33 @@ class PSCBulkArray(Optimizable):
             parts.append(c.current.x.tobytes())
         return hash(tuple(parts))
 
+    def _free_vjp_cache_key(self, pts: np.ndarray, solve_vjp_mode: str) -> tuple:
+        """Hash the reduced free-DOF linearization cache state."""
+        pts_arr = np.ascontiguousarray(np.asarray(pts).reshape(-1, 3), dtype=float)
+        use_far, pair_k, tf_load, sol_mode, bs_far = _reduced_free_dof_extras_for_jax()
+        return (
+            self._hash_puck_local_dofs(),
+            self._tf_dofs_hash(),
+            pts_arr.shape,
+            hash(pts_arr.tobytes()),
+            bool(getattr(self, "_reduced_free_dof_active", False)),
+            int(self.nfp),
+            bool(self.stellsym),
+            float(self.regularization_delta),
+            float(self._eigenfloor_threshold),
+            bool(self.adaptive_self_reg),
+            bool(self._resolved_checkpoint_l_pairs()),
+            int(self._resolved_jax_pair_row_chunk()),
+            int(self._resolved_bs_eval_chunk(pts_arr.shape[0])),
+            str(solve_vjp_mode),
+            bool(use_far),
+            float(pair_k),
+            str(tf_load),
+            str(sol_mode),
+            float(bs_far),
+            bool(_psc_w1_envelope_env()),
+        )
+
     def _tf_arrays(self):
         """Stacked TF geometry/current arrays; cached while DOFs unchanged."""
         key = self._tf_dofs_hash()
@@ -2862,6 +4339,13 @@ class PSCBulkArray(Optimizable):
             self._jax_Q_c_base = jnp.asarray(self._Q_c_work)
         else:
             self._jax_Q_c_base = None
+        u_host = getattr(self, "_L_red_eig_U_np", None)
+        if u_host is not None and getattr(self, "_L_red_eig_lam_np", None) is not None:
+            self._jax_L_red_eig_U = jnp.asarray(self._L_red_eig_U_np)
+            self._jax_L_red_eig_lam = jnp.asarray(self._L_red_eig_lam_np)
+        else:
+            self._jax_L_red_eig_U = jnp.zeros((0, 0), dtype=jnp.float64)
+            self._jax_L_red_eig_lam = jnp.zeros((0,), dtype=jnp.float64)
 
     @property
     def _K_stack(self) -> Optional[np.ndarray]:
@@ -3031,6 +4515,12 @@ class PSCBulkArray(Optimizable):
             [jnp.asarray(b.phi_values) for b in self._basis_per_puck]
         )
         self._jax_Q_c = jnp.asarray(self._Q_c)
+        self._jax_m_local = magnetic_dipole_moments_stacked(
+            self._jax_local_K, self._jax_local_pts, self._jax_local_w
+        )
+        self._jax_Q_sym_local = quadrupole_magnetic_symmetric_stacked(
+            self._jax_local_K, self._jax_local_pts, self._jax_local_w
+        )
         self._local_stacks_valid = True
 
     # ------------------------------------------------------------------
@@ -3046,15 +4536,24 @@ class PSCBulkArray(Optimizable):
         an optimization iteration reuse the point cache managed by the
         C++ kernel.
         """
+        _t_total = self._mark_phase_start()
         bs = getattr(self, "_bs_bn", None)
         pts_id = id(self._quad_points)
         if bs is None or getattr(self, "_bs_bn_pts_id", None) != pts_id:
+            _t_set = self._mark_phase_start()
             bs = BiotSavart(self.coils_TF)
             bs.set_points_cart(np.ascontiguousarray(self._quad_points))
             self._bs_bn = bs
             self._bs_bn_pts_id = pts_id
+            self._mark_phase_end("solve_beta_tf_normal_set_points", _t_set)
+        _t_b = self._mark_phase_start()
         B = bs.B()
-        return np.sum(B * self._quad_normals, axis=1)
+        self._mark_phase_end("solve_beta_tf_normal_B", _t_b)
+        _t_dot = self._mark_phase_start()
+        Bn = np.sum(B * self._quad_normals, axis=1)
+        self._mark_phase_end("solve_beta_tf_normal_dot", _t_dot)
+        self._mark_phase_end("solve_beta_tf_normal_total", _t_total)
+        return Bn
 
     def _solve_beta(self, tf_arrays) -> np.ndarray:
         """Solve :math:`L \\beta = f` for the modal coefficients ``beta``.
@@ -3094,18 +4593,30 @@ class PSCBulkArray(Optimizable):
         kernel.  The reduced symmetry path is disabled in this mode
         (see :meth:`_rebuild`) so no gather is needed.
         """
+        _t_total = self._mark_phase_start()
+        _t_bn = self._mark_phase_start()
         Bn = self._compute_bn_at_quads_numpy()
+        self._mark_phase_end("solve_beta_bn_total", _t_bn)
         if self.solver_mode == "shell_l2":
+            _t_load = self._mark_phase_start()
             g = -self._Hw @ Bn
             g_r = np.asarray(self._Q).T @ g
+            self._mark_phase_end("solve_beta_l2_load", _t_load)
+            _t_solve = self._mark_phase_start()
             alpha = np.asarray(
                 shell_solve_prefactored_pure(
                     self._jax_Lr_eigf_chol,
                     jnp.asarray(g_r),
                 )
             )
+            self._mark_phase_end("solve_beta_l2_solve", _t_solve)
+            _t_gather = self._mark_phase_start()
             beta_work = np.asarray(self._Q) @ alpha
-            return self._gather_beta_work_to_all_numpy(beta_work)
+            beta = self._gather_beta_work_to_all_numpy(beta_work)
+            self._mark_phase_end("solve_beta_gather", _t_gather)
+            self._mark_phase_end("solve_beta_total", _t_total)
+            return beta
+        _t_solve = self._mark_phase_start()
         beta_work = np.array(
             _beta_eigenfloor_from_bn_jitted(
                 self._jax_Lr_eigf_chol,
@@ -3117,7 +4628,12 @@ class PSCBulkArray(Optimizable):
                 jnp.asarray(Bn),
             )
         )
-        return self._gather_beta_work_to_all_numpy(beta_work)
+        self._mark_phase_end("solve_beta_jax_loading_solve", _t_solve)
+        _t_gather = self._mark_phase_start()
+        beta = self._gather_beta_work_to_all_numpy(beta_work)
+        self._mark_phase_end("solve_beta_gather", _t_gather)
+        self._mark_phase_end("solve_beta_total", _t_total)
+        return beta
 
     @property
     def biot_savart(self) -> "PassiveBulkField":
@@ -3135,6 +4651,7 @@ class PSCBulkArray(Optimizable):
         explicitly; the default path here does not yet emit per-DoF
         masks.
         """
+        _t_total = self._mark_phase_start()
         current_hash = hash(tuple(self.local_full_x))
         if current_hash != self._geom_hash:
             self._rebuild()
@@ -3142,9 +4659,22 @@ class PSCBulkArray(Optimizable):
             # still delegates to ``self.B_at_points``, which uses updated L, beta,
             # and JIT functions. Replacing the field breaks ``MagneticFieldSum``'s
             # reference to the original object and orphan cache invalidation.
+            _path = "rebuild"
         else:
+            Lr = np.asarray(getattr(self, "_L_red", []), dtype=np.float64)
+            anc = getattr(self, "_L_red_eig_anchor_np", None)
+            tau = _psc_eigk_trigger_env()
+            if Lr.size and anc is not None and anc.shape == Lr.shape and tau > 0.0:
+                n0 = float(np.linalg.norm(anc, ord="fro")) + 1e-30
+                rel = float(np.linalg.norm(Lr - anc, ord="fro") / n0)
+                if rel > tau:
+                    self._refresh_L_red_eig_host_cache(Lr)
+                    self._setup_jax()
             self.beta = self._solve_beta(self._tf_arrays())
+            _path = "tf_only"
+        self._free_vjp_cache = None
         self._field.clear_cached_properties()
+        self._mark_phase_end(f"recompute_currents_total_{_path}", _t_total)
 
     def B_at_points(self, points: np.ndarray) -> np.ndarray:
         """Passive bulk B at Cartesian points ``(N, 3)``.
@@ -3155,6 +4685,7 @@ class PSCBulkArray(Optimizable):
         :math:`\\beta`, which is recomputed by :meth:`recompute_currents`
         whenever TF currents, TF geometry or puck DOFs change.
         """
+        _t_total = self._mark_phase_start()
         g_tf, gd_tf, I_tf = self._tf_arrays()
         pts = np.asarray(points)
         if self.solver_mode == "shell_l2":
@@ -3164,7 +4695,7 @@ class PSCBulkArray(Optimizable):
                     "yet; fix all puck DOFs or use solver_mode='energy'."
                 )
             acc = jnp.float32 if self._use_f32_bs else None
-            return np.array(
+            out = np.array(
                 shell_biot_savart_stacked_pure(
                     self._jax_K_stack,
                     self._jax_quad_pts,
@@ -3174,6 +4705,8 @@ class PSCBulkArray(Optimizable):
                     accumulate_dtype=acc,
                 )
             )
+            self._mark_phase_end("B_at_points_shell_l2_total", _t_total)
+            return out
         if self._has_free_puck_dofs():
             self._ensure_jax_full()
             br = np.asarray(self._base_reps, dtype=np.int32)
@@ -3188,35 +4721,100 @@ class PSCBulkArray(Optimizable):
                 )
                 q_base = jnp.asarray(self._all_pucks_quats[br])
                 g_float = jnp.asarray(float(self._symmetry_G), dtype=jnp.float64)
-                return np.array(
-                    _B_eval_reduced_free_dof_jitted(
-                        self._jax_local_pts[br],
-                        self._jax_local_K[br],
-                        self._jax_local_n[br],
-                        self._jax_local_w[br],
-                        self._jax_local_phi[br],
-                        self._jax_Q_c_base,
+                _t_forward = self._mark_phase_start()
+                solve_vjp_mode = _psc_free_solve_vjp_env()
+                use_far, pair_k, tf_load, sol_mode, bs_far = (
+                    _reduced_free_dof_extras_for_jax()
+                )
+                m_loc_b = self._jax_m_local[br]
+                q_loc_b = self._jax_Q_sym_local[br]
+                static_tail = (
+                    self._jax_base_indices,
+                    self._jax_base_reps,
+                    g_float,
+                    int(self.nfp),
+                    bool(self.stellsym),
+                    float(self.regularization_delta),
+                    float(self._eigenfloor_threshold),
+                    bool(self.adaptive_self_reg),
+                    bool(self._resolved_checkpoint_l_pairs()),
+                    int(self._resolved_jax_pair_row_chunk()),
+                    int(self._resolved_bs_eval_chunk(pts.shape[0])),
+                    "full",
+                    solve_vjp_mode,
+                    use_far,
+                    float(pair_k),
+                    m_loc_b,
+                    q_loc_b,
+                    str(tf_load),
+                    str(sol_mode),
+                    float(bs_far),
+                    bool(_psc_w1_envelope_env()),
+                )
+                if _psc_cache_free_vjp_env():
+
+                    def fwd_cached(c_b, q_b, g, gd, I):
+                        return _B_eval_reduced_free_dof_jitted(
+                            self._jax_local_pts[br],
+                            self._jax_local_K[br],
+                            self._jax_local_n[br],
+                            self._jax_local_w[br],
+                            self._jax_local_phi[br],
+                            self._jax_Q_c_base,
+                            c_b,
+                            q_b,
+                            g,
+                            gd,
+                            I,
+                            pts,
+                            self._jax_L_red_eig_U,
+                            self._jax_L_red_eig_lam,
+                            *static_tail,
+                        )
+
+                    y, pullback = vjp(
+                        fwd_cached,
                         c_base,
                         q_base,
-                        g_tf,
-                        gd_tf,
-                        I_tf,
-                        pts,
-                        self._jax_base_indices,
-                        self._jax_base_reps,
-                        g_float,
-                        int(self.nfp),
-                        bool(self.stellsym),
-                        float(self.regularization_delta),
-                        float(self._eigenfloor_threshold),
-                        bool(self.adaptive_self_reg),
-                        bool(self._resolved_checkpoint_l_pairs()),
-                        int(self._resolved_jax_pair_row_chunk()),
+                        jnp.asarray(g_tf),
+                        jnp.asarray(gd_tf),
+                        jnp.asarray(I_tf),
                     )
-                )
+                    out = np.asarray(y)
+                    self._free_vjp_cache = {
+                        "key": self._free_vjp_cache_key(pts, solve_vjp_mode),
+                        "pullback": pullback,
+                        "centers_shape": tuple(c_base.shape),
+                        "quats_shape": tuple(q_base.shape),
+                    }
+                else:
+                    out = np.array(
+                        _B_eval_reduced_free_dof_jitted(
+                            self._jax_local_pts[br],
+                            self._jax_local_K[br],
+                            self._jax_local_n[br],
+                            self._jax_local_w[br],
+                            self._jax_local_phi[br],
+                            self._jax_Q_c_base,
+                            c_base,
+                            q_base,
+                            g_tf,
+                            gd_tf,
+                            I_tf,
+                            pts,
+                            self._jax_L_red_eig_U,
+                            self._jax_L_red_eig_lam,
+                            *static_tail,
+                        )
+                    )
+                    self._free_vjp_cache = None
+                self._mark_phase_end("B_at_points_free_reduced_jax", _t_forward)
+                self._mark_phase_end("B_at_points_free_reduced_total", _t_total)
+                return out
             centers_all = jnp.asarray(np.stack([p[0] for p in self._all_pucks], axis=0))
             quats_all = jnp.asarray(self._all_pucks_quats)
-            return np.array(
+            _t_forward = self._mark_phase_start()
+            out = np.array(
                 _B_eval_full_jitted(
                     self._jax_local_pts,
                     self._jax_local_K,
@@ -3235,10 +4833,15 @@ class PSCBulkArray(Optimizable):
                     bool(self.adaptive_self_reg),
                     int(self._full_L_band_size),
                     bool(self._resolved_checkpoint_l_pairs()),
+                    int(self._resolved_bs_eval_chunk(pts.shape[0])),
                 )
             )
+            self._mark_phase_end("B_at_points_free_full_jax", _t_forward)
+            self._mark_phase_end("B_at_points_free_full_total", _t_total)
+            return out
         if _USE_JAX_TF_VJP:
-            return np.array(
+            _t_forward = self._mark_phase_start()
+            out = np.array(
                 _B_eval_jitted(
                     self._jax_Lr_chol,
                     self._jax_Q,
@@ -3256,8 +4859,14 @@ class PSCBulkArray(Optimizable):
                     pts,
                 )
             )
+            self._mark_phase_end("B_at_points_tf_jax", _t_forward)
+            self._mark_phase_end("B_at_points_tf_total", _t_total)
+            return out
+        _t_bn = self._mark_phase_start()
         Bn = self._compute_bn_at_quads_numpy()
-        return np.array(
+        self._mark_phase_end("B_at_points_tf_bn", _t_bn)
+        _t_forward = self._mark_phase_start()
+        out = np.array(
             _B_eval_from_bn_jitted(
                 self._jax_Lr_chol,
                 self._jax_Q,
@@ -3272,6 +4881,9 @@ class PSCBulkArray(Optimizable):
                 pts,
             )
         )
+        self._mark_phase_end("B_at_points_tf_from_bn_jax", _t_forward)
+        self._mark_phase_end("B_at_points_tf_total", _t_total)
+        return out
 
     def get_shell_currents(self) -> Tuple[np.ndarray, np.ndarray]:
         """Return ``(K, |K|)``: ``(n_quad, 3)`` sheet current from current ``beta``.
@@ -3322,6 +4934,24 @@ class PSCBulkArray(Optimizable):
 
     def _has_free_puck_dofs(self) -> bool:
         return any(self.local_dofs_free_status)
+
+    def _free_puck_dof_kinds(self) -> set[str]:
+        """Classify currently free local puck DOFs by geometry family."""
+        kinds: set[str] = set()
+        for name, is_free in zip(
+            self.local_full_dof_names, self.local_dofs_free_status
+        ):
+            if not is_free:
+                continue
+            if str(name).startswith("center_"):
+                kinds.add("center")
+            elif str(name).startswith("q"):
+                kinds.add("quaternion")
+            elif str(name).startswith(("R", "t")):
+                kinds.add("shape")
+            else:
+                kinds.add("other")
+        return kinds
 
     def _hash_puck_local_dofs(self) -> int:
         """Hash bytes of the first ``9 * n_base`` local DOFs (puck geometry)."""
@@ -3374,16 +5004,36 @@ class PSCBulkArray(Optimizable):
             return 0
         return auto
 
+    def _resolved_bs_eval_chunk(self, n_eval: int) -> int:
+        """Eval-point chunk size for free-DOF shell Biot-Savart JAX bodies."""
+        env = _psc_bs_eval_chunk_from_env()
+        n = max(1, int(n_eval))
+        if env is not None:
+            if env == 0:
+                return 0
+            return int(min(max(1, env), n))
+        # Keep tiny objectives monolithic.  Surface-sized objectives benefit from
+        # smaller reverse-mode graphs and lower compile pressure.
+        if n <= 8:
+            return 0
+        return int(min(16, n))
+
     def vjp_setup_B(self, v_B, eval_pts=None):
         """VJP of ``sum(v_B * B)`` w.r.t. all DOFs (TF + puck geometry)."""
+        _t_total = self._mark_phase_start()
         v_B = np.asarray(v_B).reshape(-1, 3)
         pts = eval_pts if eval_pts is not None else self.eval_points
         if self._has_free_puck_dofs():
-            return self._vjp_puck_geometry(v_B, pts)
-        return self._vjp_tf_only(v_B, pts)
+            out = self._vjp_puck_geometry(v_B, pts)
+            self._mark_phase_end("vjp_setup_B_free_total", _t_total)
+            return out
+        out = self._vjp_tf_only(v_B, pts)
+        self._mark_phase_end("vjp_setup_B_tf_total", _t_total)
+        return out
 
     def _vjp_tf_only(self, v_B, pts):
         if _USE_JAX_TF_VJP:
+            _t_jax = self._mark_phase_start()
             gammas = np.array([c.curve.gamma() for c in self.coils_TF])
             gammadashs = np.array([c.curve.gammadash() for c in self.coils_TF])
             currents = np.array([c.current.get_value() for c in self.coils_TF])
@@ -3405,10 +5055,14 @@ class PSCBulkArray(Optimizable):
                 jnp.asarray(v_B),
             )
             vg, vgd, vI = np.asarray(vg), np.asarray(vgd), np.asarray(vI)
-            return sum(
+            self._mark_phase_end("vjp_tf_reference_jax", _t_jax)
+            _t_pullback = self._mark_phase_start()
+            out = sum(
                 self.coils_TF[i].vjp(vg[i], vgd[i], np.asarray([vI[i]]))
                 for i in range(len(self.coils_TF))
             )
+            self._mark_phase_end("vjp_tf_reference_pullback", _t_pullback)
+            return out
         return self._vjp_tf_only_analytic(v_B, pts)
 
     def _vjp_tf_only_analytic(self, v_B, pts) -> Derivative:
@@ -3462,12 +5116,15 @@ class PSCBulkArray(Optimizable):
                 eps=_EPS_BS,
             )
 
+        _t_shell = self._mark_phase_start()
         _, vjp_bs = vjp(fwd_bs, beta_all)
         lam_beta_all = np.asarray(vjp_bs(jnp.asarray(v_B))[0])
+        self._mark_phase_end("vjp_tf_shell_biot_savart_adjoint", _t_shell)
 
         # Adjoint of the signed gather
         # ``beta_all[r, :] = sigma_r * beta_work[base(r), :]``: signed
         # segment-sum of ``lam_beta_all`` into ``lam_beta_work``.
+        _t_solve = self._mark_phase_start()
         nd_per = self._K_stack.shape[2]
         n_all = self._K_stack.shape[0]
         lam_beta_all_stack = lam_beta_all.reshape(n_all, nd_per)
@@ -3489,6 +5146,7 @@ class PSCBulkArray(Optimizable):
         _y = solve_triangular(Lr_chol, qt_lam, lower=True, check_finite=True)
         lam_r = solve_triangular(Lr_chol.T, _y, lower=False, check_finite=True)
         lam_f_work = Q @ lam_r  # (n_work * nd_per,)
+        self._mark_phase_end("vjp_tf_solve_adjoint", _t_solve)
 
         # Adjoint of the loading vector coupled with the signed fold.
         # Forward: f_work[p, a] = -sum_q phi[p, q, a] * w[p, q] * Bn_work[p, q]
@@ -3516,6 +5174,7 @@ class PSCBulkArray(Optimizable):
         lam_Bn = -(w2d * lam_Bn_all_stack).reshape(-1)
         v_quad = lam_Bn[:, np.newaxis] * self._quad_normals
 
+        _t_tf_pullback = self._mark_phase_start()
         pts_id = id(self._quad_points)
         bs = getattr(self, "_bs_bn", None)
         if bs is None or getattr(self, "_bs_bn_pts_id", None) != pts_id:
@@ -3527,16 +5186,22 @@ class PSCBulkArray(Optimizable):
         # populated per-coil fields rather than fresh zeros; otherwise
         # ``B_vjp`` silently drops the current-DOF contribution.
         bs.B()
-        return bs.B_vjp(v_quad)
+        out = bs.B_vjp(v_quad)
+        self._mark_phase_end("vjp_tf_biotsavart_pullback", _t_tf_pullback)
+        return out
 
     def _vjp_puck_geometry(self, v_B, pts):
         """VJP w.r.t. puck center + quaternion + TF DOFs via full JAX forward."""
         if not self._has_free_puck_dofs():
             return self._vjp_tf_only(v_B, pts)
+        _t_stacks = self._mark_phase_start()
         self._ensure_jax_full()
+        self._mark_phase_end("vjp_free_ensure_jax_full", _t_stacks)
+        _t_tf_arrays = self._mark_phase_start()
         gammas = np.array([c.curve.gamma() for c in self.coils_TF])
         gammadashs = np.array([c.curve.gammadash() for c in self.coils_TF])
         currents = np.array([c.current.get_value() for c in self.coils_TF])
+        self._mark_phase_end("vjp_free_tf_arrays", _t_tf_arrays)
         br = np.asarray(self._base_reps, dtype=np.int32)
         reduced_ok = bool(
             getattr(self, "_reduced_free_dof_active", False)
@@ -3547,34 +5212,88 @@ class PSCBulkArray(Optimizable):
             c_base = jnp.asarray(np.stack([self._all_pucks[i][0] for i in br], axis=0))
             q_base = jnp.asarray(self._all_pucks_quats[br])
             g_float = jnp.asarray(float(self._symmetry_G), dtype=jnp.float64)
-            vc, vq, vg, vgd, vI = _vjp_reduced_free_dof_jitted(
-                self._jax_local_pts[br],
-                self._jax_local_K[br],
-                self._jax_local_n[br],
-                self._jax_local_w[br],
-                self._jax_local_phi[br],
-                self._jax_Q_c_base,
-                c_base,
-                q_base,
-                jnp.asarray(gammas),
-                jnp.asarray(gammadashs),
-                jnp.asarray(currents),
-                jnp.asarray(pts),
-                jnp.asarray(v_B),
-                self._jax_base_indices,
-                self._jax_base_reps,
-                g_float,
-                int(self.nfp),
-                bool(self.stellsym),
-                float(self.regularization_delta),
-                float(self._eigenfloor_threshold),
-                bool(self.adaptive_self_reg),
-                bool(self._resolved_checkpoint_l_pairs()),
-                int(self._resolved_jax_pair_row_chunk()),
+            free_kinds = self._free_puck_dof_kinds()
+            vjp_probe_mode = _psc_free_vjp_probe_env()
+            solve_vjp_mode = _psc_free_solve_vjp_env()
+            use_far, pair_k, tf_load, sol_mode, bs_far = (
+                _reduced_free_dof_extras_for_jax()
             )
+            m_loc_b = self._jax_m_local[br]
+            q_loc_b = self._jax_Q_sym_local[br]
+            _t_jax = self._mark_phase_start()
+            cache = getattr(self, "_free_vjp_cache", None)
+            cache_key = self._free_vjp_cache_key(np.asarray(pts), solve_vjp_mode)
+            if (
+                _psc_cache_free_vjp_env()
+                and vjp_probe_mode == "full"
+                and cache is not None
+                and cache.get("key") == cache_key
+            ):
+                vc, vq, vg, vgd, vI = cache["pullback"](jnp.asarray(v_B))
+                self._free_vjp_cache = None
+                self._mark_phase_end(
+                    "vjp_free_reduced_cached_pullback", _t_jax, (vc, vq, vg, vgd, vI)
+                )
+            else:
+                common_args = (
+                    self._jax_local_pts[br],
+                    self._jax_local_K[br],
+                    self._jax_local_n[br],
+                    self._jax_local_w[br],
+                    self._jax_local_phi[br],
+                    self._jax_Q_c_base,
+                    c_base,
+                    q_base,
+                    jnp.asarray(gammas),
+                    jnp.asarray(gammadashs),
+                    jnp.asarray(currents),
+                    jnp.asarray(pts),
+                    self._jax_L_red_eig_U,
+                    self._jax_L_red_eig_lam,
+                    jnp.asarray(v_B),
+                    self._jax_base_indices,
+                    self._jax_base_reps,
+                    g_float,
+                    int(self.nfp),
+                    bool(self.stellsym),
+                    float(self.regularization_delta),
+                    float(self._eigenfloor_threshold),
+                    bool(self.adaptive_self_reg),
+                    bool(self._resolved_checkpoint_l_pairs()),
+                    int(self._resolved_jax_pair_row_chunk()),
+                    int(
+                        self._resolved_bs_eval_chunk(
+                            np.asarray(pts).reshape(-1, 3).shape[0]
+                        )
+                    ),
+                    vjp_probe_mode,
+                    solve_vjp_mode,
+                    m_loc_b,
+                    q_loc_b,
+                    use_far,
+                    float(pair_k),
+                    str(tf_load),
+                    str(sol_mode),
+                    float(bs_far),
+                    bool(_psc_w1_envelope_env()),
+                )
+                if _psc_free_vjp_geometry_env() == "full":
+                    vc, vq, vg, vgd, vI = _vjp_reduced_free_dof_jitted(*common_args)
+                elif free_kinds == {"quaternion"}:
+                    vq, vg, vgd, vI = _vjp_reduced_free_quat_only_jitted(*common_args)
+                    vc = jnp.zeros_like(c_base)
+                elif free_kinds == {"center"}:
+                    vc, vg, vgd, vI = _vjp_reduced_free_center_only_jitted(*common_args)
+                    vq = jnp.zeros_like(q_base)
+                else:
+                    vc, vq, vg, vgd, vI = _vjp_reduced_free_dof_jitted(*common_args)
+                self._mark_phase_end(
+                    "vjp_free_reduced_jax", _t_jax, (vc, vq, vg, vgd, vI)
+                )
         else:
             centers_all = np.stack([p[0] for p in self._all_pucks], axis=0)
             quats_all = self._all_pucks_quats
+            _t_jax = self._mark_phase_start()
             vc, vq, vg, vgd, vI = _vjp_full_jitted(
                 self._jax_local_pts,
                 self._jax_local_K,
@@ -3594,13 +5313,20 @@ class PSCBulkArray(Optimizable):
                 bool(self.adaptive_self_reg),
                 int(self._full_L_band_size),
                 bool(self._resolved_checkpoint_l_pairs()),
+                int(
+                    self._resolved_bs_eval_chunk(
+                        np.asarray(pts).reshape(-1, 3).shape[0]
+                    )
+                ),
             )
+            self._mark_phase_end("vjp_free_full_jax", _t_jax, (vc, vq, vg, vgd, vI))
         vc = np.asarray(vc)
         vq = np.asarray(vq)
         vg = np.asarray(vg)
         vgd = np.asarray(vgd)
         vI = np.asarray(vI)
 
+        _t_puck_pullback = self._mark_phase_start()
         grad_local = np.zeros(self._n_base_pucks * _DOFS_PER_PUCK)
         if reduced_ok:
             for i in range(self._n_base_pucks):
@@ -3613,11 +5339,14 @@ class PSCBulkArray(Optimizable):
                 off = base_idx * _DOFS_PER_PUCK
                 grad_local[off : off + 3] += self._center_jacobians[j].T @ vc[j]
                 grad_local[off + 3 : off + 7] += self._quat_jacobians[j].T @ vq[j]
+        self._mark_phase_end("vjp_free_puck_pullback", _t_puck_pullback)
 
+        _t_tf_pullback = self._mark_phase_start()
         vjp_tf = sum(
             self.coils_TF[i].vjp(vg[i], vgd[i], np.asarray([vI[i]]))
             for i in range(len(self.coils_TF))
         )
+        self._mark_phase_end("vjp_free_tf_pullback", _t_tf_pullback)
         return Derivative({self: grad_local}) + vjp_tf
 
     # ------------------------------------------------------------------

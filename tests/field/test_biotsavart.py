@@ -10,7 +10,7 @@ from simsopt.field.coil import Coil, Current, ScaledCurrent
 def get_curve(num_quadrature_points=200, perturb=False):
     coil = CurveXYZFourier(num_quadrature_points, 3)
     coeffs = coil.dofs_matrix
-    coeffs[1][0] = 1.
+    coeffs[1][0] = 1.0
     coeffs[1][1] = 0.5
     coeffs[2][2] = 0.5
     coil.set_dofs(np.concatenate(coeffs))
@@ -21,13 +21,13 @@ def get_curve(num_quadrature_points=200, perturb=False):
 
 
 class Testing(unittest.TestCase):
-
     def test_biotsavart_both_interfaces_give_same_result(self):
         curve = get_curve()
         coil = Coil(curve, Current(1e4))
         points = np.asarray(10 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
         B1 = BiotSavart([coil]).set_points(points).B()
         from simsoptpp import biot_savart_B
+
         B2 = biot_savart_B(points, [curve.gamma()], [curve.gammadash()], [1e4])
         assert np.linalg.norm(B1) > 1e-5
         assert np.allclose(B1, B2)
@@ -38,17 +38,45 @@ class Testing(unittest.TestCase):
         btrue = BiotSavart([Coil(get_curve(1000), Current(1e4))]).set_points(points).B()
         bcoarse = BiotSavart([Coil(get_curve(10), Current(1e4))]).set_points(points).B()
         bfine = BiotSavart([Coil(get_curve(20), Current(1e4))]).set_points(points).B()
-        assert np.linalg.norm(btrue-bfine) < 1e-4 * np.linalg.norm(bcoarse-bfine)
+        assert np.linalg.norm(btrue - bfine) < 1e-4 * np.linalg.norm(bcoarse - bfine)
 
-        dbtrue = BiotSavart([Coil(get_curve(1000), Current(1e4))]).set_points(points).dB_by_dX()
-        dbcoarse = BiotSavart([Coil(get_curve(10), Current(1e4))]).set_points(points).dB_by_dX()
-        dbfine = BiotSavart([Coil(get_curve(20), Current(1e4))]).set_points(points).dB_by_dX()
-        assert np.linalg.norm(dbtrue-dbfine) < 1e-4 * np.linalg.norm(dbcoarse-dbfine)
+        dbtrue = (
+            BiotSavart([Coil(get_curve(1000), Current(1e4))])
+            .set_points(points)
+            .dB_by_dX()
+        )
+        dbcoarse = (
+            BiotSavart([Coil(get_curve(10), Current(1e4))])
+            .set_points(points)
+            .dB_by_dX()
+        )
+        dbfine = (
+            BiotSavart([Coil(get_curve(20), Current(1e4))])
+            .set_points(points)
+            .dB_by_dX()
+        )
+        assert np.linalg.norm(dbtrue - dbfine) < 1e-4 * np.linalg.norm(
+            dbcoarse - dbfine
+        )
 
-        dbtrue = BiotSavart([Coil(get_curve(1000), Current(1e4))]).set_points(points).d2B_by_dXdX()
-        dbcoarse = BiotSavart([Coil(get_curve(10), Current(1e4))]).set_points(points).d2B_by_dXdX()
-        dbfine = BiotSavart([Coil(get_curve(20), Current(1e4))]).set_points(points).d2B_by_dXdX()
-        assert np.linalg.norm(dbtrue-dbfine) < 1e-4 * np.linalg.norm(dbcoarse-dbfine)
+        dbtrue = (
+            BiotSavart([Coil(get_curve(1000), Current(1e4))])
+            .set_points(points)
+            .d2B_by_dXdX()
+        )
+        dbcoarse = (
+            BiotSavart([Coil(get_curve(10), Current(1e4))])
+            .set_points(points)
+            .d2B_by_dXdX()
+        )
+        dbfine = (
+            BiotSavart([Coil(get_curve(20), Current(1e4))])
+            .set_points(points)
+            .d2B_by_dXdX()
+        )
+        assert np.linalg.norm(dbtrue - dbfine) < 1e-4 * np.linalg.norm(
+            dbcoarse - dbfine
+        )
 
     def test_dB_by_dcoilcoeff_reverse_taylortest(self):
         np.random.seed(1)
@@ -56,7 +84,7 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, Current(1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
 
         bs.set_points(points)
         curve_dofs = curve.x
@@ -65,15 +93,15 @@ class Testing(unittest.TestCase):
         dJ = bs.B_vjp(B)(curve)
 
         h = 1e-2 * np.random.rand(len(curve_dofs)).reshape(curve_dofs.shape)
-        dJ_dh = 2*np.sum(dJ * h)
+        dJ_dh = 2 * np.sum(dJ * h)
         err = 1e6
         for i in range(5, 10):
             eps = 0.5**i
             curve.x = curve_dofs + eps * h
             Bh = bs.B()
             Jh = np.sum(Bh**2)
-            deriv_est = (Jh-J0)/eps
-            err_new = np.linalg.norm(deriv_est-dJ_dh)
+            deriv_est = (Jh - J0) / eps
+            err_new = np.linalg.norm(deriv_est - dJ_dh)
             assert err_new < 0.55 * err
             err = err_new
 
@@ -83,7 +111,7 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, Current(1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
 
         bs.set_points(points)
         curve_dofs = curve.x
@@ -93,15 +121,15 @@ class Testing(unittest.TestCase):
         dJ = bs.B_and_dB_vjp(B, dBdX)[1](curve)
 
         h = 1e-2 * np.random.rand(len(curve_dofs)).reshape(curve_dofs.shape)
-        dJ_dh = 2*np.sum(dJ * h)
+        dJ_dh = 2 * np.sum(dJ * h)
         err = 1e6
         for i in range(5, 10):
             eps = 0.5**i
             curve.x = curve_dofs + eps * h
             dBdXh = bs.dB_by_dX()
             Jh = np.sum(dBdXh**2)
-            deriv_est = (Jh-J0)/eps
-            err_new = np.linalg.norm(deriv_est-dJ_dh)
+            deriv_est = (Jh - J0) / eps
+            err_new = np.linalg.norm(deriv_est - dJ_dh)
             assert err_new < 0.55 * err
             err = err_new
 
@@ -110,19 +138,23 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, Current(1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
         bs.set_points(points)
         B0 = bs.B()[idx]
         dB = bs.dB_by_dX()[idx]
-        for direction in [np.asarray((1., 0, 0)), np.asarray((0, 1., 0)), np.asarray((0, 0, 1.))]:
+        for direction in [
+            np.asarray((1.0, 0, 0)),
+            np.asarray((0, 1.0, 0)),
+            np.asarray((0, 0, 1.0)),
+        ]:
             deriv = dB.T.dot(direction)
             err = 1e6
             for i in range(5, 10):
                 eps = 0.5**i
                 bs.set_points(points + eps * direction)
                 Beps = bs.B()[idx]
-                deriv_est = (Beps-B0)/(eps)
-                new_err = np.linalg.norm(deriv-deriv_est)
+                deriv_est = (Beps - B0) / (eps)
+                new_err = np.linalg.norm(deriv - deriv_est)
                 assert new_err < 0.55 * err
                 err = new_err
 
@@ -136,7 +168,7 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, Current(1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
         bs.set_points(points)
         dB = bs.dB_by_dX()
         assert abs(dB[idx][0, 0] + dB[idx][1, 1] + dB[idx][2, 2]) < 1e-14
@@ -152,7 +184,7 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, Current(1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
         bs.set_points(points)
         d2B_by_dXdX = bs.d2B_by_dXdX()
         for i in range(3):
@@ -178,7 +210,7 @@ class Testing(unittest.TestCase):
                     eps = 0.5**i
 
                     ed2 = np.zeros((1, 3))
-                    ed2[0, d2] = 1.
+                    ed2[0, d2] = 1.0
 
                     bs.set_points(points + eps * ed2)
                     dB_dXp = bs.dB_by_dX()[idx, d1]
@@ -186,9 +218,9 @@ class Testing(unittest.TestCase):
                     bs.set_points(points - eps * ed2)
                     dB_dXm = bs.dB_by_dX()[idx, d1]
 
-                    second_deriv_est = (dB_dXp - dB_dXm)/(2. * eps)
+                    second_deriv_est = (dB_dXp - dB_dXm) / (2.0 * eps)
 
-                    new_err = np.linalg.norm(second_deriv-second_deriv_est)
+                    new_err = np.linalg.norm(second_deriv - second_deriv_est)
                     assert new_err < 0.30 * err
                     err = new_err
 
@@ -207,7 +239,9 @@ class Testing(unittest.TestCase):
         curlA1 = dA_by_dX[:, 1, 2] - dA_by_dX[:, 2, 1]
         curlA2 = dA_by_dX[:, 2, 0] - dA_by_dX[:, 0, 2]
         curlA3 = dA_by_dX[:, 0, 1] - dA_by_dX[:, 1, 0]
-        curlA = np.concatenate((curlA1[:, None], curlA2[:, None], curlA3[:, None]), axis=1)
+        curlA = np.concatenate(
+            (curlA1[:, None], curlA2[:, None], curlA3[:, None]), axis=1
+        )
         err = np.max(np.abs(curlA - B))
         assert err < 1e-14
 
@@ -216,20 +250,24 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, Current(1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
         bs.set_points(points)
         A0 = bs.A()[idx]
         dA = bs.dA_by_dX()[idx]
 
-        for direction in [np.asarray((1., 0, 0)), np.asarray((0, 1., 0)), np.asarray((0, 0, 1.))]:
+        for direction in [
+            np.asarray((1.0, 0, 0)),
+            np.asarray((0, 1.0, 0)),
+            np.asarray((0, 0, 1.0)),
+        ]:
             deriv = dA.T.dot(direction)
             err = 1e6
             for i in range(5, 10):
                 eps = 0.5**i
                 bs.set_points(points + eps * direction)
                 Aeps = bs.A()[idx]
-                deriv_est = (Aeps-A0)/(eps)
-                new_err = np.linalg.norm(deriv-deriv_est)
+                deriv_est = (Aeps - A0) / (eps)
+                new_err = np.linalg.norm(deriv - deriv_est)
                 assert new_err < 0.55 * err
                 err = new_err
 
@@ -253,7 +291,7 @@ class Testing(unittest.TestCase):
                     eps = 0.5**i
 
                     ed2 = np.zeros((1, 3))
-                    ed2[0, d2] = 1.
+                    ed2[0, d2] = 1.0
 
                     bs.set_points(points + eps * ed2)
                     dA_dXp = bs.dA_by_dX()[idx, d1]
@@ -261,10 +299,10 @@ class Testing(unittest.TestCase):
                     bs.set_points(points - eps * ed2)
                     dA_dXm = bs.dA_by_dX()[idx, d1]
 
-                    second_deriv_est = (dA_dXp - dA_dXm)/(2. * eps)
+                    second_deriv_est = (dA_dXp - dA_dXm) / (2.0 * eps)
 
-                    new_err = np.linalg.norm(second_deriv-second_deriv_est)
-                    #print("new_err", new_err)
+                    new_err = np.linalg.norm(second_deriv - second_deriv_est)
+                    # print("new_err", new_err)
                     assert new_err < 0.30 * err
                     err = new_err
 
@@ -294,13 +332,13 @@ class Testing(unittest.TestCase):
         B0 = bs.B()
         J0 = bs.dB_by_dX()
         H0 = bs.d2B_by_dXdX()
-        dB_approx = (B-B0)/(c0)
-        dJ_approx = (J-J0)/(c0)
-        dH_approx = (H-H0)/(c0)
-        assert np.linalg.norm(dB[0]-dB_approx) < 1e-15
-        assert np.linalg.norm(dJ[0]-dJ_approx) < 1e-15
-        print(f"H norm is {np.linalg.norm(dH[0]-dH_approx)}")
-        assert np.linalg.norm(dH[0]-dH_approx) < 1e-15
+        dB_approx = (B - B0) / (c0)
+        dJ_approx = (J - J0) / (c0)
+        dH_approx = (H - H0) / (c0)
+        assert np.linalg.norm(dB[0] - dB_approx) < 1e-15
+        assert np.linalg.norm(dJ[0] - dJ_approx) < 1e-15
+        print(f"H norm is {np.linalg.norm(dH[0] - dH_approx)}")
+        assert np.linalg.norm(dH[0] - dH_approx) < 1e-15
 
     def test_dA_by_dcoilcoeff_reverse_taylortest(self):
         np.random.seed(1)
@@ -308,7 +346,7 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, ScaledCurrent(Current(1), 1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
 
         bs.set_points(points)
         coil_dofs = coil.x
@@ -317,15 +355,15 @@ class Testing(unittest.TestCase):
         dJ = bs.A_vjp(A)(coil)
 
         h = 1e-2 * np.random.rand(len(coil_dofs)).reshape(coil_dofs.shape)
-        dJ_dh = 2*np.sum(dJ * h)
+        dJ_dh = 2 * np.sum(dJ * h)
         err = 1e6
         for i in range(5, 10):
             eps = 0.5**i
             coil.x = coil_dofs + eps * h
             Ah = bs.A()
             Jh = np.sum(Ah**2)
-            deriv_est = (Jh-J0)/eps
-            err_new = np.linalg.norm(deriv_est-dJ_dh)
+            deriv_est = (Jh - J0) / eps
+            err_new = np.linalg.norm(deriv_est - dJ_dh)
             assert err_new < 0.55 * err
             err = err_new
 
@@ -335,7 +373,7 @@ class Testing(unittest.TestCase):
         coil = Coil(curve, ScaledCurrent(Current(1), 1e4))
         bs = BiotSavart([coil])
         points = np.asarray(17 * [[-1.41513202e-03, 8.99999382e-01, -3.14473221e-04]])
-        points += 0.001 * (np.random.rand(*points.shape)-0.5)
+        points += 0.001 * (np.random.rand(*points.shape) - 0.5)
 
         bs.set_points(points)
         coil_dofs = coil.x
@@ -345,15 +383,15 @@ class Testing(unittest.TestCase):
         dJ = bs.A_and_dA_vjp(A, dAdX)[1](coil)
 
         h = 1e-2 * np.random.rand(len(coil_dofs)).reshape(coil_dofs.shape)
-        dJ_dh = 2*np.sum(dJ * h)
+        dJ_dh = 2 * np.sum(dJ * h)
         err = 1e6
         for i in range(5, 10):
             eps = 0.5**i
             coil.x = coil_dofs + eps * h
             dAdXh = bs.dA_by_dX()
             Jh = np.sum(dAdXh**2)
-            deriv_est = (Jh-J0)/eps
-            err_new = np.linalg.norm(deriv_est-dJ_dh)
+            deriv_est = (Jh - J0) / eps
+            err_new = np.linalg.norm(deriv_est - dJ_dh)
             assert err_new < 0.55 * err
             err = err_new
 
@@ -363,7 +401,8 @@ class Testing(unittest.TestCase):
         np.random.seed(1)
 
         from scipy.spatial.transform import Rotation as R
-        rot = R.from_euler('zyx', [21.234, 8.431, -4.86392], degrees=True).as_matrix()
+
+        rot = R.from_euler("zyx", [21.234, 8.431, -4.86392], degrees=True).as_matrix()
         new_n = rot @ np.array([0, 0, 1])
 
         curve = get_curve(perturb=True)
@@ -377,26 +416,39 @@ class Testing(unittest.TestCase):
             pts = np.concatenate((x, y, np.zeros((x.shape[1], 1))), axis=1) @ rot.T
             bs.set_points(pts)
             B = bs.B()
-            temp = np.sum(B*new_n[None, :], axis=1)*r
+            temp = np.sum(B * new_n[None, :], axis=1) * r
             return temp[0]
 
         # int_r int_theta B int r dr dtheta
         from scipy import integrate
+
         r = 0.15
-        fluxB = integrate.dblquad(f, 0, r, 0, 2*np.pi, epsabs=1e-15, epsrel=1e-15)
+        fluxB = integrate.dblquad(f, 0, r, 0, 2 * np.pi, epsabs=1e-15, epsrel=1e-15)
 
         # num range used to be (20, 60) but this fails for num <= 20-30 for certain
         # random coil initializations since don't have enough quadrature points
         # to integrate to numerical precision.
         for num in range(40, 100):
             npoints = num
-            angles = np.linspace(0, 2*np.pi, npoints, endpoint=False).reshape((-1, 1))
-            t = np.concatenate((-np.sin(angles), np.cos(angles), np.zeros((angles.size, 1))), axis=1) @ rot.T
-            pts = r*np.concatenate((np.cos(angles), np.sin(angles), np.zeros((angles.size, 1))), axis=1) @ rot.T
+            angles = np.linspace(0, 2 * np.pi, npoints, endpoint=False).reshape((-1, 1))
+            t = (
+                np.concatenate(
+                    (-np.sin(angles), np.cos(angles), np.zeros((angles.size, 1))),
+                    axis=1,
+                )
+                @ rot.T
+            )
+            pts = (
+                r
+                * np.concatenate(
+                    (np.cos(angles), np.sin(angles), np.zeros((angles.size, 1))), axis=1
+                )
+                @ rot.T
+            )
             bs.set_points(pts)
             A = bs.A()
-            fluxA = r*np.sum(A*t) * 2 * np.pi/npoints
-            assert np.abs(fluxB[0]-fluxA)/fluxB[0] < 1e-14
+            fluxA = r * np.sum(A * t) * 2 * np.pi / npoints
+            assert np.abs(fluxB[0] - fluxA) / fluxB[0] < 1e-14
 
     def test_biotsavart_vector_potential_coil_current_taylortest(self):
         curve0 = get_curve()
@@ -411,7 +463,7 @@ class Testing(unittest.TestCase):
         J = bs.dA_by_dX()
         H = bs.d2A_by_dXdX()
 
-        #trigger recompute bell for code coverage of field cache
+        # trigger recompute bell for code coverage of field cache
         bs.recompute_bell()
         dA = bs.dA_by_dcoilcurrents()
         bs.recompute_bell()
@@ -424,12 +476,12 @@ class Testing(unittest.TestCase):
         A0 = bs.A()
         J0 = bs.dA_by_dX()
         H0 = bs.d2A_by_dXdX()
-        dA_approx = (A-A0)/(c0)
-        dJ_approx = (J-J0)/(c0)
-        dH_approx = (H-H0)/(c0)
-        assert np.linalg.norm(dA[0]-dA_approx) < 1e-15
-        assert np.linalg.norm(dJ[0]-dJ_approx) < 1e-15
-        assert np.linalg.norm(dH[0]-dH_approx) < 1e-15
+        dA_approx = (A - A0) / (c0)
+        dJ_approx = (J - J0) / (c0)
+        dH_approx = (H - H0) / (c0)
+        assert np.linalg.norm(dA[0] - dA_approx) < 1e-15
+        assert np.linalg.norm(dJ[0] - dJ_approx) < 1e-15
+        assert np.linalg.norm(dH[0] - dH_approx) < 1e-15
 
 
 if __name__ == "__main__":

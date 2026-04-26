@@ -17,6 +17,7 @@ from typing import Callable, Union, IO
 from numbers import Real
 
 import numpy as np
+
 try:
     # We import mpi4py here rather than mpi4py.MPI so MPI is not
     # initialized, since initializing MPI is disallowed on login nodes
@@ -32,7 +33,7 @@ from .util import finite_difference_steps
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['FiniteDifference', 'MPIFiniteDifference']
+__all__ = ["FiniteDifference", "MPIFiniteDifference"]
 
 
 class FiniteDifference:
@@ -42,11 +43,14 @@ class FiniteDifference:
     the initialization to customize the finite difference scheme
     """
 
-    def __init__(self, func: Callable,
-                 x0: RealArray = None,
-                 abs_step: Real = 1.0e-7,
-                 rel_step: Real = 0.0,
-                 diff_method: str = "forward") -> None:
+    def __init__(
+        self,
+        func: Callable,
+        x0: RealArray = None,
+        abs_step: Real = 1.0e-7,
+        rel_step: Real = 0.0,
+        diff_method: str = "forward",
+    ) -> None:
 
         try:
             if not isinstance(func.__self__, Optimizable):
@@ -59,9 +63,11 @@ class FiniteDifference:
 
         self.abs_step = abs_step
         self.rel_step = rel_step
-        if diff_method not in ['centered', 'forward']:
-            raise ValueError(f"Finite difference method {diff_method} not implemented. "
-                             "Supported methods are 'centered' and 'forward'.")
+        if diff_method not in ["centered", "forward"]:
+            raise ValueError(
+                f"Finite difference method {diff_method} not implemented. "
+                "Supported methods are 'centered' and 'forward'."
+            )
         self.diff_method = diff_method
 
         self.x0 = np.asarray(x0) if x0 is not None else x0
@@ -81,8 +87,9 @@ class FiniteDifference:
             self.jac_size = (len(out), self.opt.dof_size)
 
         jac = np.zeros(self.jac_size)
-        steps = finite_difference_steps(x0, abs_step=self.abs_step,
-                                        rel_step=self.rel_step)
+        steps = finite_difference_steps(
+            x0, abs_step=self.abs_step, rel_step=self.rel_step
+        )
         if self.diff_method == "centered":
             # Centered differences:
             for j in range(len(x0)):
@@ -126,21 +133,22 @@ class MPIFiniteDifference:
     the initialization to customize the finite difference scheme
     """
 
-    def __init__(self, func: Callable,
-                 mpi,  # Specifying the type MpiPartition here would require initializing MPI
-                 x0: RealArray = None,
-                 abs_step: Real = 1.0e-7,
-                 rel_step: Real = 0.0,
-                 diff_method: str = "forward",
-                 log_file: Union[str, IO] = "jac_log") -> None:
+    def __init__(
+        self,
+        func: Callable,
+        mpi,  # Specifying the type MpiPartition here would require initializing MPI
+        x0: RealArray = None,
+        abs_step: Real = 1.0e-7,
+        rel_step: Real = 0.0,
+        diff_method: str = "forward",
+        log_file: Union[str, IO] = "jac_log",
+    ) -> None:
 
         try:
             if not isinstance(func.__self__, Optimizable):
-                raise TypeError(
-                    "Function supplied should be a method of Optimizable")
+                raise TypeError("Function supplied should be a method of Optimizable")
         except:
-            raise TypeError(
-                "Function supplied should be a method of Optimizable")
+            raise TypeError("Function supplied should be a method of Optimizable")
 
         self.fn = func
         self.mpi = mpi
@@ -148,10 +156,11 @@ class MPIFiniteDifference:
 
         self.abs_step = abs_step
         self.rel_step = rel_step
-        if diff_method not in ['centered', 'forward']:
+        if diff_method not in ["centered", "forward"]:
             raise ValueError(
                 f"Finite difference method {diff_method} not implemented. "
-                "Supported methods are 'centered' and 'forward'.")
+                "Supported methods are 'centered' and 'forward'."
+            )
         self.diff_method = diff_method
         self.log_file = log_file
         self.new_log_file = False
@@ -173,15 +182,17 @@ class MPIFiniteDifference:
         return self
 
     def mpi_apart(self):
-        self.mpi.apart(lambda mpi, data: self.mpi_leaders_task(),
-                       lambda mpi, data: self.mpi_workers_task())
+        self.mpi.apart(
+            lambda mpi, data: self.mpi_leaders_task(),
+            lambda mpi, data: self.mpi_workers_task(),
+        )
 
     def init_log(self):
         if self.mpi.proc0_world:
             if isinstance(self.log_file, str):
                 datestr = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
                 log_file = self.log_file + "_" + datestr + ".dat"
-                self.log_file = open(log_file, 'w')
+                self.log_file = open(log_file, "w")
                 self.new_log_file = True
         self.start_time = time()
 
@@ -203,25 +214,28 @@ class MPIFiniteDifference:
         if x is not None:
             opt.x = x
 
-        logger.info('Beginning parallel finite difference gradient calculation')
+        logger.info("Beginning parallel finite difference gradient calculation")
 
         x0 = np.copy(opt.x)
         nparams = opt.dof_size
         # Make sure all leaders have the same x0.
         mpi.comm_leaders.Bcast(x0)
-        logger.info(f'nparams: {nparams}')
-        logger.info(f'x0:  {x0}')
+        logger.info(f"nparams: {nparams}")
+        logger.info(f"x0:  {x0}")
 
         # Set up the list of parameter values to try
-        steps = finite_difference_steps(x0, abs_step=self.abs_step,
-                                        rel_step=self.rel_step)
+        steps = finite_difference_steps(
+            x0, abs_step=self.abs_step, rel_step=self.rel_step
+        )
         mpi.comm_leaders.Bcast(steps)
         diff_method = mpi.comm_leaders.bcast(self.diff_method)
         if diff_method == "centered":
             nevals_jac = 2 * nparams
             xs = np.zeros((nparams, nevals_jac))
             for j in range(nparams):
-                xs[:, 2 * j] = x0[:]  # I don't think I need np.copy(), but not 100% sure.
+                xs[:, 2 * j] = x0[
+                    :
+                ]  # I don't think I need np.copy(), but not 100% sure.
                 xs[j, 2 * j] = x0[j] + steps[j]
                 xs[:, 2 * j + 1] = x0[:]
                 xs[j, 2 * j + 1] = x0[j] - steps[j]
@@ -243,7 +257,7 @@ class MPIFiniteDifference:
             self.jac_size = mpi.comm_leaders.bcast(self.jac_size)
             evals = np.zeros((self.jac_size[0], nevals_jac))
         # Do the hard work of evaluating the functions.
-        logger.info(f'size of evals is ({self.jac_size[0]}, {nevals_jac})')
+        logger.info(f"size of evals is ({self.jac_size[0]}, {nevals_jac})")
 
         ARB_VAL = 100
         for j in range(nevals_jac):
@@ -275,8 +289,7 @@ class MPIFiniteDifference:
         jac = np.zeros(self.jac_size)
         if diff_method == "centered":
             for j in range(nparams):
-                jac[:, j] = (evals[:, 2 * j] - evals[:, 2 * j + 1]) / (
-                    2 * steps[j])
+                jac[:, j] = (evals[:, 2 * j] - evals[:, 2 * j + 1]) / (2 * steps[j])
         else:  # diff_method == "forward":
             # 1-sided differences:
             for j in range(nparams):
@@ -289,38 +302,38 @@ class MPIFiniteDifference:
 
     def mpi_leaders_task(self, *args):
         """
-            This function is called by group leaders when
-            MpiPartition.leaders_loop() receives a signal to do something.
+        This function is called by group leaders when
+        MpiPartition.leaders_loop() receives a signal to do something.
 
-            We have to take a "data" argument, but there is only 1 task we
-            would do, so we don't use it.
-            """
-        logger.debug('mpi leaders task')
+        We have to take a "data" argument, but there is only 1 task we
+        would do, so we don't use it.
+        """
+        logger.debug("mpi leaders task")
 
         # x is a buffer for receiving the state vector:
-        full_x = np.empty(self.opt.full_dof_size, dtype='d')
+        full_x = np.empty(self.opt.full_dof_size, dtype="d")
         # If we make it here, we must be doing a fd_jac_par
         # calculation, so receive the state vector: mpi4py has
         # separate bcast and Bcast functions!!  comm.Bcast(x,
         # root=0)
         full_x = self.mpi.comm_leaders.bcast(full_x, root=0)
-        logger.debug(f'mpi leaders loop full_x={full_x}')
+        logger.debug(f"mpi leaders loop full_x={full_x}")
         self.opt.full_x = full_x
         self._jac()
 
     def mpi_workers_task(self, *args):
         """
-            Note: func is a method of opt.
-            """
-        logger.debug('mpi workers task')
+        Note: func is a method of opt.
+        """
+        logger.debug("mpi workers task")
 
         # x is a buffer for receiving the state vector:
-        x = np.empty(self.opt.dof_size, dtype='d')
+        x = np.empty(self.opt.dof_size, dtype="d")
         # If we make it here, we must be doing a fd_jac_par
         # calculation, so receive the state vector: mpi4py has
         # separate bcast and Bcast functions!!  comm.Bcast(x, root=0)
         x = self.mpi.comm_groups.bcast(x, root=0)
-        logger.debug(f'worker loop worker x={x}')
+        logger.debug(f"worker loop worker x={x}")
         self.opt.x = x
 
         # We don't store or do anything with f() or jac(), because
@@ -328,8 +341,9 @@ class MPIFiniteDifference:
         try:
             return self.fn()
         except:
-            logger.warning("Exception caught by worker during residual "
-                           "evaluation in worker loop")
+            logger.warning(
+                "Exception caught by worker during residual evaluation in worker loop"
+            )
             traceback.print_exc()  # Print traceback
 
     # Call to jac function is made in proc0
@@ -354,8 +368,7 @@ class MPIFiniteDifference:
                 out = np.array([out])
             else:
                 out = np.asarray(out)
-            self.jac_size = np.array((len(out), self.opt.dof_size),
-                                     dtype=np.int32)
+            self.jac_size = np.array((len(out), self.opt.dof_size), dtype=np.int32)
 
         self.mpi.mobilize_leaders(ARB_VAL)  # Any value not equal to STOP
         full_x = self.opt.full_x
@@ -363,25 +376,25 @@ class MPIFiniteDifference:
         self.opt.full_x = full_x
 
         jac, xs, evals = self._jac(x)
-        logger.debug(f'jac is {jac}')
+        logger.debug(f"jac is {jac}")
 
         # Write to the log file:
         logfile = self.log_file
         if not self.log_header_written:
-            logfile.write(f'Problem type:\nleast_squares\nnparams:\n{len(x)}\n')
-            logfile.write('function_evaluation,seconds')
+            logfile.write(f"Problem type:\nleast_squares\nnparams:\n{len(x)}\n")
+            logfile.write("function_evaluation,seconds")
             for j in range(len(x)):
-                logfile.write(f',x({j})')
-            logfile.write('\n')
+                logfile.write(f",x({j})")
+            logfile.write("\n")
             self.log_header_written = True
         nevals = evals.shape[1]
         for j in range(nevals):
             del_t = time() - self.start_time
             j_eval = j + self.eval_cnt - 1
-            logfile.write(f'{j_eval:6d},{del_t:12.4e}')
+            logfile.write(f"{j_eval:6d},{del_t:12.4e}")
             for xj in xs[:, j]:
-                logfile.write(f',{xj:24.16e}')
-            logfile.write('\n')
+                logfile.write(f",{xj:24.16e}")
+            logfile.write("\n")
             logfile.flush()
 
         self.eval_cnt += nevals

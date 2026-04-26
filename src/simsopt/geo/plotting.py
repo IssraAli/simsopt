@@ -1,10 +1,10 @@
 import numpy as np
 
-__all__ = ['fix_matplotlib_3d', 'plot']
+__all__ = ["fix_matplotlib_3d", "plot"]
 
 
 def fix_matplotlib_3d(ax):
-    '''
+    """
     Make axes of 3D plot have equal scale so that spheres appear as spheres,
     cubes as cubes, etc..  This is one possible solution to Matplotlib's
     ``ax.set_aspect('equal')`` and ``ax.axis('equal')`` not working for 3D.
@@ -15,7 +15,7 @@ def fix_matplotlib_3d(ax):
 
     Args:
       ax: a matplotlib axis, e.g., as output from ``plt.gca()``.
-    '''
+    """
     x_limits = ax.get_xlim3d()
     y_limits = ax.get_ylim3d()
     z_limits = ax.get_zlim3d()

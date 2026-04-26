@@ -26,16 +26,18 @@ from .._core.finite_difference import FiniteDifference
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['least_squares_serial_solve', 'serial_solve', 'constrained_serial_solve']
+__all__ = ["least_squares_serial_solve", "serial_solve", "constrained_serial_solve"]
 
 
-def least_squares_serial_solve(prob: LeastSquaresProblem,
-                               grad: bool = None,
-                               abs_step: float = 1.0e-7,
-                               rel_step: float = 0.0,
-                               diff_method: str = "forward",
-                               save_residuals: bool = False,
-                               **kwargs):
+def least_squares_serial_solve(
+    prob: LeastSquaresProblem,
+    grad: bool = None,
+    abs_step: float = 1.0e-7,
+    rel_step: float = 0.0,
+    diff_method: str = "forward",
+    save_residuals: bool = False,
+    **kwargs,
+):
     """
     Solve a nonlinear-least-squares minimization problem using
     scipy.optimize, and without using any parallelization.
@@ -65,9 +67,9 @@ def least_squares_serial_solve(prob: LeastSquaresProblem,
     """
 
     datestr = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    objective_file = open(f"simsopt_{datestr}.dat", 'w')
+    objective_file = open(f"simsopt_{datestr}.dat", "w")
     if save_residuals:
-        residuals_file = open(f"residuals_{datestr}.dat", 'w')
+        residuals_file = open(f"residuals_{datestr}.dat", "w")
 
     nevals = 0
     start_time = time()
@@ -75,19 +77,19 @@ def least_squares_serial_solve(prob: LeastSquaresProblem,
 
     def objective(x):
         nonlocal datalogging_started, objective_file, residuals_file, nevals
-        #success = True
+        # success = True
         try:
             residuals = prob.residuals(x)
         except:
             logger.info("Exception caught during function evaluation")
             residuals = np.full(prob.parent_return_fns_no, 1.0e12)
-            #success = False
+            # success = False
 
         objective_val = prob.objective()
 
         # Check that 2 ways of computing the objective give same
         # answer within roundoff:
-        #if success:
+        # if success:
         #    objective2 = prob.objective()
         #    logger.info("objective_from_f={} objective={} diff={}".format(
         #        objective_val, objective2, objective_val - objective2))
@@ -103,8 +105,7 @@ def least_squares_serial_solve(prob: LeastSquaresProblem,
             # Initialize log file
             datalogging_started = True
             ndofs = prob.dof_size
-            objective_file.write(
-                f"Problem type:\nleast_squares\nnparams:\n{ndofs}\n")
+            objective_file.write(f"Problem type:\nleast_squares\nnparams:\n{ndofs}\n")
             objective_file.write("function_evaluation,seconds")
             for j in range(ndofs):
                 objective_file.write(f",x({j})")
@@ -112,7 +113,8 @@ def least_squares_serial_solve(prob: LeastSquaresProblem,
 
             if save_residuals:
                 residuals_file.write(
-                    f"Problem type:\nleast_squares\nnparams:\n{ndofs}\n")
+                    f"Problem type:\nleast_squares\nnparams:\n{ndofs}\n"
+                )
                 residuals_file.write("function_evaluation,seconds")
                 for j in range(ndofs):
                     residuals_file.write(f",x({j})")
@@ -143,29 +145,39 @@ def least_squares_serial_solve(prob: LeastSquaresProblem,
         return residuals
 
     if "bounds" in kwargs:
-        warnings.warn("The bounds argument has been deprecated and is being ignored, \
-                      please use prob.bounds instead.", DeprecationWarning, 2)
-        logger.info("The bounds argument has been deprecated and is being ignored, please use prob.bounds instead.")
+        warnings.warn(
+            "The bounds argument has been deprecated and is being ignored, \
+                      please use prob.bounds instead.",
+            DeprecationWarning,
+            2,
+        )
+        logger.info(
+            "The bounds argument has been deprecated and is being ignored, please use prob.bounds instead."
+        )
         kwargs.pop("bounds", None)
 
     logger.info("Beginning solve.")
-    #if grad is None:
+    # if grad is None:
     #    grad = prob.dofs.grad_avail
 
-    #if not 'verbose' in kwargs:
+    # if not 'verbose' in kwargs:
 
-    logger.info('prob is {}'.format(prob))
+    logger.info("prob is {}".format(prob))
     x0 = np.copy(prob.x)
     if grad:
-        fd = FiniteDifference(prob.residuals, abs_step=abs_step,
-                              rel_step=rel_step, diff_method=diff_method)
+        fd = FiniteDifference(
+            prob.residuals,
+            abs_step=abs_step,
+            rel_step=rel_step,
+            diff_method=diff_method,
+        )
         logger.info("Using derivatives")
-        result = least_squares(objective, x0, bounds=prob.bounds, 
-                               verbose=2, jac=fd.jac, **kwargs)
+        result = least_squares(
+            objective, x0, bounds=prob.bounds, verbose=2, jac=fd.jac, **kwargs
+        )
     else:
         logger.info("Using derivative-free method")
-        result = least_squares(objective, x0,bounds=prob.bounds, 
-                               verbose=2, **kwargs)
+        result = least_squares(objective, x0, bounds=prob.bounds, verbose=2, **kwargs)
 
     datalogging_started = False
     objective_file.close()
@@ -176,12 +188,14 @@ def least_squares_serial_solve(prob: LeastSquaresProblem,
     prob.x = result.x
 
 
-def serial_solve(prob: Union[Optimizable, Callable],
-                 grad: bool = None,
-                 abs_step: float = 1.0e-7,
-                 rel_step: float = 0.0,
-                 diff_method: str = "centered",
-                 **kwargs):
+def serial_solve(
+    prob: Union[Optimizable, Callable],
+    grad: bool = None,
+    abs_step: float = 1.0e-7,
+    rel_step: float = 0.0,
+    diff_method: str = "centered",
+    **kwargs,
+):
     """
     Solve a general minimization problem (i.e. one that need not be of
     least-squares form) using scipy.optimize.minimize, and without using any
@@ -211,9 +225,8 @@ def serial_solve(prob: Union[Optimizable, Callable],
                 can supply ``method`` to choose the optimization algorithm.
     """
 
-    filename = "simsopt_" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") \
-               + ".dat"
-    with open(filename, 'w') as objective_file:
+    filename = "simsopt_" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".dat"
+    with open(filename, "w") as objective_file:
         datalogging_started = False
         nevals = 0
         start_time = time()
@@ -223,7 +236,7 @@ def serial_solve(prob: Union[Optimizable, Callable],
             try:
                 result = prob(x)
             except:
-                result = 1e+12
+                result = 1e12
 
             # Since the number of terms is not known until the first
             # evaluation of the objective function, we cannot write the
@@ -233,7 +246,8 @@ def serial_solve(prob: Union[Optimizable, Callable],
                 # Initialize log file
                 datalogging_started = True
                 objective_file.write(
-                    f"Problem type:\ngeneral\nnparams:\n{prob.dof_size}\n")
+                    f"Problem type:\ngeneral\nnparams:\n{prob.dof_size}\n"
+                )
                 objective_file.write("function_evaluation,seconds")
                 for j in range(prob.dof_size):
                     objective_file.write(f",x({j})")
@@ -253,31 +267,37 @@ def serial_solve(prob: Union[Optimizable, Callable],
             return result
 
         # Need to fix up this next line for non-least-squares problems:
-        #if grad is None:
+        # if grad is None:
         #    grad = prob.dofs.grad_avail
 
-        #if not 'verbose' in kwargs:
+        # if not 'verbose' in kwargs:
 
         if "bounds" in kwargs:
-            warnings.warn("The bounds argument has been deprecated and is being ignored, \
-                        please use prob.bounds instead.", DeprecationWarning, 2)
+            warnings.warn(
+                "The bounds argument has been deprecated and is being ignored, \
+                        please use prob.bounds instead.",
+                DeprecationWarning,
+                2,
+            )
         # Only specify the bounds argument if they are finite
         if np.isfinite(prob.lower_bounds).any() or np.isfinite(prob.upper_bounds).any():
-            kwargs['bounds'] = prob.bounds
+            kwargs["bounds"] = prob.bounds
 
         logger.info("Beginning solve.")
         x0 = np.copy(prob.x)
         if grad:
-            raise RuntimeError("Need to convert least-squares Jacobian to "
-                               "gradient of the scalar objective function")
+            raise RuntimeError(
+                "Need to convert least-squares Jacobian to "
+                "gradient of the scalar objective function"
+            )
             logger.info("Using derivatives")
-            fd = FiniteDifference(prob, abs_step=abs_step,
-                                  rel_step=rel_step, diff_method=diff_method)
-            result = least_squares(objective, x0, verbose=2, jac=fd.jac,
-                                   **kwargs)
+            fd = FiniteDifference(
+                prob, abs_step=abs_step, rel_step=rel_step, diff_method=diff_method
+            )
+            result = least_squares(objective, x0, verbose=2, jac=fd.jac, **kwargs)
         else:
             logger.info("Using derivative-free method")
-            result = minimize(objective, x0, options={'disp': True}, **kwargs)
+            result = minimize(objective, x0, options={"disp": True}, **kwargs)
 
         datalogging_started = False
         logger.info("Completed solve.")
@@ -285,13 +305,15 @@ def serial_solve(prob: Union[Optimizable, Callable],
     prob.x = result.x
 
 
-def constrained_serial_solve(prob: ConstrainedProblem,
-                             grad: bool = None,
-                             abs_step: float = 1.0e-7,
-                             rel_step: float = 0.0,
-                             diff_method: str = "forward",
-                             opt_method: str = "SLSQP",
-                             options: dict = None):
+def constrained_serial_solve(
+    prob: ConstrainedProblem,
+    grad: bool = None,
+    abs_step: float = 1.0e-7,
+    rel_step: float = 0.0,
+    diff_method: str = "forward",
+    opt_method: str = "SLSQP",
+    options: dict = None,
+):
     """
     Solve a constrained minimization problem using
     scipy.optimize, and without using any parallelization.
@@ -320,8 +342,8 @@ def constrained_serial_solve(prob: ConstrainedProblem,
     """
 
     datestr = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    objective_file = open(f"simsopt_{datestr}.dat", 'w')
-    constraint_file = open(f"constraints_{datestr}.dat", 'w')
+    objective_file = open(f"simsopt_{datestr}.dat", "w")
+    constraint_file = open(f"constraints_{datestr}.dat", "w")
 
     objective_datalog_started = False
     constraint_datalog_started = False
@@ -345,8 +367,7 @@ def constrained_serial_solve(prob: ConstrainedProblem,
             # Initialize log file
             objective_datalog_started = True
             ndofs = prob.dof_size
-            objective_file.write(
-                f"Problem type:\nconstrained\nnparams:\n{ndofs}\n")
+            objective_file.write(f"Problem type:\nconstrained\nnparams:\n{ndofs}\n")
             objective_file.write("function_evaluation,seconds")
             for j in range(ndofs):
                 objective_file.write(f",x({j})")
@@ -379,8 +400,7 @@ def constrained_serial_solve(prob: ConstrainedProblem,
             # Initialize log file
             constraint_datalog_started = True
             ndofs = prob.dof_size
-            constraint_file.write(
-                f"Problem type:\nconstrained\nnparams:\n{ndofs}\n")
+            constraint_file.write(f"Problem type:\nconstrained\nnparams:\n{ndofs}\n")
             constraint_file.write("function_evaluation,seconds")
             for j in range(ndofs):
                 constraint_file.write(f",x({j})")
@@ -414,26 +434,45 @@ def constrained_serial_solve(prob: ConstrainedProblem,
     x0 = np.copy(prob.x)
     if grad:
         logger.info("Using finite-difference derivatives")
-        fd_obj = FiniteDifference(prob.objective, abs_step=abs_step,
-                                  rel_step=rel_step, diff_method=diff_method)
+        fd_obj = FiniteDifference(
+            prob.objective,
+            abs_step=abs_step,
+            rel_step=rel_step,
+            diff_method=diff_method,
+        )
         if prob.has_nlc:
-            fd_nlc = FiniteDifference(prob.nonlinear_constraints, abs_step=abs_step,
-                                      rel_step=rel_step, diff_method=diff_method)
+            fd_nlc = FiniteDifference(
+                prob.nonlinear_constraints,
+                abs_step=abs_step,
+                rel_step=rel_step,
+                diff_method=diff_method,
+            )
             nlc = NonlinearConstraint(_nlc, lb=-np.inf, ub=0.0, jac=fd_nlc.jac)
             constraints.append(nlc)
         # optimize
-        result = minimize(_obj, x0, jac=fd_obj,
-                          bounds=bounds, constraints=constraints,
-                          method=opt_method, options=options)
+        result = minimize(
+            _obj,
+            x0,
+            jac=fd_obj,
+            bounds=bounds,
+            constraints=constraints,
+            method=opt_method,
+            options=options,
+        )
     else:
         logger.info("Using derivative-free method")
         if prob.has_nlc:
             nlc = NonlinearConstraint(_nlc, lb=-np.inf, ub=0.0)
             constraints.append(nlc)
         # optimize
-        result = minimize(_obj, x0,
-                          bounds=bounds, constraints=constraints,
-                          method=opt_method, options=options)
+        result = minimize(
+            _obj,
+            x0,
+            bounds=bounds,
+            constraints=constraints,
+            method=opt_method,
+            options=options,
+        )
 
     objective_datalog_started = False
     constraint_datalog_started = False

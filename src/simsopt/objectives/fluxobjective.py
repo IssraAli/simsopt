@@ -5,15 +5,14 @@ from .._core.optimizable import Optimizable
 from .._core.derivative import derivative_dec
 
 
-__all__ = ['SquaredFlux']
+__all__ = ["SquaredFlux"]
 
 
 class SquaredFlux(Optimizable):
-
     r"""
     Objective representing quadratic-flux-like quantities, useful for stage-2
     coil optimization. Several variations are available, which can be selected
-    using the ``definition`` argument. For ``definition="quadratic flux"`` 
+    using the ``definition`` argument. For ``definition="quadratic flux"``
     (the default), the objective is defined as
 
     .. math::
@@ -42,14 +41,16 @@ class SquaredFlux(Optimizable):
         surface: A :obj:`simsopt.geo.surface.Surface` object on which to compute the flux
         field: A :obj:`simsopt.field.magneticfield.MagneticField` for which to compute the flux.
             May include :class:`~simsopt.field.psc_bulk.PassiveBulkField` in a :class:`~simsopt.field.magneticfield.MagneticFieldSum`.
-        target: A ``nphi x ntheta`` numpy array containing target values for the flux. Here 
-          ``nphi`` and ``ntheta`` correspond to the number of quadrature points on `surface` 
+        target: A ``nphi x ntheta`` numpy array containing target values for the flux. Here
+          ``nphi`` and ``ntheta`` correspond to the number of quadrature points on `surface`
           in ``phi`` and ``theta`` direction.
         definition: A string to select among the definitions above. The
           available options are ``"quadratic flux"``, ``"normalized"``, and ``"local"``.
     """
 
-    def __init__(self, surface, field, target=None, definition="quadratic flux", threshold=0.0):
+    def __init__(
+        self, surface, field, target=None, definition="quadratic flux", threshold=0.0
+    ):
         self.surface = surface
         if target is not None:
             self.target = np.ascontiguousarray(target)
@@ -77,11 +78,11 @@ class SquaredFlux(Optimizable):
     def dJ(self):
         n = self.surface.normal()
         absn = np.linalg.norm(n, axis=2)
-        unitn = n * (1. / absn)[:, :, None]
+        unitn = n * (1.0 / absn)[:, :, None]
         Bcoil = self.field.B().reshape(n.shape)
         Bcoil_n = np.sum(Bcoil * unitn, axis=2)
         if self.target is not None:
-            B_n = (Bcoil_n - self.target)
+            B_n = Bcoil_n - self.target
         else:
             B_n = Bcoil_n
 
@@ -91,10 +92,16 @@ class SquaredFlux(Optimizable):
 
         elif self.definition == "local":
             mod_Bcoil = np.linalg.norm(Bcoil, axis=2)
-            dJdB = ((
-                (B_n/mod_Bcoil)[..., None] * (
-                    unitn / mod_Bcoil[..., None] - (B_n / mod_Bcoil**3)[..., None] * Bcoil
-                )) * absn[..., None]) / absn.size
+            dJdB = (
+                (
+                    (B_n / mod_Bcoil)[..., None]
+                    * (
+                        unitn / mod_Bcoil[..., None]
+                        - (B_n / mod_Bcoil**3)[..., None] * Bcoil
+                    )
+                )
+                * absn[..., None]
+            ) / absn.size
 
         elif self.definition == "normalized":
             mod_Bcoil = np.linalg.norm(Bcoil, axis=2)

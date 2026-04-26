@@ -11,6 +11,7 @@ import time
 
 
 from pathlib import Path
+
 THIS_DIR = (Path(__file__).parent).resolve()
 
 
@@ -31,20 +32,24 @@ class QuasrTests(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.status_code = 200
 
-        with open(THIS_DIR / '../test_files/serial0000952.json', "rb") as f:
+        with open(THIS_DIR / "../test_files/serial0000952.json", "rb") as f:
             raw_bytes = f.read()
         mock_response.content = raw_bytes
         mock_requests.get.return_value = mock_response
 
-        true_surfaces, true_coils = load(THIS_DIR / '../test_files/serial0000952.json')
+        true_surfaces, true_coils = load(THIS_DIR / "../test_files/serial0000952.json")
 
         base_curves, base_currents, ma, nfp, bs = get_data("quasr", QUASR_ID=952)
         assert isinstance(base_curves[0], CurveXYZFourier)
         assert isinstance(base_currents[0], ScaledCurrent)
         np.testing.assert_allclose(base_curves[0].x, true_coils[0].curve.x)
-        np.testing.assert_allclose(base_currents[0].get_value(), true_coils[0].current.get_value())
+        np.testing.assert_allclose(
+            base_currents[0].get_value(), true_coils[0].current.get_value()
+        )
 
-        surfaces, coils = download_ID_from_QUASR_database(952, return_style='quasr-style', verbose=True)
+        surfaces, coils = download_ID_from_QUASR_database(
+            952, return_style="quasr-style", verbose=True
+        )
         assert isinstance(coils[0], Coil)
         assert isinstance(surfaces[0], SurfaceXYZTensorFourier)
         np.testing.assert_allclose(surfaces[0].x, true_surfaces[0].x)
@@ -52,7 +57,9 @@ class QuasrTests(unittest.TestCase):
 
         # invalid return style
         with self.assertRaises(Exception):
-            surfaces, coils = download_ID_from_QUASR_database(952, return_style='invalid-style')
+            surfaces, coils = download_ID_from_QUASR_database(
+                952, return_style="invalid-style"
+            )
 
         # 404 means the file is not found
         mock_response.status_code = 404
@@ -63,17 +70,20 @@ class QuasrTests(unittest.TestCase):
         with self.assertRaises(Exception):
             base_curves, base_currents, ma, nfp, bs = get_data("quasr")
 
-        
         # requests.get raises an exception
         mock_requests.get.side_effect = Exception("something went wrong")
         with self.assertRaises(Exception):
-            base_curves, base_currents, ma, nfp, bs = get_data("quasr", 952, return_style='')
-        
+            base_curves, base_currents, ma, nfp, bs = get_data(
+                "quasr", 952, return_style=""
+            )
+
         with self.assertRaises(Exception):
             # mock os.makedir only here so it throws an error
             with patch("simsopt.configs.zoo.os.makedirs") as mock_makedirs:
                 mock_makedirs.side_effect = Exception("Failed to create directory")
-                base_curves, base_currents, ma, nfp, bs = get_data(953, return_style='quasr-style')
+                base_curves, base_currents, ma, nfp, bs = get_data(
+                    953, return_style="quasr-style"
+                )
 
         # reset mock for permission tests
         mock_requests.get.side_effect = None
@@ -83,15 +93,16 @@ class QuasrTests(unittest.TestCase):
         # test fallback to cwd when THIS_DIR is not writable (line 596)
         # Also verify that cache directory is created and file is written
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("simsopt.configs.zoo.os.access") as mock_access, \
-                 patch("simsopt.configs.zoo.os.getcwd", return_value=tmpdir):
+            with patch("simsopt.configs.zoo.os.access") as mock_access, patch(
+                "simsopt.configs.zoo.os.getcwd", return_value=tmpdir
+            ):
                 # First call (THIS_DIR) returns False, second call (cwd) returns True
                 mock_access.side_effect = [False, True]
                 download_ID_from_QUASR_database(952, use_cache=True, verbose=True)
                 # Verify os.access was called twice
                 self.assertEqual(mock_access.call_count, 2)
                 # Verify cache directory was created
-                cache_dir = Path(tmpdir) / 'QUASR_cache'
+                cache_dir = Path(tmpdir) / "QUASR_cache"
                 self.assertTrue(cache_dir.exists())
                 self.assertTrue(cache_dir.is_dir())
                 # Verify JSON file was written
@@ -116,7 +127,7 @@ class QuasrTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_dir = Path(tmpdir)
-            
+
             # Create 101 empty .json files with staggered modification times
             for i in range(101):
                 filepath = cache_dir / f"test_file_{i:03d}.json"
@@ -126,19 +137,22 @@ class QuasrTests(unittest.TestCase):
                 mtime = time.time() - (101 - i)
                 filepath.touch()
                 import os
+
                 os.utime(filepath, (mtime, mtime))
-            
+
             # Verify we have 101 files
             files_before = list(cache_dir.glob("*.json"))
             self.assertEqual(len(files_before), 101)
-            
+
             # Run prune with default limit of 100
-            _prune_cache(cache_dir, limit=100, verbose=True) # hit the print line to satisfy coverage
-            
+            _prune_cache(
+                cache_dir, limit=100, verbose=True
+            )  # hit the print line to satisfy coverage
+
             # Verify we now have 100 files
             files_after = list(cache_dir.glob("*.json"))
             self.assertEqual(len(files_after), 100)
-            
+
             # Verify the oldest file (test_file_000.json) was removed
             remaining_names = {f.name for f in files_after}
             self.assertNotIn("test_file_000.json", remaining_names)

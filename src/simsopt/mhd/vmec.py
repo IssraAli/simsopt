@@ -51,7 +51,7 @@ reset_jacdt_flag = 32
 
 
 def to_namelist_bool(bool_in):
-    """ Convert a boolean to a format suitable for fortran namelist input """
+    """Convert a boolean to a format suitable for fortran namelist input"""
     return "T" if bool_in else "F"
 
 
@@ -71,16 +71,17 @@ def array_to_namelist(arr, aux_s=False):
             index = 0
         else:
             index = np.max(np.nonzero(arr))
-    nml = ''
+    nml = ""
     for j in range(index + 1):
-        nml += f'{arr[j]} '
-    nml += '\n'
+        nml += f"{arr[j]} "
+    nml += "\n"
     return nml
+
 
 # Documentation of flags for runvmec() from the VMEC source code:
 #
-#value flag-name         calls routines to...
-#----- ---------         ---------------------
+# value flag-name         calls routines to...
+# ----- ---------         ---------------------
 #  1   restart_flag      reset internal run-control parameters
 #                        (for example, if jacobian was bad, to try a smaller
 #                        time-step)
@@ -261,37 +262,39 @@ class Vmec(Optimizable):
         ds: The spacing between grid points for the radial coordinate s.
     """
 
-    def __init__(self,
-                 filename: Optional[str] = None,
-                 mpi: Optional[MpiPartition] = None,
-                 keep_all_files: bool = False,
-                 verbose: bool = True,
-                 ntheta=50,
-                 nphi=50,
-                 range_surface='full torus'):
+    def __init__(
+        self,
+        filename: Optional[str] = None,
+        mpi: Optional[MpiPartition] = None,
+        keep_all_files: bool = False,
+        verbose: bool = True,
+        ntheta=50,
+        nphi=50,
+        range_surface="full torus",
+    ):
 
         if filename is None:
             # Read default input file, which should be in the same
             # directory as this file:
-            filename = os.path.join(os.path.dirname(__file__), 'input.default')
+            filename = os.path.join(os.path.dirname(__file__), "input.default")
             logger.info(f"Initializing a VMEC object from defaults in {filename}")
 
         basename = os.path.basename(filename)
-        if basename[:5] == 'input':
+        if basename[:5] == "input":
             logger.info(f"Initializing a VMEC object from input file: {filename}")
             self.input_file = filename
             self.runnable = True
-        elif basename[:4] == 'wout':
+        elif basename[:4] == "wout":
             logger.info(f"Initializing a VMEC object from wout file: {filename}")
             self.runnable = False
         else:
-            raise ValueError('Invalid filename')
+            raise ValueError("Invalid filename")
 
         self.wout = Struct()
         self.verbose = verbose
 
         # Get MPI communicator:
-        if (mpi is None and MPI is not None):
+        if mpi is None and MPI is not None:
             self.mpi = MpiPartition(ngroups=1)
         else:
             self.mpi = mpi
@@ -310,7 +313,8 @@ class Vmec(Optimizable):
                 raise RuntimeError(
                     "Running VMEC from simsopt requires VMEC python extension. "
                     "Install the VMEC python extension from "
-                    "https://github.com/hiddenSymmetries/VMEC2000")
+                    "https://github.com/hiddenSymmetries/VMEC2000"
+                )
 
             comm = self.mpi.comm_groups
             self.fcomm = comm.py2f()
@@ -328,15 +332,17 @@ class Vmec(Optimizable):
             self.ictrl[2] = 0  # numsteps
             self.ictrl[3] = 0  # ns_index
             self.ictrl[4] = 0  # iseq
-            reset_file = ''
-            logger.info('About to call runvmec to readin')
+            reset_file = ""
+            logger.info("About to call runvmec to readin")
             vmec.runvmec(self.ictrl, filename, self.verbose, self.fcomm, reset_file)
             ierr = self.ictrl[1]
-            logger.info(f'Done with runvmec. ierr={ierr}. Calling cleanup next.')
+            logger.info(f"Done with runvmec. ierr={ierr}. Calling cleanup next.")
             # Deallocate arrays allocated by VMEC's fixaray():
             vmec.cleanup(False)
             if ierr != 0:
-                raise RuntimeError(f"Failed to initialize VMEC from input file {filename}. Error code: {ierr}.")
+                raise RuntimeError(
+                    f"Failed to initialize VMEC from input file {filename}. Error code: {ierr}."
+                )
 
             # objstr = " for Vmec " + str(hex(id(self)))
 
@@ -346,13 +352,15 @@ class Vmec(Optimizable):
             # object, but the mpol/ntor values of either the vmec object
             # or the boundary surface object can be changed independently
             # by the user.
-            self._boundary = SurfaceRZFourier.from_nphi_ntheta(nfp=vi.nfp,
-                                                               stellsym=not vi.lasym,
-                                                               mpol=vi.mpol,
-                                                               ntor=vi.ntor,
-                                                               ntheta=ntheta,
-                                                               nphi=nphi,
-                                                               range=range_surface)
+            self._boundary = SurfaceRZFourier.from_nphi_ntheta(
+                nfp=vi.nfp,
+                stellsym=not vi.lasym,
+                mpol=vi.mpol,
+                ntor=vi.ntor,
+                ntheta=ntheta,
+                nphi=nphi,
+                range=range_surface,
+            )
             self.free_boundary = bool(vi.lfreeb)
 
             # Transfer boundary shape data from fortran to the ParameterArray:
@@ -368,17 +376,23 @@ class Vmec(Optimizable):
             self.need_to_run_code = True
         else:
             # Initialized from a wout file, so not runnable.
-            self._boundary = SurfaceRZFourier.from_wout(filename, nphi=nphi, ntheta=ntheta, range=range_surface)
+            self._boundary = SurfaceRZFourier.from_wout(
+                filename, nphi=nphi, ntheta=ntheta, range=range_surface
+            )
             self.output_file = filename
             self.load_wout()
 
         # Handle a few variables that are not Parameters:
         x0 = self.get_dofs()
         fixed = np.full(len(x0), True)
-        names = ['phiedge', 'curtor', 'pres_scale']
-        super().__init__(x0=x0, fixed=fixed, names=names,
-                         depends_on=[self._boundary],
-                         external_dof_setter=Vmec.set_dofs)
+        names = ["phiedge", "curtor", "pres_scale"]
+        super().__init__(
+            x0=x0,
+            fixed=fixed,
+            names=names,
+            depends_on=[self._boundary],
+            external_dof_setter=Vmec.set_dofs,
+        )
 
         if not self.runnable:
             # This next line must come after Optimizable.__init__
@@ -392,7 +406,7 @@ class Vmec(Optimizable):
     @boundary.setter
     def boundary(self, boundary):
         if boundary is not self._boundary:
-            logging.debug('Replacing surface in boundary setter')
+            logging.debug("Replacing surface in boundary setter")
             self.remove_parent(self._boundary)
             self._boundary = boundary
             self.append_parent(boundary)
@@ -405,7 +419,7 @@ class Vmec(Optimizable):
     @pressure_profile.setter
     def pressure_profile(self, pressure_profile):
         if pressure_profile is not self._pressure_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._pressure_profile is not None:
                 self.remove_parent(self._pressure_profile)
             self._pressure_profile = pressure_profile
@@ -420,7 +434,7 @@ class Vmec(Optimizable):
     @current_profile.setter
     def current_profile(self, current_profile):
         if current_profile is not self._current_profile:
-            logging.debug('Replacing current_profile in setter')
+            logging.debug("Replacing current_profile in setter")
             if self._current_profile is not None:
                 self.remove_parent(self._current_profile)
             self._current_profile = current_profile
@@ -435,7 +449,7 @@ class Vmec(Optimizable):
     @iota_profile.setter
     def iota_profile(self, iota_profile):
         if iota_profile is not self._iota_profile:
-            logging.debug('Replacing iota_profile in setter')
+            logging.debug("Replacing iota_profile in setter")
             if self._iota_profile is not None:
                 self.remove_parent(self._iota_profile)
             self._iota_profile = iota_profile
@@ -448,8 +462,9 @@ class Vmec(Optimizable):
             # Use default values from vmec_input
             return np.array([1.0, 0.0, 1.0])
         else:
-            return np.array([self.indata.phiedge, self.indata.curtor,
-                             self.indata.pres_scale])
+            return np.array(
+                [self.indata.phiedge, self.indata.curtor, self.indata.pres_scale]
+            )
 
     def set_dofs(self, x):
         if self.runnable:
@@ -471,25 +486,39 @@ class Vmec(Optimizable):
             return
 
         n = self.__getattribute__("n_" + longname)
-        vmec_profile_type = self.indata.__getattribute__("p" + shortname + "_type").lower()
-        if vmec_profile_type[:12] == b'power_series':
+        vmec_profile_type = self.indata.__getattribute__(
+            "p" + shortname + "_type"
+        ).lower()
+        if vmec_profile_type[:12] == b"power_series":
             # Evaluate the new Profile on a Gauss-Legendre grid in s,
             # so the polynomial fit is well conditioned.
             nodes, weights = np.polynomial.legendre.leggauss(n)
             x = nodes * 0.5 + 0.5  # So x is in (0, 1)
             y = profile(x)
-            poly = np.polynomial.polynomial.Polynomial.fit(x, y, n - 1, domain=[0, 1]).convert().coef
-            logger.debug('Setting vmec ' + longname + f' profile using power series.  x: {x}  y: {y}  poly: {poly}')
+            poly = (
+                np.polynomial.polynomial.Polynomial.fit(x, y, n - 1, domain=[0, 1])
+                .convert()
+                .coef
+            )
+            logger.debug(
+                "Setting vmec "
+                + longname
+                + f" profile using power series.  x: {x}  y: {y}  poly: {poly}"
+            )
             ax = self.indata.__getattribute__("a" + letter)
             ax[:] = 0.0
             ax[:n] = poly
 
-        elif vmec_profile_type[:12] == b'cubic_spline' \
-                or vmec_profile_type[:12] == b'akima_spline' \
-                or vmec_profile_type[:12] == b'line_segment':
+        elif (
+            vmec_profile_type[:12] == b"cubic_spline"
+            or vmec_profile_type[:12] == b"akima_spline"
+            or vmec_profile_type[:12] == b"line_segment"
+        ):
             x = np.linspace(0, 1, n)
             y = profile(x)
-            logger.debug('Setting vmec ' + longname + f' profile using splines. x: {x}  y: {y}')
+            logger.debug(
+                "Setting vmec " + longname + f" profile using splines. x: {x}  y: {y}"
+            )
             aux_s = self.indata.__getattribute__("a" + letter + "_aux_s")
             aux_f = self.indata.__getattribute__("a" + letter + "_aux_f")
             aux_s[:] = 0.0
@@ -498,8 +527,10 @@ class Vmec(Optimizable):
             aux_f[:n] = y
 
         else:
-            raise RuntimeError('To use a simsopt Profile class with vmec, vmec profile type must be power_series, '
-                               'cubic_spline, akima_spline, or line_segment. For current profiles, _i or _ip can be appended.')
+            raise RuntimeError(
+                "To use a simsopt Profile class with vmec, vmec profile type must be power_series, "
+                "cubic_spline, akima_spline, or line_segment. For current profiles, _i or _ip can be appended."
+            )
 
     def set_indata(self):
         """
@@ -511,7 +542,9 @@ class Vmec(Optimizable):
         converted to ``SurfaceRZFourier`` is returned.
         """
         if not self.runnable:
-            raise RuntimeError('Cannot access indata for a Vmec object that was initialized from a wout file.')
+            raise RuntimeError(
+                "Cannot access indata for a Vmec object that was initialized from a wout file."
+            )
         vi = vmec.vmec_input  # Shorthand
         # Convert boundary to RZFourier if needed:
         boundary_RZFourier = self.boundary.to_RZFourier()
@@ -554,7 +587,13 @@ class Vmec(Optimizable):
         if self.pressure_profile is not None:
             vi.pres_scale = 1.0
         if self.current_profile is not None:
-            if vi.pcurr_type.decode().lower().strip() in ['power_series', 'gauss_trunc', 'two_power', 'cubic_spline_ip', 'akima_spline_ip']:
+            if vi.pcurr_type.decode().lower().strip() in [
+                "power_series",
+                "gauss_trunc",
+                "two_power",
+                "cubic_spline_ip",
+                "akima_spline_ip",
+            ]:
                 integral, _ = quad(self.current_profile, 0, 1)
                 vi.curtor = integral
             else:
@@ -567,84 +606,90 @@ class Vmec(Optimizable):
         Generate a VMEC input file. The result will be returned as a
         string. To save a file, see the ``write_input()`` function.
         """
-        boundary_RZFourier = self.set_indata()  # Transfer the boundary from simsopt to fortran.
+        boundary_RZFourier = (
+            self.set_indata()
+        )  # Transfer the boundary from simsopt to fortran.
         vi = vmec.vmec_input  # Shorthand
-        nml = '&INDATA\n'
-        nml += '! This file created by simsopt on ' + datetime.now().strftime("%B %d %Y, %H:%M:%S") + '\n\n'
-        nml += '! ---- Geometric parameters ----\n'
-        nml += f'NFP = {vi.nfp}\n'
-        nml += f'LASYM = {to_namelist_bool(vi.lasym)}\n'
+        nml = "&INDATA\n"
+        nml += (
+            "! This file created by simsopt on "
+            + datetime.now().strftime("%B %d %Y, %H:%M:%S")
+            + "\n\n"
+        )
+        nml += "! ---- Geometric parameters ----\n"
+        nml += f"NFP = {vi.nfp}\n"
+        nml += f"LASYM = {to_namelist_bool(vi.lasym)}\n"
 
         if vi.lfreeb:
-            nml += '\n! ---- Free-boundary parameters ----\n'
-            nml += 'LFREEB = T\n'
+            nml += "\n! ---- Free-boundary parameters ----\n"
+            nml += "LFREEB = T\n"
             nml += f"MGRID_FILE = '{vi.mgrid_file.decode('utf-8')}'\n"
-            nml += 'EXTCUR = ' + array_to_namelist(vi.extcur)
-            nml += '\n'
+            nml += "EXTCUR = " + array_to_namelist(vi.extcur)
+            nml += "\n"
 
-        nml += '\n! ---- Resolution parameters ----\n'
-        nml += f'MPOL = {vi.mpol}\n'
-        nml += f'NTOR = {vi.ntor}\n'
+        nml += "\n! ---- Resolution parameters ----\n"
+        nml += f"MPOL = {vi.mpol}\n"
+        nml += f"NTOR = {vi.ntor}\n"
         if vi.ntheta != 0:
-            nml += f'NTHETA = {vi.ntheta}\n'
+            nml += f"NTHETA = {vi.ntheta}\n"
         if vi.nzeta != 0:
-            nml += f'NZETA = {vi.nzeta}\n'
+            nml += f"NZETA = {vi.nzeta}\n"
         index = np.max(np.nonzero(vi.ns_array))
-        nml += 'NS_ARRAY    ='
+        nml += "NS_ARRAY    ="
         for j in range(index + 1):
-            nml += f'{vi.ns_array[j]:7}'
-        nml += '\n'
+            nml += f"{vi.ns_array[j]:7}"
+        nml += "\n"
         index = np.max(np.where(vi.niter_array > 0))
-        nml += 'NITER_ARRAY ='
+        nml += "NITER_ARRAY ="
         for j in range(index + 1):
-            nml += f'{vi.niter_array[j]:7}'
-        nml += '\n'
+            nml += f"{vi.niter_array[j]:7}"
+        nml += "\n"
         index = np.max(np.nonzero(vi.ftol_array))
-        nml += 'FTOL_ARRAY  ='
+        nml += "FTOL_ARRAY  ="
         for j in range(index + 1):
-            nml += f'{vi.ftol_array[j]:7}'
-        nml += '\n'
+            nml += f"{vi.ftol_array[j]:7}"
+        nml += "\n"
 
-        nml += '\n! ---- Boundary toroidal flux ----\n'
-        nml += f'PHIEDGE = {vi.phiedge}\n'
+        nml += "\n! ---- Boundary toroidal flux ----\n"
+        nml += f"PHIEDGE = {vi.phiedge}\n"
 
-        nml += '\n! ---- Pressure profile specification ----\n'
+        nml += "\n! ---- Pressure profile specification ----\n"
         profile_type = vi.pmass_type.decode().strip()
         nml += f'PMASS_TYPE = "{profile_type}"\n'
-        nml += 'AM = ' + array_to_namelist(vi.am)
+        nml += "AM = " + array_to_namelist(vi.am)
         if np.any(vi.am_aux_s >= 0):
-            nml += 'AM_AUX_S = ' + array_to_namelist(vi.am_aux_s, True)
-            nml += 'AM_AUX_F = ' + array_to_namelist(vi.am_aux_f)
-        nml += f'PRES_SCALE = {vi.pres_scale}\n'
+            nml += "AM_AUX_S = " + array_to_namelist(vi.am_aux_s, True)
+            nml += "AM_AUX_F = " + array_to_namelist(vi.am_aux_f)
+        nml += f"PRES_SCALE = {vi.pres_scale}\n"
 
-        nml += '\n! ---- Profile specification of iota or current ----\n'
-        nml += f'NCURR = {vi.ncurr}\n'
+        nml += "\n! ---- Profile specification of iota or current ----\n"
+        nml += f"NCURR = {vi.ncurr}\n"
         if vi.ncurr == 0:
             # Iota profile specified
             profile_type = vi.piota_type.decode().strip()
             nml += f'PIOTA_TYPE = "{profile_type}"\n'
-            nml += 'AI = ' + array_to_namelist(vi.ai)
+            nml += "AI = " + array_to_namelist(vi.ai)
             if np.any(vi.ai_aux_s >= 0):
-                nml += 'AI_AUX_S = ' + array_to_namelist(vi.ai_aux_s, True)
-                nml += 'AI_AUX_F = ' + array_to_namelist(vi.ai_aux_f)
+                nml += "AI_AUX_S = " + array_to_namelist(vi.ai_aux_s, True)
+                nml += "AI_AUX_F = " + array_to_namelist(vi.ai_aux_f)
         else:
             # Current profile specified
-            nml += f'CURTOR = {vi.curtor}\n'
+            nml += f"CURTOR = {vi.curtor}\n"
             profile_type = vi.pcurr_type.decode().strip()
             nml += f'PCURR_TYPE = "{profile_type}"\n'
-            nml += 'AC = ' + array_to_namelist(vi.ac)
+            nml += "AC = " + array_to_namelist(vi.ac)
             if np.any(vi.ac_aux_s >= 0):
-                nml += 'AC_AUX_S = ' + array_to_namelist(vi.ac_aux_s, True)
-                nml += 'AC_AUX_F = ' + array_to_namelist(vi.ac_aux_f)
+                nml += "AC_AUX_S = " + array_to_namelist(vi.ac_aux_s, True)
+                nml += "AC_AUX_F = " + array_to_namelist(vi.ac_aux_f)
 
-        nml += '\n! ---- Other numerical parameters ----\n'
-        nml += f'DELT = {vi.delt}\n'
-        nml += f'NSTEP = {vi.nstep}\n'
+        nml += "\n! ---- Other numerical parameters ----\n"
+        nml += f"DELT = {vi.delt}\n"
+        nml += f"NSTEP = {vi.nstep}\n"
 
-        nml += '\n! ---- Boundary shape. Array index order is (n, m) ----\n'
-        surf_str = boundary_RZFourier.get_nml().split('\n')
+        nml += "\n! ---- Boundary shape. Array index order is (n, m) ----\n"
+        surf_str = boundary_RZFourier.get_nml().split("\n")
         for j in range(3, len(surf_str)):
-            nml += surf_str[j] + '\n'
+            nml += surf_str[j] + "\n"
 
         return nml
 
@@ -661,7 +706,7 @@ class Vmec(Optimizable):
         # called, even procs that do not directly write the file:
         input_namelist = self.get_input()
         if self.mpi.proc0_groups and (filename is not None):
-            with open(filename, 'w') as f:
+            with open(filename, "w") as f:
                 f.write(input_namelist)
 
     def run(self):
@@ -673,27 +718,32 @@ class Vmec(Optimizable):
             return
 
         if not self.runnable:
-            raise RuntimeError('Cannot run a Vmec object that was initialized from a wout file.')
+            raise RuntimeError(
+                "Cannot run a Vmec object that was initialized from a wout file."
+            )
 
         logger.info("Preparing to run VMEC.")
 
         self.iter += 1
-        base_filename = self.input_file + '_{:03d}_{:06d}'.format(
-            self.mpi.group, self.iter)
-        input_file = os.path.join(
-            os.getcwd(),
-            os.path.basename(base_filename))
+        base_filename = self.input_file + "_{:03d}_{:06d}".format(
+            self.mpi.group, self.iter
+        )
+        input_file = os.path.join(os.getcwd(), os.path.basename(base_filename))
         self.output_file = os.path.join(
             os.getcwd(),
-            os.path.basename(base_filename).replace('input.', 'wout_') + '.nc')
+            os.path.basename(base_filename).replace("input.", "wout_") + ".nc",
+        )
         mercier_file = os.path.join(
-            os.getcwd(),
-            os.path.basename(base_filename).replace('input.', 'mercier.'))
+            os.getcwd(), os.path.basename(base_filename).replace("input.", "mercier.")
+        )
         jxbout_file = os.path.join(
             os.getcwd(),
-            os.path.basename(base_filename).replace('input.', 'jxbout_') + '.nc')
+            os.path.basename(base_filename).replace("input.", "jxbout_") + ".nc",
+        )
 
-        file_to_write = input_file if (self.mpi.proc0_world or self.keep_all_files) else None
+        file_to_write = (
+            input_file if (self.mpi.proc0_world or self.keep_all_files) else None
+        )
         # This next line also calls set_indata():
         self.write_input(file_to_write)
 
@@ -701,13 +751,12 @@ class Vmec(Optimizable):
         vmec.reinit()
 
         logger.info("Calling runvmec().")
-        self.ictrl[0] = restart_flag + reset_jacdt_flag \
-            + timestep_flag + output_flag
+        self.ictrl[0] = restart_flag + reset_jacdt_flag + timestep_flag + output_flag
         self.ictrl[1] = 0  # ierr
         self.ictrl[2] = 0  # numsteps
         self.ictrl[3] = 0  # ns_index
         self.ictrl[4] = 0  # iseq
-        reset_file = ''
+        reset_file = ""
         vmec.runvmec(self.ictrl, input_file, self.verbose, self.fcomm, reset_file)
         ierr = self.ictrl[1]
 
@@ -724,7 +773,9 @@ class Vmec(Optimizable):
         # should logically never occur, so these codes raise a
         # different exception.
         if ierr in [0, 5]:
-            raise RuntimeError(f"runvmec returned an error code that should never occur: ierr={ierr}")
+            raise RuntimeError(
+                f"runvmec returned an error code that should never occur: ierr={ierr}"
+            )
         if ierr != 11:
             raise ObjectiveFailure(f"VMEC did not converge. ierr={ierr}")
 
@@ -742,19 +793,23 @@ class Vmec(Optimizable):
             try:
                 os.remove(mercier_file)
             except FileNotFoundError:
-                logger.debug(f'Tried to delete the file {mercier_file} but it was not found')
+                logger.debug(
+                    f"Tried to delete the file {mercier_file} but it was not found"
+                )
                 raise
 
             try:
                 os.remove(jxbout_file)
             except FileNotFoundError:
-                logger.debug(f'Tried to delete the file {jxbout_file} but it was not found')
+                logger.debug(
+                    f"Tried to delete the file {jxbout_file} but it was not found"
+                )
                 raise
 
             try:
                 os.remove("fort.9")
             except FileNotFoundError:
-                logger.debug('Tried to delete the file fort.9 but it was not found')
+                logger.debug("Tried to delete the file fort.9 but it was not found")
 
             # If the worker group is not 0, delete all wout files, unless
             # keep_all_files is True:
@@ -766,7 +821,9 @@ class Vmec(Optimizable):
                 try:
                     os.remove(filename)
                 except FileNotFoundError:
-                    logger.debug(f"Tried to delete the file {filename} but it was not found")
+                    logger.debug(
+                        f"Tried to delete the file {filename} but it was not found"
+                    )
 
             self.files_to_delete = []
 
@@ -796,7 +853,7 @@ class Vmec(Optimizable):
                 raise ObjectiveFailure("VMEC did not succeed")
 
             # Shorthand for a long variable name:
-            self.wout.lasym = f.variables['lasym__logical__'][()]
+            self.wout.lasym = f.variables["lasym__logical__"][()]
             self.wout.volume = self.wout.volume_p
 
         self.s_full_grid = np.linspace(0, 1, self.wout.ns)
@@ -865,8 +922,9 @@ class Vmec(Optimizable):
         self.run()
 
         # Fit a linear polynomial:
-        poly = np.polynomial.Polynomial.fit(self.s_half_grid,
-                                            self.wout.iotas[1:], deg=1)
+        poly = np.polynomial.Polynomial.fit(
+            self.s_half_grid, self.wout.iotas[1:], deg=1
+        )
         # Return the slope:
         return poly.deriv()(0)
 
@@ -879,14 +937,16 @@ class Vmec(Optimizable):
         max_n = 0
         for m in range(1, 101):
             for n in range(1, 101):
-                if np.abs(vmec.vmec_input.rbc[101 + n, m]) > 0 \
-                        or np.abs(vmec.vmec_input.zbs[101 + n, m]) > 0 \
-                        or np.abs(vmec.vmec_input.rbs[101 + n, m]) > 0 \
-                        or np.abs(vmec.vmec_input.zbc[101 + n, m]) > 0 \
-                        or np.abs(vmec.vmec_input.rbc[101 - n, m]) > 0 \
-                        or np.abs(vmec.vmec_input.zbs[101 - n, m]) > 0 \
-                        or np.abs(vmec.vmec_input.rbs[101 - n, m]) > 0 \
-                        or np.abs(vmec.vmec_input.zbc[101 - n, m]) > 0:
+                if (
+                    np.abs(vmec.vmec_input.rbc[101 + n, m]) > 0
+                    or np.abs(vmec.vmec_input.zbs[101 + n, m]) > 0
+                    or np.abs(vmec.vmec_input.rbs[101 + n, m]) > 0
+                    or np.abs(vmec.vmec_input.zbc[101 + n, m]) > 0
+                    or np.abs(vmec.vmec_input.rbc[101 - n, m]) > 0
+                    or np.abs(vmec.vmec_input.zbs[101 - n, m]) > 0
+                    or np.abs(vmec.vmec_input.rbs[101 - n, m]) > 0
+                    or np.abs(vmec.vmec_input.zbc[101 - n, m]) > 0
+                ):
                     max_m = np.max((max_m, m))
                     max_n = np.max((max_n, n))
         # It may happen that mpol or ntor exceed the max_m or max_n
@@ -900,8 +960,10 @@ class Vmec(Optimizable):
         """
         Print the object in an informative way.
         """
-        return f"{self.name} (nfp={self.indata.nfp} mpol={self.indata.mpol}" + \
-               f" ntor={self.indata.ntor})"
+        return (
+            f"{self.name} (nfp={self.indata.nfp} mpol={self.indata.mpol}"
+            + f" ntor={self.indata.ntor})"
+        )
 
     def external_current(self):
         """
@@ -960,6 +1022,12 @@ class Vmec(Optimizable):
         well = (dVds_s0 - dVds_s1) / dVds_s0
         return well
 
-    return_fn_map = {'aspect': aspect, 'volume': volume, 'iota_axis': iota_axis,
-                     'iota_edge': iota_edge, 'mean_iota': mean_iota,
-                     'mean_shear': mean_shear, 'vacuum_well': vacuum_well}
+    return_fn_map = {
+        "aspect": aspect,
+        "volume": volume,
+        "iota_axis": iota_axis,
+        "iota_edge": iota_edge,
+        "mean_iota": mean_iota,
+        "mean_shear": mean_shear,
+        "vacuum_well": vacuum_well,
+    }

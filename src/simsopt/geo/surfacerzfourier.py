@@ -26,7 +26,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['SurfaceRZFourier', 'SurfaceRZPseudospectral', 'plot_spectral_condensation']
+__all__ = ["SurfaceRZFourier", "SurfaceRZPseudospectral", "plot_spectral_condensation"]
 
 
 class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
@@ -68,27 +68,39 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         quadpoints_theta: Set this to a list or 1D array to set the :math:`\theta_j` grid points directly.
     """
 
-    def __init__(self, nfp=1, stellsym=True, mpol=1, ntor=0,
-                 quadpoints_phi=None, quadpoints_theta=None,
-                 dofs=None):
+    def __init__(
+        self,
+        nfp=1,
+        stellsym=True,
+        mpol=1,
+        ntor=0,
+        quadpoints_phi=None,
+        quadpoints_theta=None,
+        dofs=None,
+    ):
 
         if quadpoints_theta is None:
             quadpoints_theta = Surface.get_theta_quadpoints()
         if quadpoints_phi is None:
             quadpoints_phi = Surface.get_phi_quadpoints(nfp=nfp)
 
-        sopp.SurfaceRZFourier.__init__(self, mpol, ntor, nfp, stellsym,
-                                       quadpoints_phi, quadpoints_theta)
+        sopp.SurfaceRZFourier.__init__(
+            self, mpol, ntor, nfp, stellsym, quadpoints_phi, quadpoints_theta
+        )
         self.rc[0, ntor] = 1.0
         self.rc[1, ntor] = 0.1
         self.zs[1, ntor] = 0.1
         if dofs is None:
-            Surface.__init__(self, x0=self.get_dofs(),
-                             external_dof_setter=SurfaceRZFourier.set_dofs_impl,
-                             names=self._make_names())
+            Surface.__init__(
+                self,
+                x0=self.get_dofs(),
+                external_dof_setter=SurfaceRZFourier.set_dofs_impl,
+                names=self._make_names(),
+            )
         else:
-            Surface.__init__(self, dofs=dofs,
-                             external_dof_setter=SurfaceRZFourier.set_dofs_impl)
+            Surface.__init__(
+                self, dofs=dofs, external_dof_setter=SurfaceRZFourier.set_dofs_impl
+            )
         self._make_mn()
 
     def get_dofs(self):
@@ -108,12 +120,16 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         ``src/simsoptpp/surfacerzfourier.h``.
         """
         if self.stellsym:
-            names = self._make_names_helper('rc', True) + self._make_names_helper('zs', False)
+            names = self._make_names_helper("rc", True) + self._make_names_helper(
+                "zs", False
+            )
         else:
-            names = self._make_names_helper('rc', True) \
-                + self._make_names_helper('rs', False) \
-                + self._make_names_helper('zc', True) \
-                + self._make_names_helper('zs', False)
+            names = (
+                self._make_names_helper("rc", True)
+                + self._make_names_helper("rs", False)
+                + self._make_names_helper("zc", True)
+                + self._make_names_helper("zs", False)
+            )
         return names
 
     def _make_names_helper(self, prefix, include0):
@@ -122,9 +138,12 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         else:
             names = []
 
-        names += [prefix + '(0,' + str(n) + ')' for n in range(1, self.ntor + 1)]
+        names += [prefix + "(0," + str(n) + ")" for n in range(1, self.ntor + 1)]
         for m in range(1, self.mpol + 1):
-            names += [prefix + '(' + str(m) + ',' + str(n) + ')' for n in range(-self.ntor, self.ntor + 1)]
+            names += [
+                prefix + "(" + str(m) + "," + str(n) + ")"
+                for n in range(-self.ntor, self.ntor + 1)
+            ]
         return names
 
     def _make_mn(self):
@@ -134,8 +153,8 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         m1d = np.arange(self.mpol + 1)
         n1d = np.arange(-self.ntor, self.ntor + 1)
         n2d, m2d = np.meshgrid(n1d, m1d)
-        m0 = m2d.flatten()[self.ntor:]
-        n0 = n2d.flatten()[self.ntor:]
+        m0 = m2d.flatten()[self.ntor :]
+        n0 = n2d.flatten()[self.ntor :]
         m = np.concatenate((m0, m0[1:]))
         n = np.concatenate((n0, n0[1:]))
         if not self.stellsym:
@@ -145,9 +164,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         self.n = n
 
     @classmethod
-    def from_wout(cls, filename: str, s: float = 1.0,
-                  interp_kind: str = 'linear',
-                  **kwargs):
+    def from_wout(
+        cls, filename: str, s: float = 1.0, interp_kind: str = "linear", **kwargs
+    ):
         """
         Read in a surface from a VMEC wout output file. Note that this
         function does not require the VMEC python module.
@@ -165,20 +184,20 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
 
         if s < 0 or s > 1:
-            raise ValueError('s must lie in the interval [0, 1]')
+            raise ValueError("s must lie in the interval [0, 1]")
 
         f = netcdf_file(filename, mmap=False)
-        nfp = f.variables['nfp'][()]
-        ns = f.variables['ns'][()]
-        xm = f.variables['xm'][()]
-        xn = f.variables['xn'][()]
-        rmnc = f.variables['rmnc'][()]
-        zmns = f.variables['zmns'][()]
-        lasym = bool(f.variables['lasym__logical__'][()])
+        nfp = f.variables["nfp"][()]
+        ns = f.variables["ns"][()]
+        xm = f.variables["xm"][()]
+        xn = f.variables["xn"][()]
+        rmnc = f.variables["rmnc"][()]
+        zmns = f.variables["zmns"][()]
+        lasym = bool(f.variables["lasym__logical__"][()])
         stellsym = not lasym
         if lasym:
-            rmns = f.variables['rmns'][()]
-            zmnc = f.variables['zmnc'][()]
+            rmns = f.variables["rmns"][()]
+            zmnc = f.variables["zmnc"][()]
         f.close()
 
         # Interpolate in s:
@@ -205,11 +224,13 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         grid_range = kwargs.pop("range", None)
 
         if ntheta is not None or nphi is not None:
-            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = Surface.get_quadpoints(
-                ntheta=ntheta, nphi=nphi, nfp=nfp, range=grid_range)
+            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = (
+                Surface.get_quadpoints(
+                    ntheta=ntheta, nphi=nphi, nfp=nfp, range=grid_range
+                )
+            )
 
-        surf = cls(mpol=mpol, ntor=ntor, nfp=nfp, stellsym=stellsym,
-                   **kwargs)
+        surf = cls(mpol=mpol, ntor=ntor, nfp=nfp, stellsym=stellsym, **kwargs)
 
         for j in range(len(xm)):
             m = int(xm[j])
@@ -239,14 +260,14 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         all_namelists = f90nml.read(filename)
         # We only care about the 'indata' namelist
-        nml = all_namelists['indata']
-        if 'nfp' in nml:
-            nfp = nml['nfp']
+        nml = all_namelists["indata"]
+        if "nfp" in nml:
+            nfp = nml["nfp"]
         else:
             nfp = 1
 
-        if 'lasym' in nml:
-            lasym = nml['lasym']
+        if "lasym" in nml:
+            lasym = nml["lasym"]
         else:
             lasym = False
         stellsym = not lasym
@@ -256,39 +277,52 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         # inner lists do not necessarily all have the same
         # dimension. Hence we need to be careful when converting to
         # numpy arrays.
-        rc = nested_lists_to_array(nml['rbc'])
-        zs = nested_lists_to_array(nml['zbs'])
+        rc = nested_lists_to_array(nml["rbc"])
+        zs = nested_lists_to_array(nml["zbs"])
         if lasym:
-            rs = nested_lists_to_array(nml['rbs'])
-            zc = nested_lists_to_array(nml['zbc'])
+            rs = nested_lists_to_array(nml["rbs"])
+            zc = nested_lists_to_array(nml["zbc"])
 
-        rbc_first_n = nml.start_index['rbc'][0]
+        rbc_first_n = nml.start_index["rbc"][0]
         rbc_last_n = rbc_first_n + rc.shape[1] - 1
-        zbs_first_n = nml.start_index['zbs'][0]
+        zbs_first_n = nml.start_index["zbs"][0]
         zbs_last_n = zbs_first_n + zs.shape[1] - 1
         if lasym:
-            rbs_first_n = nml.start_index['rbs'][0]
+            rbs_first_n = nml.start_index["rbs"][0]
             rbs_last_n = rbs_first_n + rs.shape[1] - 1
-            zbc_first_n = nml.start_index['zbc'][0]
+            zbc_first_n = nml.start_index["zbc"][0]
             zbc_last_n = zbc_first_n + zc.shape[1] - 1
         else:
             rbs_first_n = 0
             rbs_last_n = 0
             zbc_first_n = 0
             zbc_last_n = 0
-        ntor_boundary = np.max(np.abs(np.array([rbc_first_n, rbc_last_n,
-                                                zbs_first_n, zbs_last_n,
-                                                rbs_first_n, rbs_last_n,
-                                                zbc_first_n, zbc_last_n], dtype='i')))
+        ntor_boundary = np.max(
+            np.abs(
+                np.array(
+                    [
+                        rbc_first_n,
+                        rbc_last_n,
+                        zbs_first_n,
+                        zbs_last_n,
+                        rbs_first_n,
+                        rbs_last_n,
+                        zbc_first_n,
+                        zbc_last_n,
+                    ],
+                    dtype="i",
+                )
+            )
+        )
 
-        rbc_first_m = nml.start_index['rbc'][1]
+        rbc_first_m = nml.start_index["rbc"][1]
         rbc_last_m = rbc_first_m + rc.shape[0] - 1
-        zbs_first_m = nml.start_index['zbs'][1]
+        zbs_first_m = nml.start_index["zbs"][1]
         zbs_last_m = zbs_first_m + zs.shape[0] - 1
         if lasym:
-            rbs_first_m = nml.start_index['rbs'][1]
+            rbs_first_m = nml.start_index["rbs"][1]
             rbs_last_m = rbs_first_m + rs.shape[0] - 1
-            zbc_first_m = nml.start_index['zbc'][1]
+            zbc_first_m = nml.start_index["zbc"][1]
             zbc_last_m = zbc_first_m + zc.shape[0] - 1
         else:
             rbs_first_m = 0
@@ -296,45 +330,52 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
             zbc_first_m = 0
             zbc_last_m = 0
         mpol_boundary = np.max((rbc_last_m, zbs_last_m, rbs_last_m, zbc_last_m))
-        logger.debug('Input file has ntor_boundary={} mpol_boundary={}'
-                     .format(ntor_boundary, mpol_boundary))
+        logger.debug(
+            "Input file has ntor_boundary={} mpol_boundary={}".format(
+                ntor_boundary, mpol_boundary
+            )
+        )
 
         ntheta = kwargs.pop("ntheta", None)
         nphi = kwargs.pop("nphi", None)
         grid_range = kwargs.pop("range", None)
 
         if ntheta is not None or nphi is not None:
-            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = Surface.get_quadpoints(
-                ntheta=ntheta, nphi=nphi, nfp=nfp, range=grid_range)
+            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = (
+                Surface.get_quadpoints(
+                    ntheta=ntheta, nphi=nphi, nfp=nfp, range=grid_range
+                )
+            )
 
-        surf = cls(mpol=mpol_boundary, ntor=ntor_boundary, nfp=nfp, stellsym=stellsym,
-                   **kwargs)
+        surf = cls(
+            mpol=mpol_boundary, ntor=ntor_boundary, nfp=nfp, stellsym=stellsym, **kwargs
+        )
 
         # Transfer boundary shape data from the namelist to the surface object:
         # In these loops, we set surf.rc/zs rather than call surf.set_rc() for speed.
         for jm in range(rc.shape[0]):
-            m = jm + nml.start_index['rbc'][1]
+            m = jm + nml.start_index["rbc"][1]
             for jn in range(rc.shape[1]):
-                n = jn + nml.start_index['rbc'][0]
+                n = jn + nml.start_index["rbc"][0]
                 surf.rc[m, n + ntor_boundary] = rc[jm, jn]
 
         for jm in range(zs.shape[0]):
-            m = jm + nml.start_index['zbs'][1]
+            m = jm + nml.start_index["zbs"][1]
             for jn in range(zs.shape[1]):
-                n = jn + nml.start_index['zbs'][0]
+                n = jn + nml.start_index["zbs"][0]
                 surf.zs[m, n + ntor_boundary] = zs[jm, jn]
 
         if lasym:
             for jm in range(rs.shape[0]):
-                m = jm + nml.start_index['rbs'][1]
+                m = jm + nml.start_index["rbs"][1]
                 for jn in range(rs.shape[1]):
-                    n = jn + nml.start_index['rbs'][0]
+                    n = jn + nml.start_index["rbs"][0]
                     surf.rs[m, n + ntor_boundary] = rs[jm, jn]
 
             for jm in range(zc.shape[0]):
-                m = jm + nml.start_index['zbc'][1]
+                m = jm + nml.start_index["zbc"][1]
                 for jn in range(zc.shape[1]):
-                    n = jn + nml.start_index['zbc'][0]
+                    n = jn + nml.start_index["zbc"][0]
                     surf.zc[m, n + ntor_boundary] = zc[jm, jn]
 
         # Sync the dofs:
@@ -346,7 +387,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         Read in a surface from a FOCUS-format file.
         """
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             lines = f.readlines()
 
         # Read the line containing Nfou and nfp:
@@ -381,8 +422,11 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         grid_range = kwargs.pop("range", None)
 
         if ntheta is not None or nphi is not None:
-            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = Surface.get_quadpoints(
-                ntheta=ntheta, nphi=nphi, nfp=nfp, range=grid_range)
+            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = (
+                Surface.get_quadpoints(
+                    ntheta=ntheta, nphi=nphi, nfp=nfp, range=grid_range
+                )
+            )
 
         surf = cls(mpol=mpol, ntor=ntor, nfp=nfp, stellsym=stellsym, **kwargs)
 
@@ -405,18 +449,17 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         Args:
             filename: Name of the ``nescin.*`` file to read.
             which_surf: either ``plasma`` or ``current``, will select whether
-                to import the plasma boundary or the ``current surface`` 
+                to import the plasma boundary or the ``current surface``
                 (i.e. winding surface) from the file
-            kwargs: Any other arguments to pass to the ``SurfaceRZFourier`` 
-                constructor. You can specify ``quadpoints_theta`` and 
+            kwargs: Any other arguments to pass to the ``SurfaceRZFourier``
+                constructor. You can specify ``quadpoints_theta`` and
                 ``quadpoints_phi`` here.
         """
 
-        if which_surf not in ['plasma', 'current']:
-            raise ValueError('Parameter which_surf must be `plasma` or '
-                             + '`current`')
+        if which_surf not in ["plasma", "current"]:
+            raise ValueError("Parameter which_surf must be `plasma` or " + "`current`")
 
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             lines = f.readlines()
 
         j_line = 0
@@ -425,14 +468,14 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         # Scan through file until nfp is found and desired surface is reached
         while True:
-            if 'Plasma information from VMEC' in lines[j_line]:
+            if "Plasma information from VMEC" in lines[j_line]:
                 j_line += 2
                 nfp = int(lines[j_line].split()[0])
                 continue
-            elif which_surf == 'plasma' and 'Plasma Surface' in lines[j_line]:
+            elif which_surf == "plasma" and "Plasma Surface" in lines[j_line]:
                 assert nfp != 0, errmsg
                 break
-            elif which_surf == 'current' and 'Current Surface' in lines[j_line]:
+            elif which_surf == "current" and "Current Surface" in lines[j_line]:
                 assert nfp != 0, errmsg
                 break
             j_line += 1
@@ -453,7 +496,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         for j in range(n_Fourier):
             splitline = lines[j + j_line].split()
             m[j] = int(splitline[0])
-            n[j] = -int(splitline[1])    # Note the different sign convention
+            n[j] = -int(splitline[1])  # Note the different sign convention
             rc[j] = float(splitline[2])
             zs[j] = float(splitline[3])
             rs[j] = float(splitline[4])
@@ -468,9 +511,11 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         grid_range = kwargs.pop("range", None)
 
         if ntheta is not None or nphi is not None:
-            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] \
-                = Surface.get_quadpoints(ntheta=ntheta, nphi=nphi, nfp=nfp,
-                                         range=grid_range)
+            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = (
+                Surface.get_quadpoints(
+                    ntheta=ntheta, nphi=nphi, nfp=nfp, range=grid_range
+                )
+            )
 
         surf = cls(mpol=mpol, ntor=ntor, nfp=nfp, stellsym=stellsym, **kwargs)
 
@@ -486,7 +531,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
     @classmethod
     @SimsoptRequires(Qsc is not None, "from_pyQSC method requires pyQSC module")
-    def from_pyQSC(cls, stel: Qsc, r: float = 0.1, ntheta=20, mpol=10, ntor=20, **kwargs):
+    def from_pyQSC(
+        cls, stel: Qsc, r: float = 0.1, ntheta=20, mpol=10, ntor=20, **kwargs
+    ):
         """
         Initialize the surface from a pyQSC object. This creates a surface
         from a near-axis equilibrium with a specified minor radius `r` (in meters).
@@ -506,7 +553,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         # Fourier transform the result.
         RBC, RBS, ZBC, ZBS = to_Fourier(R_2D, Z_2D, stel.nfp, mpol, ntor, stel.lasym)
 
-        surf = cls(mpol=mpol, ntor=ntor, nfp=stel.nfp, stellsym=not stel.lasym, **kwargs)
+        surf = cls(
+            mpol=mpol, ntor=ntor, nfp=stel.nfp, stellsym=not stel.lasym, **kwargs
+        )
 
         surf.rc[:, :] = RBC.transpose()
         surf.zs[:, :] = ZBS.transpose()
@@ -519,12 +568,12 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
     def copy(self, **kwargs):
         """
-        Return a copy of the ``SurfaceRZFourier`` object. 
+        Return a copy of the ``SurfaceRZFourier`` object.
         A range of relevant parameters of the surface can be passed to this function
-        as keyword arguments in order to modify the properties of the returned copy. 
+        as keyword arguments in order to modify the properties of the returned copy.
         attributes changed. Keyword arguments accepted:
 
-        Kwargs: 
+        Kwargs:
          ntheta (int): number of quadrature points in the theta direction
          nphi (int): number of quadrature points in the phi direction
          mpol (int): number of poloidal Fourier modes for the surface
@@ -557,9 +606,16 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         # surface object, so assume that if it is given, the gridpoints should be
         # recalculated to the specified size)
         if quadpoints_theta is None and quadpoints_phi is None:
-            if ntheta is not otherntheta or nphi is not othernphi or grid_range is not None:
-                kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = Surface.get_quadpoints(
-                    ntheta=ntheta, nphi=nphi, nfp=self.nfp, range=grid_range)
+            if (
+                ntheta is not otherntheta
+                or nphi is not othernphi
+                or grid_range is not None
+            ):
+                kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = (
+                    Surface.get_quadpoints(
+                        ntheta=ntheta, nphi=nphi, nfp=self.nfp, range=grid_range
+                    )
+                )
             else:
                 kwargs["quadpoints_phi"] = self.quadpoints_phi
                 kwargs["quadpoints_theta"] = self.quadpoints_theta
@@ -573,24 +629,27 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                 kwargs["quadpoints_theta"] = quadpoints_theta
             if quadpoints_phi is None:
                 if nphi is not othernphi or grid_range is not None:
-                    kwargs["quadpoints_phi"] = Surface.get_phi_quadpoints(nphi, range=grid_range, nfp=nfp)
+                    kwargs["quadpoints_phi"] = Surface.get_phi_quadpoints(
+                        nphi, range=grid_range, nfp=nfp
+                    )
                 else:
                     kwargs["quadpoints_phi"] = self.quadpoints_phi
             else:
                 kwargs["quadpoints_phi"] = quadpoints_phi
         # create new surface in old resolution
-        surf = SurfaceRZFourier(mpol=mpol, ntor=ntor, nfp=nfp, stellsym=stellsym,
-                                **kwargs)
-        surf.x[:] = 0 
+        surf = SurfaceRZFourier(
+            mpol=mpol, ntor=ntor, nfp=nfp, stellsym=stellsym, **kwargs
+        )
+        surf.x[:] = 0
 
         # copy coefficients to the new surface
-        for m in range(0, min(mpol, self.mpol)+1):
+        for m in range(0, min(mpol, self.mpol) + 1):
             this_nmax = min(ntor, self.ntor)
             if m == 0:
                 this_nmin = 0
-            else: 
+            else:
                 this_nmin = -this_nmax
-            for n in range(this_nmin, this_nmax+1):
+            for n in range(this_nmin, this_nmax + 1):
                 surf.set_rc(m, n, self.get_rc(m, n))
                 surf.set_zs(m, n, self.get_zs(m, n))
                 if not surf.stellsym and not self.stellsym:
@@ -603,10 +662,10 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
     def change_resolution(self, mpol, ntor):
         """
         return a new surface with Fourier resolution mpol, ntor
-        Args: 
+        Args:
             mpol: new poloidal mode number
             ntor: new toroidal mode number
-        Returns: 
+        Returns:
             surf: A new SurfaceRZFourier object with the specified resolution.
         """
         return self.copy(mpol=mpol, ntor=ntor)
@@ -618,21 +677,24 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         return self
 
     def __repr__(self):
-        return self.name + f" (nfp={self.nfp}, stellsym={self.stellsym}, " + \
-            f"mpol={self.mpol}, ntor={self.ntor})"
+        return (
+            self.name
+            + f" (nfp={self.nfp}, stellsym={self.stellsym}, "
+            + f"mpol={self.mpol}, ntor={self.ntor})"
+        )
 
     def _validate_mn(self, m, n):
         """
         Check whether `m` and `n` are in the allowed range.
         """
         if m < 0:
-            raise IndexError('m must be >= 0')
+            raise IndexError("m must be >= 0")
         if m > self.mpol:
-            raise IndexError('m must be <= mpol')
+            raise IndexError("m must be <= mpol")
         if n > self.ntor:
-            raise IndexError('n must be <= ntor')
+            raise IndexError("n must be <= ntor")
         if n < -self.ntor:
-            raise IndexError('n must be >= -ntor')
+            raise IndexError("n must be >= -ntor")
 
     def get_rc(self, m, n):
         """
@@ -647,7 +709,8 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         if self.stellsym:
             return ValueError(
-                'rs does not exist for this stellarator-symmetric surface.')
+                "rs does not exist for this stellarator-symmetric surface."
+            )
         self._validate_mn(m, n)
         return self.rs[m, n + self.ntor]
 
@@ -657,7 +720,8 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         if self.stellsym:
             return ValueError(
-                'zc does not exist for this stellarator-symmetric surface.')
+                "zc does not exist for this stellarator-symmetric surface."
+            )
         self._validate_mn(m, n)
         return self.zc[m, n + self.ntor]
 
@@ -682,7 +746,8 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         if self.stellsym:
             return ValueError(
-                'rs does not exist for this stellarator-symmetric surface.')
+                "rs does not exist for this stellarator-symmetric surface."
+            )
         self._validate_mn(m, n)
         self.rs[m, n + self.ntor] = val
         self.local_full_x = self.get_dofs()
@@ -693,7 +758,8 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         if self.stellsym:
             return ValueError(
-                'zc does not exist for this stellarator-symmetric surface.')
+                "zc does not exist for this stellarator-symmetric surface."
+            )
         self._validate_mn(m, n)
         self.zc[m, n + self.ntor] = val
         self.local_full_x = self.get_dofs()
@@ -724,13 +790,13 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
             if m == 0 and nmin < 0:
                 this_nmin = 0
             for n in range(this_nmin, nmax + 1):
-                fn(f'rc({m},{n})')
+                fn(f"rc({m},{n})")
                 if m > 0 or n != 0:
-                    fn(f'zs({m},{n})')
+                    fn(f"zs({m},{n})")
                 if not self.stellsym:
-                    fn(f'zc({m},{n})')
+                    fn(f"zc({m},{n})")
                     if m > 0 or n != 0:
-                        fn(f'rs({m},{n})')
+                        fn(f"rs({m},{n})")
 
     def recompute_bell(self, parent=None):
         self.invalidate_cache()
@@ -756,13 +822,13 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         files. The result will be returned as a string. For saving a
         file, see the ``write_nml()`` function.
         """
-        nml = ''
-        nml += '&INDATA\n'
+        nml = ""
+        nml += "&INDATA\n"
         if self.stellsym:
-            nml += 'LASYM = .FALSE.\n'
+            nml += "LASYM = .FALSE.\n"
         else:
-            nml += 'LASYM = .TRUE.\n'
-        nml += f'NFP = {self.nfp}\n'
+            nml += "LASYM = .TRUE.\n"
+        nml += f"NFP = {self.nfp}\n"
 
         for m in range(self.mpol + 1):
             nmin = -self.ntor
@@ -773,12 +839,12 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                 zs = self.get_zs(m, n)
                 if np.abs(rc) > 0 or np.abs(zs) > 0:
                     nml += f"RBC({n:4d},{m:4d}) ={rc:23.15e},    ZBS({n:4d},{m:4d}) ={zs:23.15e}\n"
-                if (not self.stellsym):
+                if not self.stellsym:
                     rs = self.get_rs(m, n)
                     zc = self.get_zc(m, n)
                     if np.abs(rs) > 0 or np.abs(zc) > 0:
                         nml += f"RBS({n:4d},{m:4d}) ={rs:23.15e},    ZBC({n:4d},{m:4d}) ={zc:23.15e}\n"
-        nml += '/\n'
+        nml += "/\n"
         return nml
 
     def write_nml(self, filename: str):
@@ -791,7 +857,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         Args:
             filename: Name of the file to write.
         """
-        with open(filename, 'w') as f:
+        with open(filename, "w") as f:
             f.write(self.get_nml())
 
     def extend_via_normal(self, distance):
@@ -805,15 +871,19 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
             distance: The distance to extend the surface.
         """
         if len(self.quadpoints_phi) < 2 * self.ntor + 1:
-            raise RuntimeError("Number of phi quadrature points should be at least 2 * ntor + 1")
+            raise RuntimeError(
+                "Number of phi quadrature points should be at least 2 * ntor + 1"
+            )
         if len(self.quadpoints_theta) < 2 * self.mpol + 1:
-            raise RuntimeError("Number of theta quadrature points should be at least 2 * mpol + 1")
+            raise RuntimeError(
+                "Number of theta quadrature points should be at least 2 * mpol + 1"
+            )
 
         # Generate points that are a uniform distance from the surface, though
         # at irregular phi values:
         points = (self.gamma() + self.unitnormal() * distance).reshape((-1, 3))
 
-        R = np.sqrt(points[:, 0]**2 + points[:, 1]**2)
+        R = np.sqrt(points[:, 0] ** 2 + points[:, 1] ** 2)
         phi = np.arctan2(points[:, 1], points[:, 0])
         Z = points[:, 2]
         n_phi = len(self.quadpoints_phi)
@@ -823,8 +893,14 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         # Evaluate the basis functions at the new (phi, theta) points:
         n_cos_dofs = (2 * self.ntor + 1) * self.mpol + self.ntor + 1
-        cos_terms = np.cos(self.m[None, :n_cos_dofs] * theta[:, None] - self.nfp * self.n[None, :n_cos_dofs] * phi[:, None])
-        sin_terms = np.sin(self.m[None, 1:n_cos_dofs] * theta[:, None] - self.nfp * self.n[None, 1:n_cos_dofs] * phi[:, None])
+        cos_terms = np.cos(
+            self.m[None, :n_cos_dofs] * theta[:, None]
+            - self.nfp * self.n[None, :n_cos_dofs] * phi[:, None]
+        )
+        sin_terms = np.sin(
+            self.m[None, 1:n_cos_dofs] * theta[:, None]
+            - self.nfp * self.n[None, 1:n_cos_dofs] * phi[:, None]
+        )
 
         if self.stellsym:
             R_basis_funcs = cos_terms
@@ -839,59 +915,73 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         # A solution suggested by Ken Hammond is to call the function a 2nd time
         # if it fails the first time. Ref:
         # https://github.com/hiddenSymmetries/simsopt/pull/467#issuecomment-2691164408
-        try:
-            R_dofs = np.linalg.lstsq(R_basis_funcs, R, rcond=None)[0]
-        except np.linalg.LinAlgError:
-            # Try a second time
-            R_dofs = np.linalg.lstsq(R_basis_funcs, R, rcond=None)[0]
+        def _lstsq_robust(A, b: np.ndarray) -> np.ndarray:
+            try:
+                return np.linalg.lstsq(A, b, rcond=None)[0]
+            except np.linalg.LinAlgError:
+                return np.linalg.lstsq(A, b, rcond=None)[0]
 
-        try:
-            Z_dofs = np.linalg.lstsq(Z_basis_funcs, Z, rcond=None)[0]
-        except np.linalg.LinAlgError:
-            # Try a second time
-            Z_dofs = np.linalg.lstsq(Z_basis_funcs, Z, rcond=None)[0]
+        if self.stellsym:
+            R_dofs = _lstsq_robust(R_basis_funcs, R)
+            Z_dofs = _lstsq_robust(Z_basis_funcs, Z)
+        else:
+            # R and Z use the same basis: one factorization, two right-hand sides.
+            rhs = np.column_stack((R, Z))
+            coefs = _lstsq_robust(R_basis_funcs, rhs)
+            R_dofs = coefs[:, 0]
+            Z_dofs = coefs[:, 1]
 
         self.x = np.concatenate((R_dofs, Z_dofs))
 
-    def fourier_transform_scalar(self, scalar, mpol=None, ntor=None, normalization=None, **kwargs):
+    def fourier_transform_scalar(
+        self, scalar, mpol=None, ntor=None, normalization=None, **kwargs
+    ):
         r"""
         Compute the Fourier components of a scalar on the surface. The scalar
-        is evaluated at the quadrature points on the surface. 
-        The Fourier uses the conventions of the ``SurfaceRZFourier`` series, 
+        is evaluated at the quadrature points on the surface.
+        The Fourier uses the conventions of the ``SurfaceRZFourier`` series,
         with ``npol`` going from ``-ntor`` to ``ntor`` and ``mpol`` from 0 to ``mpol``
-        i.e.: 
+        i.e.:
 
         .. math::
             f(\theta, \phi) = \sum_{m=0}^{mpol} \sum_{n=-npol}^{npol} A^{mn}_s \sin(m\theta - n N_{fp} \phi)
             + A^{mn}_c \cos(m\theta - n N_{fp} \phi)
 
         Where the cosine series is only evaluated if the surface is not stellarator
-        symmetric (if the scalar does not adhere to the symmetry of the surface, 
+        symmetric (if the scalar does not adhere to the symmetry of the surface,
         request the cosine series by setting the kwarg ``stellsym=False``)
         By default, the poloidal and toroidal resolution are the same as those
-        of the surface, but different quantities can be specified in the kwargs. 
+        of the surface, but different quantities can be specified in the kwargs.
 
         Args:
             scalar: 2D array of shape ``(numquadpoints_phi, numquadpoints_theta)``.
             mpol: maximum poloidal mode number of the transform, if ``None``,
                 the mpol attribute of the surface is used.
-            ntor: maximum toroidal mode number of the transform if ``None``, 
+            ntor: maximum toroidal mode number of the transform if ``None``,
                 the ntor attribute of the surface is used.
-            normalization: (optional) Fourier transform normalization. Can be: 
+            normalization: (optional) Fourier transform normalization. Can be:
               ``None``: forward and back transform are not normalized.
               ``float``: forward transform is divided by this number.
-            stellsym: (optional) boolean to override the stellsym attribute 
+            stellsym: (optional) boolean to override the stellsym attribute
                 of the surface if you want to force the calculation of the
                 cosine series
 
         Returns:
             2-element tuple ``(A_mns, A_mnc)``, where ``A_mns`` is a 2D array of shape ``(mpol+1, 2*ntor+1)`` containing the sine
-            coefficients, and ``A_mnc`` is a  2D array of shape ``(mpol+1, 2*ntor+1)`` containing the cosine coefficients 
+            coefficients, and ``A_mnc`` is a  2D array of shape ``(mpol+1, 2*ntor+1)`` containing the cosine coefficients
             (these are zero if the surface is stellarator symmetric).
         """
-        assert scalar.shape[0] == self.quadpoints_phi.size, "scalar must be evaluated at the quadrature points on the surface.\n the scalar you passed in has shape {}".format(scalar.shape)
-        assert scalar.shape[1] == self.quadpoints_theta.size, "scalar must be evaluated at the quadrature points on the surface.\n the scalar you passed in has shape {}".format(scalar.shape)
-        stellsym = kwargs.pop('stellsym', self.stellsym)
+        assert scalar.shape[0] == self.quadpoints_phi.size, (
+            "scalar must be evaluated at the quadrature points on the surface.\n the scalar you passed in has shape {}".format(
+                scalar.shape
+            )
+        )
+        assert scalar.shape[1] == self.quadpoints_theta.size, (
+            "scalar must be evaluated at the quadrature points on the surface.\n the scalar you passed in has shape {}".format(
+                scalar.shape
+            )
+        )
+        stellsym = kwargs.pop("stellsym", self.stellsym)
         if mpol is None:
             try:
                 mpol = self.mpol
@@ -909,22 +999,24 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         factor = 2.0 / (ntheta_grid * nphi_grid)
 
-        phi2d, theta2d = np.meshgrid(2 * np.pi * self.quadpoints_phi,
-                                     2 * np.pi * self.quadpoints_theta,
-                                     indexing="ij")
+        phi2d, theta2d = np.meshgrid(
+            2 * np.pi * self.quadpoints_phi,
+            2 * np.pi * self.quadpoints_theta,
+            indexing="ij",
+        )
 
         for m in range(mpol + 1):
             nmin = -ntor
             if m == 0:
                 nmin = 1
-            for n in range(nmin, ntor+1):
+            for n in range(nmin, ntor + 1):
                 angle = m * theta2d - n * self.nfp * phi2d
                 sinangle = np.sin(angle)
                 factor2 = factor
                 # The next 2 lines ensure inverse Fourier transform(Fourier transform) = identity
-                if np.mod(ntheta_grid, 2) == 0 and m == (ntheta_grid/2):
+                if np.mod(ntheta_grid, 2) == 0 and m == (ntheta_grid / 2):
                     factor2 = factor2 / 2
-                if np.mod(nphi_grid, 2) == 0 and abs(n) == (nphi_grid/2):
+                if np.mod(nphi_grid, 2) == 0 and abs(n) == (nphi_grid / 2):
                     factor2 = factor2 / 2
                 A_mns[m, n + ntor] = np.sum(scalar * sinangle * factor2)
                 if not stellsym:
@@ -941,7 +1033,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         return A_mns, A_mnc
 
-    def inverse_fourier_transform_scalar(self, A_mns, A_mnc, normalization=None, **kwargs):
+    def inverse_fourier_transform_scalar(
+        self, A_mns, A_mnc, normalization=None, **kwargs
+    ):
         r"""
         Compute the inverse Fourier transform of a scalar on the surface, specified by the Fourier coefficients. The quantity must be
         is evaluated at the quadrature points on the surface. The Fourier
@@ -951,7 +1045,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         *Arguments*:
 
         - A_mns: 2D array of shape (mpol+1, 2*ntor+1) containing the sine coefficients
-        - A_mnc: 2D array of shape (mpol+1, 2*ntor+1) containing the cosine coefficients 
+        - A_mnc: 2D array of shape (mpol+1, 2*ntor+1) containing the cosine coefficients
             (these are zero if the surface is stellarator symmetric)
 
         *Optional keyword arguments*:
@@ -964,20 +1058,22 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         mpol = A_mns.shape[0] - 1
         ntor = int((A_mns.shape[1] - 1) / 2)
-        stellsym = kwargs.pop('stellsym', self.stellsym)
+        stellsym = kwargs.pop("stellsym", self.stellsym)
         ntheta_grid = len(self.quadpoints_theta)
         nphi_grid = len(self.quadpoints_phi)
 
-        phi2d, theta2d = np.meshgrid(2 * np.pi * self.quadpoints_phi,
-                                     2 * np.pi * self.quadpoints_theta,
-                                     indexing="ij")
+        phi2d, theta2d = np.meshgrid(
+            2 * np.pi * self.quadpoints_phi,
+            2 * np.pi * self.quadpoints_theta,
+            indexing="ij",
+        )
 
         scalars = np.zeros((nphi_grid, ntheta_grid))
         for m in range(mpol + 1):
             nmin = -ntor
             if m == 0:
                 nmin = 1
-            for n in range(nmin, ntor+1):
+            for n in range(nmin, ntor + 1):
                 angle = m * theta2d - n * self.nfp * phi2d
                 sinangle = np.sin(angle)
                 scalars = scalars + A_mns[m, n + ntor] * sinangle
@@ -1133,7 +1229,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         x = self.local_full_x
         # Flip the sign of all modes with odd n:
-        odd_ns = (self.n % 2 == 1)
+        odd_ns = self.n % 2 == 1
         x[odd_ns] = -x[odd_ns]
         self.local_full_x = x
 
@@ -1146,10 +1242,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         """
         x = self.local_full_x
         # Flip the sign of all modes with odd m:
-        odd_ms = (self.m % 2 == 1)
+        odd_ms = self.m % 2 == 1
         x[odd_ms] = -x[odd_ms]
         self.local_full_x = x
-
 
     def spectral_width(self, power=2):
         r"""
@@ -1181,7 +1276,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         Returns:
             The spectral width as a float.
         """
-        return 0.5 * np.sum((self.x / self.minor_radius())**2 * (self.m**2 + self.n**2)**power)
+        return 0.5 * np.sum(
+            (self.x / self.minor_radius()) ** 2 * (self.m**2 + self.n**2) ** power
+        )
 
     def condense_spectrum(
         self,
@@ -1270,7 +1367,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         ``spectral_width_reduction``. The former indicates how well the surface
         shape was preserved, and the latter indicates how much the spectral
         width was reduced by the optimization.
-        
+
         The function
         :func:`~simsopt.geo.plot_spectral_condensation` is
         useful for visualizing the results of spectral condensation.
@@ -1304,7 +1401,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
             data: dict
                 A dictionary containing the following data from the
                 optimization:
-                
+
                 - "method" (str):
                     The optimization algorithm used (value of the ``method`` argument).
                 - "maxiter" (int):
@@ -1347,7 +1444,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                 - "elapsed_time" (float):
                     Wall-clock time in seconds spent in the condensation routine.
                 - "minor_radius" (float):
-                    The minor radius used to normalize R and Z errors and 
+                    The minor radius used to normalize R and Z errors and
                     the objective.
                 - "theta1_1d" (ndarray, shape (n_theta*n_phi,)):
                     The flattened original poloidal angles (θ₁) corresponding to the
@@ -1372,8 +1469,10 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                     The Fourier amplitudes of the surface after condensation.
         """
         if not self.stellsym:
-            raise NotImplementedError("condense_spectrum is only implemented for stellarator-symmetric surfaces")
-        
+            raise NotImplementedError(
+                "condense_spectrum is only implemented for stellarator-symmetric surfaces"
+            )
+
         mpol = self.mpol
         ntor = self.ntor
         nfp = self.nfp
@@ -1390,7 +1489,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         # Avoid error about finding dphi when n_phi=1:
         n_phi = max(n_phi, 2)
 
-        method_is_lstsq = (method.lower() in ["trf", "lm", "dogleg"])
+        method_is_lstsq = method.lower() in ["trf", "lm", "dogleg"]
         if maxiter is None:
             if method_is_lstsq:
                 maxiter = 25
@@ -1433,69 +1532,119 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         # Evaluate the surface shape on uniformly spaced points in theta1 and phi:
         gamma = surf.gamma()
-        R = np.sqrt(gamma[:, :, 0]**2 + gamma[:, :, 1]**2)
+        R = np.sqrt(gamma[:, :, 0] ** 2 + gamma[:, :, 1] ** 2)
         Z = gamma[:, :, 2]
         R_to_fit = R.flatten()
         Z_to_fit = Z.flatten()
 
-        theta1_2d, phi_2d = np.meshgrid(2 * np.pi * surf.quadpoints_theta, 2 * np.pi * surf.quadpoints_phi)
+        theta1_2d, phi_2d = np.meshgrid(
+            2 * np.pi * surf.quadpoints_theta, 2 * np.pi * surf.quadpoints_phi
+        )
         assert theta1_2d.shape == (n_phi, n_theta)
         phi_1d = phi_2d.flatten()
         theta1_1d = theta1_2d.flatten()
 
         def lambda_Fourier_to_grid(lambda_dofs, m_for_lambda, n_for_lambda, x_scale):
             scaled_lambda_dofs = lambda_dofs * x_scale
-            lambd = jnp.sum(scaled_lambda_dofs[None, :] * jnp.sin(
-                m_for_lambda[None, :] * theta1_1d[:, None] - nfp * n_for_lambda[None, :] * phi_1d[:, None]
-            ), axis=1)
+            lambd = jnp.sum(
+                scaled_lambda_dofs[None, :]
+                * jnp.sin(
+                    m_for_lambda[None, :] * theta1_1d[:, None]
+                    - nfp * n_for_lambda[None, :] * phi_1d[:, None]
+                ),
+                axis=1,
+            )
             theta2_1d = theta1_1d + lambd
             return theta2_1d
-        
+
         # Same as compute_r2mn_and_z2mn, but also returns theta2_1d for use in computing R and Z errors
         def _compute_r2mn_and_z2mn(lambda_dofs, m_for_lambda, n_for_lambda, x_scale):
-            theta2_1d = lambda_Fourier_to_grid(lambda_dofs, m_for_lambda, n_for_lambda, x_scale)
+            theta2_1d = lambda_Fourier_to_grid(
+                lambda_dofs, m_for_lambda, n_for_lambda, x_scale
+            )
 
             scaled_lambda_dofs = lambda_dofs * x_scale
-            d_theta2_d_theta1 = 1 + jnp.sum(scaled_lambda_dofs[None, :] * m_for_lambda[None, :] * jnp.cos(
-                m_for_lambda[None, :] * theta1_1d[:, None] - nfp * n_for_lambda[None, :] * phi_1d[:, None]
-            ), axis=1)
+            d_theta2_d_theta1 = 1 + jnp.sum(
+                scaled_lambda_dofs[None, :]
+                * m_for_lambda[None, :]
+                * jnp.cos(
+                    m_for_lambda[None, :] * theta1_1d[:, None]
+                    - nfp * n_for_lambda[None, :] * phi_1d[:, None]
+                ),
+                axis=1,
+            )
             # Order of indices: (point index, mode index)
-            Rmnc_new = 2 * jnp.mean(d_theta2_d_theta1[:, None] * R_to_fit[:, None] * jnp.cos(
-                m_for_R[None, :] * theta2_1d[:, None] - nfp * n_for_R[None, :] * phi_1d[:, None]
-            ), axis=0)
+            Rmnc_new = 2 * jnp.mean(
+                d_theta2_d_theta1[:, None]
+                * R_to_fit[:, None]
+                * jnp.cos(
+                    m_for_R[None, :] * theta2_1d[:, None]
+                    - nfp * n_for_R[None, :] * phi_1d[:, None]
+                ),
+                axis=0,
+            )
             Rmnc_new = Rmnc_new.at[0].set(Rmnc_new[0] * 0.5)
-            Zmns_new = 2 * jnp.mean(d_theta2_d_theta1[:, None] * Z_to_fit[:, None] * jnp.sin(
-                m_for_Z[None, :] * theta2_1d[:, None] - nfp * n_for_Z[None, :] * phi_1d[:, None]
-            ), axis=0)
+            Zmns_new = 2 * jnp.mean(
+                d_theta2_d_theta1[:, None]
+                * Z_to_fit[:, None]
+                * jnp.sin(
+                    m_for_Z[None, :] * theta2_1d[:, None]
+                    - nfp * n_for_Z[None, :] * phi_1d[:, None]
+                ),
+                axis=0,
+            )
 
             return Rmnc_new, Zmns_new, theta2_1d
-        
+
         def compute_r2mn_and_z2mn(lambda_dofs, m_for_lambda, n_for_lambda, x_scale):
-            Rmnc_new, Zmns_new, _ = _compute_r2mn_and_z2mn(lambda_dofs, m_for_lambda, n_for_lambda, x_scale)
+            Rmnc_new, Zmns_new, _ = _compute_r2mn_and_z2mn(
+                lambda_dofs, m_for_lambda, n_for_lambda, x_scale
+            )
             return jnp.concatenate([Rmnc_new, Zmns_new])
 
         @jax.jit
         def compute_RZ_errors(lambda_dofs, m_for_lambda, n_for_lambda, x_scale):
-            Rmnc_new, Zmns_new, theta2_1d = _compute_r2mn_and_z2mn(lambda_dofs, m_for_lambda, n_for_lambda, x_scale)
-            R_new = jnp.sum(Rmnc_new[None, :] * jnp.cos(m_for_R[None, :] * theta2_1d[:, None] - nfp * n_for_R[None, :] * phi_1d[:, None]), axis=1)
-            Z_new = jnp.sum(Zmns_new[None, :] * jnp.sin(m_for_Z[None, :] * theta2_1d[:, None] - nfp * n_for_Z[None, :] * phi_1d[:, None]), axis=1)
+            Rmnc_new, Zmns_new, theta2_1d = _compute_r2mn_and_z2mn(
+                lambda_dofs, m_for_lambda, n_for_lambda, x_scale
+            )
+            R_new = jnp.sum(
+                Rmnc_new[None, :]
+                * jnp.cos(
+                    m_for_R[None, :] * theta2_1d[:, None]
+                    - nfp * n_for_R[None, :] * phi_1d[:, None]
+                ),
+                axis=1,
+            )
+            Z_new = jnp.sum(
+                Zmns_new[None, :]
+                * jnp.sin(
+                    m_for_Z[None, :] * theta2_1d[:, None]
+                    - nfp * n_for_Z[None, :] * phi_1d[:, None]
+                ),
+                axis=1,
+            )
             # Scale errors so the constraints are at +/- 1:
             R_error = (R_new - R_to_fit) / (minor_radius * epsilon)
             Z_error = (Z_new - Z_to_fit) / (minor_radius * epsilon)
             return jnp.concatenate([R_error, Z_error])
 
         def compute_max_RZ_error(lambda_dofs, m_for_lambda, n_for_lambda, x_scale):
-            RZ_errors = compute_RZ_errors(lambda_dofs, m_for_lambda, n_for_lambda, x_scale)
+            RZ_errors = compute_RZ_errors(
+                lambda_dofs, m_for_lambda, n_for_lambda, x_scale
+            )
             max_error = np.max(np.abs(RZ_errors)) * epsilon
             if verbose:
-                print(f"(Max error in fitting R or Z of points) / minor_radius: {max_error:.3e}", flush=True)
+                print(
+                    f"(Max error in fitting R or Z of points) / minor_radius: {max_error:.3e}",
+                    flush=True,
+                )
             return max_error
 
         @jax.jit
         def residuals_func(lambda_dofs, m_for_lambda, n_for_lambda, x_scale):
             """Objective function for spectral width."""
             x = compute_r2mn_and_z2mn(lambda_dofs, m_for_lambda, n_for_lambda, x_scale)
-            residuals = (x / minor_radius) * (surf.m**2 + surf.n**2)**(power * 0.5)
+            residuals = (x / minor_radius) * (surf.m**2 + surf.n**2) ** (power * 0.5)
             # The first residual is always zero (since m=n=0) so there is no need to include it:
             return residuals[1:]
 
@@ -1506,11 +1655,17 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         iteration_counter = {"count": 0}
 
-        def scalar_objective_with_printing(lambda_dofs, m_for_lambda, n_for_lambda, x_scale):
-            obj_value = scalar_objective(lambda_dofs, m_for_lambda, n_for_lambda, x_scale)
+        def scalar_objective_with_printing(
+            lambda_dofs, m_for_lambda, n_for_lambda, x_scale
+        ):
+            obj_value = scalar_objective(
+                lambda_dofs, m_for_lambda, n_for_lambda, x_scale
+            )
             iteration_counter["count"] += 1
             obj_value_float = obj_value.astype(float)
-            print(f"Iteration {iteration_counter['count']:5}: objective = {obj_value_float:.6e}")
+            print(
+                f"Iteration {iteration_counter['count']:5}: objective = {obj_value_float:.6e}"
+            )
             return obj_value
 
         n_constraints = R_to_fit.size + Z_to_fit.size
@@ -1542,7 +1697,10 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                 print("*" * line_width, flush=True)
 
             # Select only lambda dofs with |m|, |n| <= mnmax:
-            indices_to_keep = np.where((np.abs(m_for_lambda_full) <= mnmax) & (np.abs(n_for_lambda_full) <= mnmax))[0]
+            indices_to_keep = np.where(
+                (np.abs(m_for_lambda_full) <= mnmax)
+                & (np.abs(n_for_lambda_full) <= mnmax)
+            )[0]
             m_for_lambda = m_for_lambda_full[indices_to_keep]
             n_for_lambda = n_for_lambda_full[indices_to_keep]
             x_scale = compute_x_scale(m_for_lambda, n_for_lambda)
@@ -1552,7 +1710,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                 # Copy lambda_dofs_optimized from the previous Fourier
                 # continuation step to the new set of dofs:
                 for j_new, (m_new, n_new) in enumerate(zip(m_for_lambda, n_for_lambda)):
-                    for j_old, (m_old, n_old) in enumerate(zip(previous_m_for_lambda, previous_n_for_lambda)):
+                    for j_old, (m_old, n_old) in enumerate(
+                        zip(previous_m_for_lambda, previous_n_for_lambda)
+                    ):
                         if (m_new == m_old) and (n_new == n_old):
                             lambda_dofs[j_new] = lambda_dofs_optimized[j_old]
 
@@ -1570,7 +1730,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                     method=method,
                     verbose=verbose_for_least_squares,
                     max_nfev=maxiter,
-                    args=(m_for_lambda, n_for_lambda, x_scale)
+                    args=(m_for_lambda, n_for_lambda, x_scale),
                 )
             elif method in ["SLSQP", "trust-constr"]:
                 # Constrained optimization methods:
@@ -1578,7 +1738,9 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                     lambda x: compute_RZ_errors(x, m_for_lambda, n_for_lambda, x_scale),
                     -jnp.ones(n_constraints),  # Lower bounds
                     jnp.ones(n_constraints),  # Upper bounds
-                    jac=lambda x: jac_constraints(x, m_for_lambda, n_for_lambda, x_scale),
+                    jac=lambda x: jac_constraints(
+                        x, m_for_lambda, n_for_lambda, x_scale
+                    ),
                 )
 
                 options = {"maxiter": maxiter}
@@ -1600,7 +1762,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                     method=method,
                     constraints=constraints,
                     options=options,
-                    args=(m_for_lambda, n_for_lambda, x_scale)
+                    args=(m_for_lambda, n_for_lambda, x_scale),
                 )
             else:
                 # Other non-least-squares methods:
@@ -1616,13 +1778,15 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
                     jac=grad_objective,
                     method=method,
                     options={"maxiter": maxiter, "disp": verbose},
-                    args=(m_for_lambda, n_for_lambda, x_scale)
+                    args=(m_for_lambda, n_for_lambda, x_scale),
                 )
 
             lambda_dofs_optimized = res.x
             previous_m_for_lambda = m_for_lambda
             previous_n_for_lambda = n_for_lambda
-            max_RZ_error = compute_max_RZ_error(lambda_dofs_optimized, m_for_lambda, n_for_lambda, x_scale)
+            max_RZ_error = compute_max_RZ_error(
+                lambda_dofs_optimized, m_for_lambda, n_for_lambda, x_scale
+            )
 
         elapsed_time = time.time() - start_time
         if verbose:
@@ -1631,10 +1795,16 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
 
         # Update surface with optimized parameters
         lambda_dofs_optimized = res.x
-        theta_optimized = lambda_Fourier_to_grid(lambda_dofs_optimized, m_for_lambda_full, n_for_lambda_full, x_scale_full)
-        final_objective = scalar_objective(lambda_dofs_optimized, m_for_lambda_full, n_for_lambda_full, x_scale_full)
+        theta_optimized = lambda_Fourier_to_grid(
+            lambda_dofs_optimized, m_for_lambda_full, n_for_lambda_full, x_scale_full
+        )
+        final_objective = scalar_objective(
+            lambda_dofs_optimized, m_for_lambda_full, n_for_lambda_full, x_scale_full
+        )
         surf_to_return = self.copy()
-        surf_to_return.local_full_x = compute_r2mn_and_z2mn(lambda_dofs_optimized, m_for_lambda_full, n_for_lambda_full, x_scale_full)
+        surf_to_return.local_full_x = compute_r2mn_and_z2mn(
+            lambda_dofs_optimized, m_for_lambda_full, n_for_lambda_full, x_scale_full
+        )
 
         data = {
             "method": method,
@@ -1664,9 +1834,12 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         }
         return surf_to_return, data
 
-    return_fn_map = {'area': sopp.SurfaceRZFourier.area,
-                     'volume': sopp.SurfaceRZFourier.volume,
-                     'aspect-ratio': Surface.aspect_ratio}
+    return_fn_map = {
+        "area": sopp.SurfaceRZFourier.area,
+        "volume": sopp.SurfaceRZFourier.volume,
+        "aspect-ratio": Surface.aspect_ratio,
+    }
+
 
 def plot_spectral_condensation(surf1, surf2, data, show=True):
     """Plot results from :func:`~simsopt.geo.SurfaceRZFourier.condense_spectrum`.
@@ -1691,7 +1864,7 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
     data : dict
         The data dictionary returned by :func:`~simsopt.geo.SurfaceRZFourier.condense_spectrum`.
     show : bool, optional
-        Whether to call matplotlib's ``show()`` function. Default is True.    
+        Whether to call matplotlib's ``show()`` function. Default is True.
 
     Returns
     -------
@@ -1710,7 +1883,9 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
     n_theta_points_for_plot = 20
     decimate = 6
 
-    quadpoints_theta_for_plotting = np.linspace(0, 1, n_theta_points_for_plot * decimate + 1)
+    quadpoints_theta_for_plotting = np.linspace(
+        0, 1, n_theta_points_for_plot * decimate + 1
+    )
     quadpoints_phi_for_plotting = np.linspace(0, 1 / nfp, 8, endpoint=False)
     surf_theta1_for_plotting = SurfaceRZFourier(
         mpol=surf1.mpol,
@@ -1741,22 +1916,24 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
         color = cmap(float(j_phi) / n_phi)
         plt.plot(
             data["theta1_2d"][j_phi, :],
-            (data["theta_optimized"] - data["theta1_1d"]).reshape((n_phi, n_theta))[j_phi, :],
-            '.-',
+            (data["theta_optimized"] - data["theta1_1d"]).reshape((n_phi, n_theta))[
+                j_phi, :
+            ],
+            ".-",
             color=color,
         )
 
-    plt.xlabel('theta1')
-    plt.ylabel('lambda')
+    plt.xlabel("theta1")
+    plt.ylabel("lambda")
 
     plt.subplot(n_rows, n_cols, 2)
     plt.semilogy(
-        np.sqrt(data["m"]**2 + data["n"]**2),
+        np.sqrt(data["m"] ** 2 + data["n"] ** 2),
         np.abs(data["lambda_mn"] * data["x_scale"]),
-        '.g',
+        ".g",
     )
-    plt.xlabel('sqrt(m^2 + n^2)')
-    plt.ylabel('Mode amplitudes of lambda')
+    plt.xlabel("sqrt(m^2 + n^2)")
+    plt.ylabel("Mode amplitudes of lambda")
     plt.ylim(1e-16, 2e1)
 
     plt.tight_layout()
@@ -1769,10 +1946,10 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
 
     # Left half: 2x2 small subplots
     axes_small = [
-        fig.add_subplot(gs[0, 0], aspect='equal'),
-        fig.add_subplot(gs[0, 1], aspect='equal'),
-        fig.add_subplot(gs[1, 0], aspect='equal'),
-        fig.add_subplot(gs[1, 1], aspect='equal'),
+        fig.add_subplot(gs[0, 0], aspect="equal"),
+        fig.add_subplot(gs[0, 1], aspect="equal"),
+        fig.add_subplot(gs[1, 0], aspect="equal"),
+        fig.add_subplot(gs[1, 1], aspect="equal"),
     ]
 
     colors = ["b", "r"]
@@ -1788,18 +1965,27 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
         for j_rz in range(2):
             if j_rz == 0:
                 data_to_plot = surf_to_plot.rc
-                data_name = 'Rmnc'
+                data_name = "Rmnc"
             else:
                 data_to_plot = surf_to_plot.zs
-                data_name = 'Zmns'
+                data_name = "Zmns"
 
             ax = axes_small[j_surf + j_rz * 2]
-            extent = (-surf_to_plot.ntor - 0.5, surf_to_plot.ntor + 0.5, surf_to_plot.mpol + 0.5, -0.5)
-            im = ax.imshow(np.abs(data_to_plot / minor_radius), extent=extent, norm=mpl_colors.LogNorm(vmin=1e-6, vmax=10))
+            extent = (
+                -surf_to_plot.ntor - 0.5,
+                surf_to_plot.ntor + 0.5,
+                surf_to_plot.mpol + 0.5,
+                -0.5,
+            )
+            im = ax.imshow(
+                np.abs(data_to_plot / minor_radius),
+                extent=extent,
+                norm=mpl_colors.LogNorm(vmin=1e-6, vmax=10),
+            )
             fig.colorbar(im, ax=ax)
             ax.set_title(data_name + " / minor_radius, " + short_name)
-            ax.set_xlabel('n / nfp')
-            ax.set_ylabel('m')
+            ax.set_xlabel("n / nfp")
+            ax.set_ylabel("m")
 
     # Right half: one large subplot spanning both rows
     ax_big = fig.add_subplot(gs[:, -1])
@@ -1807,20 +1993,20 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
     plt.semilogy(
         np.sqrt(surf_theta1_for_plotting.m**2 + surf_theta1_for_plotting.n**2),
         np.abs(surf_theta1_for_plotting.x / minor_radius),
-        '+',
+        "+",
         color=colors[0],
-        label='theta1'
+        label="theta1",
     )
     plt.semilogy(
         np.sqrt(surf_theta2_for_plotting.m**2 + surf_theta2_for_plotting.n**2),
         np.abs(surf_theta2_for_plotting.x / minor_radius),
-        'x',
+        "x",
         color=colors[1],
-        label='theta2'
+        label="theta2",
     )
     plt.legend(loc=0)
-    ax_big.set_xlabel('sqrt(m^2 + n^2)')
-    ax_big.set_ylabel('(rc or zs) / minor radius')
+    ax_big.set_xlabel("sqrt(m^2 + n^2)")
+    ax_big.set_ylabel("(rc or zs) / minor radius")
     ax_big.set_ylim(1e-16, 2e1)
 
     plt.suptitle(title_str, fontsize=12)
@@ -1831,7 +2017,9 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
 
     n_rows = 2
     n_cols = 4
-    fig3, axes = plt.subplots(n_rows, n_cols, figsize=figsize, subplot_kw={'aspect': 'equal'})
+    fig3, axes = plt.subplots(
+        n_rows, n_cols, figsize=figsize, subplot_kw={"aspect": "equal"}
+    )
 
     axes = axes.flatten()
 
@@ -1839,24 +2027,30 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
         for j_surf in range(2):
             if j_surf == 0:
                 surf_to_plot = surf_theta1_for_plotting
-                linespec = '-'
-                marker = '+'
-                theta0_marker = 's'
+                linespec = "-"
+                marker = "+"
+                theta0_marker = "s"
             else:
                 surf_to_plot = surf_theta2_for_plotting
-                linespec = ':'
-                marker = 'x'
-                theta0_marker = 'o'
+                linespec = ":"
+                marker = "x"
+                theta0_marker = "o"
 
             gamma = surf_to_plot.gamma()
-            R = np.sqrt(gamma[:, :, 0]**2 + gamma[:, :, 1]**2)
+            R = np.sqrt(gamma[:, :, 0] ** 2 + gamma[:, :, 1] ** 2)
             Z = gamma[:, :, 2]
             color = colors[j_surf]
             axes[j_phi].plot(R[j_phi, :], Z[j_phi, :], linespec, color=color)
             axes[j_phi].plot(R[j_phi, 0], Z[j_phi, 0], theta0_marker, color=color)
-            axes[j_phi].plot(R[j_phi, ::decimate], Z[j_phi, ::decimate], marker, color=color, label=f"theta{j_surf+1}")
+            axes[j_phi].plot(
+                R[j_phi, ::decimate],
+                Z[j_phi, ::decimate],
+                marker,
+                color=color,
+                label=f"theta{j_surf + 1}",
+            )
 
-        axes[j_phi].set_title(f"phi = {j_phi/(8*nfp):.3f} * 2pi")
+        axes[j_phi].set_title(f"phi = {j_phi / (8 * nfp):.3f} * 2pi")
         axes[j_phi].set_xlabel("R")
         axes[j_phi].set_ylabel("Z")
 
@@ -1869,6 +2063,7 @@ def plot_spectral_condensation(surf1, surf2, data, show=True):
         plt.show()
 
     return fig1, fig2, fig3
+
 
 class SurfaceRZPseudospectral(Optimizable):
     """
@@ -1950,26 +2145,26 @@ class SurfaceRZPseudospectral(Optimizable):
             if "x0" not in kwargs:
                 kwargs["x0"] = np.zeros(ndofs)
             else:
-                assert (len(kwargs["x0"]) == ndofs)
+                assert len(kwargs["x0"]) == ndofs
             if "names" not in kwargs:
                 kwargs["names"] = self._make_names()
             else:
-                assert (len(kwargs["names"]) == ndofs)
+                assert len(kwargs["names"]) == ndofs
         else:
-            assert (len(kwargs["dofs"]) == ndofs)
+            assert len(kwargs["dofs"]) == ndofs
         super().__init__(**kwargs)
 
     def _make_names(self):
         """
         Create the list of names for the dofs.
         """
-        names = ['r(0,0)']
-        for dimension in ['r', 'z']:
+        names = ["r(0,0)"]
+        for dimension in ["r", "z"]:
             for jtheta in range(1, self.mpol + 1):
-                names.append(dimension + f'(0,{jtheta})')
+                names.append(dimension + f"(0,{jtheta})")
             for jphi in range(1, self.ntor + 1):
                 for jtheta in range(2 * self.mpol + 1):
-                    names.append(dimension + f'({jphi},{jtheta})')
+                    names.append(dimension + f"({jphi},{jtheta})")
         return names
 
     @classmethod
@@ -1984,8 +2179,10 @@ class SurfaceRZPseudospectral(Optimizable):
               to the ``SurfaceRZPseudospectral`` constructor here.
         """
         if not surff.stellsym:
-            raise RuntimeError('SurfaceRZPseudospectral presently only '
-                               'supports stellarator-symmetric surfaces')
+            raise RuntimeError(
+                "SurfaceRZPseudospectral presently only "
+                "supports stellarator-symmetric surfaces"
+            )
 
         # shorthand:
         mpol = surff.mpol
@@ -1995,8 +2192,13 @@ class SurfaceRZPseudospectral(Optimizable):
 
         # Make a copy of surff with the desired theta and phi points.
         surf_copy = SurfaceRZFourier.from_nphi_ntheta(
-            mpol=mpol, ntor=ntor, nfp=surff.nfp,
-            range='field period', ntheta=ntheta, nphi=nphi)
+            mpol=mpol,
+            ntor=ntor,
+            nfp=surff.nfp,
+            range="field period",
+            ntheta=ntheta,
+            nphi=nphi,
+        )
         surf_copy.x = surff.local_full_x
 
         surf_new = cls(mpol=mpol, ntor=ntor, nfp=surff.nfp, **kwargs)
@@ -2046,14 +2248,14 @@ class SurfaceRZPseudospectral(Optimizable):
         for jtheta in range(1, mpol + 1):
             r[jtheta, 0] = self.x[jtheta]
             r[ntheta - jtheta, 0] = self.x[jtheta]
-            assert self.local_dof_names[jtheta + shift] == f'z(0,{jtheta})'
+            assert self.local_dof_names[jtheta + shift] == f"z(0,{jtheta})"
             z[jtheta, 0] = self.x[jtheta + shift]
             z[ntheta - jtheta, 0] = -self.x[jtheta + shift]
         for jphi in range(1, ntor + 1):
             for jtheta in range(ntheta):
                 index = (jphi - 1) * ntheta + jtheta + mpol + 1
-                assert self.local_dof_names[index] == f'r({jphi},{jtheta})'
-                assert self.local_dof_names[index + shift] == f'z({jphi},{jtheta})'
+                assert self.local_dof_names[index] == f"r({jphi},{jtheta})"
+                assert self.local_dof_names[index + shift] == f"z({jphi},{jtheta})"
                 r[jtheta, jphi] = self.x[index]
                 z[jtheta, jphi] = self.x[index + shift]
                 if jtheta == 0:
@@ -2090,8 +2292,11 @@ class SurfaceRZPseudospectral(Optimizable):
         grid_range = kwargs.pop("range", None)
 
         if ntheta is not None or nphi is not None:
-            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = Surface.get_quadpoints(
-                ntheta=ntheta, nphi=nphi, nfp=self.nfp, range=grid_range)
+            kwargs["quadpoints_phi"], kwargs["quadpoints_theta"] = (
+                Surface.get_quadpoints(
+                    ntheta=ntheta, nphi=nphi, nfp=self.nfp, range=grid_range
+                )
+            )
 
         surf = SurfaceRZFourier(mpol=mpol, ntor=ntor, nfp=self.nfp, **kwargs)
         surf.set_rc(0, 0, np.mean(r))
@@ -2126,7 +2331,7 @@ class SurfaceRZPseudospectral(Optimizable):
         # Map to Fourier space and return a surface with changed resolution
         surf2 = self.to_RZFourier().change_resolution(mpol=mpol, ntor=ntor)
         # Map from Fourier space back to real space:
-        surf3 = SurfaceRZPseudospectral.from_RZFourier(surf2,
-                                                       r_shift=self.r_shift,
-                                                       a_scale=self.a_scale)
+        surf3 = SurfaceRZPseudospectral.from_RZFourier(
+            surf2, r_shift=self.r_shift, a_scale=self.a_scale
+        )
         return surf3

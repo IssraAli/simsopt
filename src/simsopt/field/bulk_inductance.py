@@ -2046,6 +2046,48 @@ def shell_solve_eigenfloor_pure(
     return jnp.linalg.solve(L_reg, f)
 
 
+def shell_solve_eigK_pure(
+    U: jnp.ndarray,
+    lambda_floored: jnp.ndarray,
+    f: jnp.ndarray,
+) -> jnp.ndarray:
+    r"""Solve using a pre-eigendecomposition (same as eigenfloor in exact arithmetic).
+
+    ``alpha = U @ ((U^T f) / lambda_floored)`` with pointwise division on
+    the (possibly truncated) diagonal.
+
+    Args:
+        U: ``(n, k)`` eigenvectors (``k`` may equal ``n`` for full basis).
+        lambda_floored: ``(k,)`` non-negative eigenvalues (already floored).
+        f: ``(n,)`` right-hand side.
+
+    Returns:
+        ``(n,)`` solution ``alpha``.
+    """
+    U = jnp.asarray(U)
+    f = jnp.asarray(f)
+    lam = jnp.asarray(lambda_floored)
+    f_proj = U.T @ f
+    a_proj = f_proj / (lam + 1e-300)
+    return U @ a_proj
+
+
+def shell_eigendecomposition_floored(
+    L: jnp.ndarray,
+    threshold: float = 1e-10,
+    jitter: float = 1e-10,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Eigendecomposition for eigenfloor: ``lam_floored``, ``V``, and ``L_reg``."""
+    L = jnp.asarray(L)
+    lam, V = jnp.linalg.eigh(L)
+    max_abs = jnp.max(jnp.abs(lam))
+    floor = threshold * max_abs
+    lam_f = jnp.maximum(lam, floor)
+    n = L.shape[0]
+    L_reg = (V * lam_f[None, :]) @ V.T + jitter * jnp.eye(n, dtype=L.dtype)
+    return L_reg, V, lam_f
+
+
 def shell_biot_savart_pure(
     K_basis: jnp.ndarray,
     quad_points: jnp.ndarray,

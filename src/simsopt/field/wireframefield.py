@@ -5,9 +5,9 @@ from .magneticfield import MagneticField
 from simsopt.geo.surfacerzfourier import SurfaceRZFourier
 from simsopt.geo.curvexyzfourier import CurveXYZFourier
 
-mu0 = 4.0*np.pi*1e-7
+mu0 = 4.0 * np.pi * 1e-7
 
-__all__ = ['WireframeField', 'enclosed_current']
+__all__ = ["WireframeField", "enclosed_current"]
 
 
 class WireframeField(sopp.WireframeField, MagneticField):
@@ -22,14 +22,15 @@ class WireframeField(sopp.WireframeField, MagneticField):
 
     def __init__(self, wframe):
 
-        sopp.WireframeField.__init__(self, wframe.nodes, wframe.segments,
-                                     wframe.seg_signs, wframe.currents)
+        sopp.WireframeField.__init__(
+            self, wframe.nodes, wframe.segments, wframe.seg_signs, wframe.currents
+        )
         MagneticField.__init__(self)
         self.wireframe = wframe
 
     def dB_by_dsegmentcurrents(self, compute_derivatives):
         """
-        Calculates the derivative of the magnetic field or its spatial 
+        Calculates the derivative of the magnetic field or its spatial
         derivatives at each field reference point with respect to the current
         in each wireframe segment.
 
@@ -50,14 +51,19 @@ class WireframeField(sopp.WireframeField, MagneticField):
 
         points = self.get_points_cart_ref()
         n_points = len(points)
-        if any([not self.fieldcache_get_status(f'B_{i}')
-                for i in range(self.wireframe.n_segments)]):
+        if any(
+            [
+                not self.fieldcache_get_status(f"B_{i}")
+                for i in range(self.wireframe.n_segments)
+            ]
+        ):
             assert compute_derivatives >= 0
             self.compute(compute_derivatives)
 
-        self._dB_by_dcoilcurrents = \
-            [self.fieldcache_get_or_create(f'B_{i}', [n_points, 3])
-             for i in range(self.wireframe.n_segments)]
+        self._dB_by_dcoilcurrents = [
+            self.fieldcache_get_or_create(f"B_{i}", [n_points, 3])
+            for i in range(self.wireframe.n_segments)
+        ]
         return self._dB_by_dcoilcurrents
 
     def dBnormal_by_dsegmentcurrents_matrix(self, surface, area_weighted=False):
@@ -75,10 +81,10 @@ class WireframeField(sopp.WireframeField, MagneticField):
                 half-periods.
             area_weighted: logical (optional)
                 If true, will multiply each matrix element by the square root
-                of the surface area ascribed to the corresponding quadrature 
+                of the surface area ascribed to the corresponding quadrature
                 point. In this way, the expression (A*x)^2 gives the surface
-                integral of the squared flux, where A is the matrix with 
-                weighted elements and x is a vector with the currents in each 
+                integral of the squared flux, where A is the matrix with
+                weighted elements and x is a vector with the currents in each
                 wireframe segment. Default is False.
         """
 
@@ -86,23 +92,22 @@ class WireframeField(sopp.WireframeField, MagneticField):
         n_points = len(points)
 
         if not isinstance(surface, SurfaceRZFourier):
-            raise ValueError('Surface must be a SurfaceRZFourier object')
+            raise ValueError("Surface must be a SurfaceRZFourier object")
 
         n = surface.normal()
         absn = np.linalg.norm(n, axis=2)
-        unitn = n * (1. / absn)[:, :, None]
+        unitn = n * (1.0 / absn)[:, :, None]
 
         if area_weighted:
-            fac = np.sqrt(absn/float(absn.size))
+            fac = np.sqrt(absn / float(absn.size))
         else:
             fac = np.ones(absn.shape)
 
-        matrix = np.ascontiguousarray(
-            np.zeros((n_points, self.wireframe.n_segments)))
+        matrix = np.ascontiguousarray(np.zeros((n_points, self.wireframe.n_segments)))
         dB_dsc = self.dB_by_dsegmentcurrents(0)
         for i in range(self.wireframe.n_segments):
             dB_dsc_i = dB_dsc[i].reshape(n.shape)
-            matrix[:, i] = (fac*np.sum(dB_dsc_i * unitn, axis=2)).reshape((-1))
+            matrix[:, i] = (fac * np.sum(dB_dsc_i * unitn, axis=2)).reshape((-1))
 
         return matrix
 
@@ -123,9 +128,9 @@ def enclosed_current(curve, field, n_quadpoints, preserve_points=True):
         n_quadpoints: integer
             Number of quadrature points for the integral.
         preserve_points: boolean
-            If true, the existing field points of `field` will be restored 
+            If true, the existing field points of `field` will be restored
             before the function returns. If false, the field points will be
-            changed to the quadrature points for integration. Default is true. 
+            changed to the quadrature points for integration. Default is true.
             Setting to false may save time.
 
     Returns
@@ -135,15 +140,15 @@ def enclosed_current(curve, field, n_quadpoints, preserve_points=True):
     """
 
     if not isinstance(curve, CurveXYZFourier):
-        raise ValueError('curve must be an instance of the '
-                         + 'CurveXYZFourier class')
+        raise ValueError("curve must be an instance of the " + "CurveXYZFourier class")
 
     if not isinstance(field, MagneticField):
-        raise ValueError('field must be an instance of the MagneticField class')
+        raise ValueError("field must be an instance of the MagneticField class")
 
     # Make a copy of the input Curve
-    _curve = CurveXYZFourier(np.linspace(0, 1, n_quadpoints), curve.order,
-                             dofs=curve.dofs)
+    _curve = CurveXYZFourier(
+        np.linspace(0, 1, n_quadpoints), curve.order, dofs=curve.dofs
+    )
 
     # Obtain the field vectors along the curve
     if preserve_points:
@@ -157,15 +162,15 @@ def enclosed_current(curve, field, n_quadpoints, preserve_points=True):
         field.set_points(original_field_points)
 
     abs_tangent = np.linalg.norm(_curve.gammadash(), axis=1).reshape((-1, 1))
-    unit_tangent = _curve.gammadash()/abs_tangent
+    unit_tangent = _curve.gammadash() / abs_tangent
 
     # Find the projection of the field onto the curve tangent vector
-    B_dot_unit_tangent = np.sum(field_on_curve*unit_tangent, axis=1)
+    B_dot_unit_tangent = np.sum(field_on_curve * unit_tangent, axis=1)
 
     # Estimate the cumulative arc length
     inc_arc = _curve.incremental_arclength()
-    midpoint_inc_arc = 0.5*(inc_arc[:-1] + inc_arc[1:])
-    delta_arclength = np.diff(_curve.quadpoints)*midpoint_inc_arc
+    midpoint_inc_arc = 0.5 * (inc_arc[:-1] + inc_arc[1:])
+    delta_arclength = np.diff(_curve.quadpoints) * midpoint_inc_arc
     arclength = np.concatenate(([0], np.cumsum(delta_arclength)))
 
-    return sp.integrate.simpson(B_dot_unit_tangent, x=arclength)/mu0
+    return sp.integrate.simpson(B_dot_unit_tangent, x=arclength) / mu0

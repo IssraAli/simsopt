@@ -31,7 +31,7 @@ from .._core.optimizable import Optimizable
 from .._core.types import RealArray
 from .._core.descriptor import Integer
 
-__all__ = ['Boozer', 'Quasisymmetry']
+__all__ = ["Boozer", "Quasisymmetry"]
 
 
 class Boozer(Optimizable):
@@ -48,18 +48,17 @@ class Boozer(Optimizable):
     mpol = Integer()
     ntor = Integer()
 
-    def __init__(self,
-                 equil: Vmec,
-                 mpol: int = 32,
-                 ntor: int = 32,
-                 verbose: bool = False) -> None:
+    def __init__(
+        self, equil: Vmec, mpol: int = 32, ntor: int = 32, verbose: bool = False
+    ) -> None:
         """
         Constructor
         """
         if booz_xform is None:
             raise RuntimeError(
                 "To use a Boozer object, the booz_xform package "
-                "must be installed. Run 'pip install -v booz_xform'")
+                "must be installed. Run 'pip install -v booz_xform'"
+            )
 
         self.equil = equil
         self.mpol = mpol
@@ -103,8 +102,9 @@ class Boozer(Optimizable):
 
         for new_s in ss:
             if new_s < 0 or new_s > 1:
-                raise ValueError("Normalized toroidal flux values s must lie"
-                                 "in the interval [0, 1]")
+                raise ValueError(
+                    "Normalized toroidal flux values s must liein the interval [0, 1]"
+                )
         logger.info("Adding entries to Boozer registry: {}".format(ss))
         self.s = self.s.union(ss)
         self.need_to_run_code = True
@@ -115,14 +115,16 @@ class Boozer(Optimizable):
         """
 
         if not self.need_to_run_code:
-            logger.info("Boozer.run() called but no need to re-run Boozer transformation.")
+            logger.info(
+                "Boozer.run() called but no need to re-run Boozer transformation."
+            )
             return
 
         s = sorted(list(self.s))
         logger.info("Preparing to run Boozer transformation. Registry:{}".format(s))
 
         if isinstance(self.equil, Vmec):
-            #partake in parallel VMEC job
+            # partake in parallel VMEC job
             self.equil.run()
 
             wout = self.equil.wout  # Shorthand
@@ -174,8 +176,12 @@ class Boozer(Optimizable):
             self.bx.mnmax = wout.mnmax
             self.bx.xm = wout.xm
             self.bx.xn = wout.xn
-            logger.info(f'mnmax: {wout.mnmax} len(xm): {len(wout.xm)} len(xn): {len(wout.xn)}')
-            logger.info(f'mnmax_nyq: {wout.mnmax_nyq} len(xm_nyq): {len(wout.xm_nyq)} len(xn_nyq): {len(wout.xn_nyq)}')
+            logger.info(
+                f"mnmax: {wout.mnmax} len(xm): {len(wout.xm)} len(xn): {len(wout.xn)}"
+            )
+            logger.info(
+                f"mnmax_nyq: {wout.mnmax_nyq} len(xm_nyq): {len(wout.xm_nyq)} len(xn_nyq): {len(wout.xn_nyq)}"
+            )
             assert len(wout.xm) == wout.mnmax
             assert len(wout.xn) == wout.mnmax
             assert len(self.bx.xm) == self.bx.mnmax
@@ -211,28 +217,29 @@ class Boozer(Optimizable):
 
             # For quantities that depend on radius, booz_xform handles
             # interpolation and discarding the rows of zeros:
-            self.bx.init_from_vmec(wout.ns,
-                                   wout.iotas,
-                                   wout.rmnc,
-                                   rmns,
-                                   zmnc,
-                                   wout.zmns,
-                                   lmnc,
-                                   wout.lmns,
-                                   wout.bmnc,
-                                   bmns,
-                                   wout.bsubumnc,
-                                   bsubumns,
-                                   wout.bsubvmnc,
-                                   bsubvmns)
+            self.bx.init_from_vmec(
+                wout.ns,
+                wout.iotas,
+                wout.rmnc,
+                rmns,
+                zmnc,
+                wout.zmns,
+                lmnc,
+                wout.lmns,
+                wout.bmnc,
+                bmns,
+                wout.bsubumnc,
+                bsubumns,
+                wout.bsubvmnc,
+                bsubvmns,
+            )
             self.bx.compute_surfs = compute_surfs
             self.bx.mboz = self.mpol
             self.bx.nboz = self.ntor
 
         else:
             # Cases for SPEC, GVEC, etc could be added here.
-            raise ValueError("equil is not an equilibrium type supported by"
-                             "Boozer")
+            raise ValueError("equil is not an equilibrium type supported byBoozer")
 
         logger.info("About to call booz_xform.Booz_xform.run().")
         self.bx.run()
@@ -264,13 +271,15 @@ class Quasisymmetry(Optimizable):
     helicity_m = Integer()
     helicity_n = Integer()
 
-    def __init__(self,
-                 boozer: Boozer,
-                 s: Union[float, Iterable[float]],
-                 helicity_m: int,
-                 helicity_n: int,
-                 normalization: str = "B00",
-                 weight: str = "even") -> None:
+    def __init__(
+        self,
+        boozer: Boozer,
+        s: Union[float, Iterable[float]],
+        helicity_m: int,
+        helicity_n: int,
+        normalization: str = "B00",
+        weight: str = "even",
+    ) -> None:
         """
         Constructor
 
@@ -296,7 +305,7 @@ class Quasisymmetry(Optimizable):
     def J(self) -> RealArray:
         r"""
         Compute the quasisymmetry error on each flux surface ``s`` in ``self.s``.
-        
+
         **MPI behavior:** when running under MPI, only group-leader ranks compute the error; all other ranks immediately return an empty array.
 
         1. Extracts the Boozer-coordinate Fourier spectrum ``B_{m,n}(s)``.
@@ -311,18 +320,18 @@ class Quasisymmetry(Optimizable):
             - ``"even"`` :math:`j(s,m,n)=A_{m,n}(s)` returns each normalized amplitude unchanged.
             - ``"stellopt"`` :math:`j(s,m,n)=A_{m,n}(s)/s^2` divides each amplitude by flux surface label squared to amplify core-surface errors.
             - ``"stellopt_ornl"`` :math:`j(s)=\sqrt{\sum_{(m,n)\in\mathrm{non-sym}}|A_{m,n}(s)|^2}` compute a **single** Euclidean norm of the non-symmetric amplitudes.
-    
-        Finishes by collecting the weighted, non-symmetric amplitudes from each surface into a flat 1D array. 
-        
-        The array will have shape :math:`(n_s * n_{mpol} * n_{ntor},)` if ``weight="even"`` or ``weight="stellopt"``, where :math:`n_{mpol}` and :math:`n_{ntor}` are the number of non-symmetric Boozer poloidal and toroidal harmonics, respectively.  
-        If ``weight="stellopt_ornl"``, the array will instead have shape :math:`(n_s,)` (one scalar per surface).  
-             
+
+        Finishes by collecting the weighted, non-symmetric amplitudes from each surface into a flat 1D array.
+
+        The array will have shape :math:`(n_s * n_{mpol} * n_{ntor},)` if ``weight="even"`` or ``weight="stellopt"``, where :math:`n_{mpol}` and :math:`n_{ntor}` are the number of non-symmetric Boozer poloidal and toroidal harmonics, respectively.
+        If ``weight="stellopt_ornl"``, the array will instead have shape :math:`(n_s,)` (one scalar per surface).
+
         Returns
         -------
         symmetry_error : np.ndarray
             A normalized, weighted symmetry-error array.
 
-            - Shape :math:`(n_s * n_{mpol} * n_{ntor},)` for ``weight="even"`` or ``weight="stellopt"``.  
+            - Shape :math:`(n_s * n_{mpol} * n_{ntor},)` for ``weight="even"`` or ``weight="stellopt"``.
             - Shape :math:`(n_s,)` for ``weight="stellopt_ornl"``.
         """
 
@@ -331,7 +340,9 @@ class Quasisymmetry(Optimizable):
 
         # Group leaders calculate metric, workers participate in job:
         if (self.boozer.mpi is not None) and (not self.boozer.mpi.proc0_groups):
-            logger.info("This proc is skipping Quasisymmetry.J since it is not a group leader.")
+            logger.info(
+                "This proc is skipping Quasisymmetry.J since it is not a group leader."
+            )
             return np.array([])
 
         symmetry_error = []
@@ -347,15 +358,15 @@ class Quasisymmetry(Optimizable):
             # Find the indices of the symmetric modes:
             if self.helicity_n == 0:
                 # Quasi-axisymmetry
-                symmetric = (xn == 0)
+                symmetric = xn == 0
 
             elif self.helicity_m == 0:
                 # Quasi-poloidal symmetry
-                symmetric = (xm == 0)
+                symmetric = xm == 0
 
             else:
                 # Quasi-helical symmetry
-                symmetric = (xm * self.helicity_n + xn * self.helicity_m == 0)
+                symmetric = xm * self.helicity_n + xn * self.helicity_m == 0
                 # Stellopt takes the "and" of this with mod(xm, self.helicity_m),
                 # which does not seem necessary since self.helicity_m must be 1 to
                 # get here.
@@ -375,7 +386,9 @@ class Quasisymmetry(Optimizable):
                 bnorm = np.sqrt(np.dot(temp, temp))
 
             else:
-                raise ValueError("Unrecognized value for normalization in Quasisymmetry")
+                raise ValueError(
+                    "Unrecognized value for normalization in Quasisymmetry"
+                )
 
             logger.info("For s={}, bnorm={}".format(s, bnorm))
             bmnc = bmnc / bnorm
@@ -394,7 +407,7 @@ class Quasisymmetry(Optimizable):
                 # each mode. As a result, there is an even weight by s_used**2.
 
                 s_used = self.boozer.s_used[s]
-                logger.info('s_used, in Quasisymmetry: {}'.format(s_used))
+                logger.info("s_used, in Quasisymmetry: {}".format(s_used))
                 """
                 rad_sigma = np.full(len(xm), s_used * s_used)
                 rad_sigma[xm < 3] = s_used
@@ -422,4 +435,4 @@ class Quasisymmetry(Optimizable):
 
         return np.array(symmetry_error).flatten()
 
-    return_fn_map = {'J': J}
+    return_fn_map = {"J": J}

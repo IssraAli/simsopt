@@ -1,10 +1,11 @@
 import unittest
 import numpy as np
 from simsopt.objectives.functions import Identity
-#from simsopt.core.optimizable import Target
+
+# from simsopt.core.optimizable import Target
 from simsopt.objectives.least_squares import LeastSquaresProblem
 
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 
 class LeastSquaresProblemTests(unittest.TestCase):
@@ -13,10 +14,8 @@ class LeastSquaresProblemTests(unittest.TestCase):
         lst = LeastSquaresProblem.from_sigma(3, 0.1, depends_on=iden)
 
         iden.x = [17]
-        correct_value = ((17 - 3) / 0.1)  # ** 2
-        self.assertAlmostEqual(np.abs(lst.residuals()[0]),
-                               correct_value,
-                               places=11)
+        correct_value = (17 - 3) / 0.1  # ** 2
+        self.assertAlmostEqual(np.abs(lst.residuals()[0]), correct_value, places=11)
 
         iden.x = [0]
         term1 = LeastSquaresProblem.from_sigma(3, 2, depends_on=iden)

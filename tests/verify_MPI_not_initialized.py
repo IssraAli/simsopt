@@ -18,7 +18,6 @@ import sys
 import simsopt
 from simsopt.geo.surfacerzfourier import SurfaceRZFourier
 
-assert "mpi4py.MPI" not in sys.modules, \
-    "Importing simsopt should not initialize MPI"
+assert "mpi4py.MPI" not in sys.modules, "Importing simsopt should not initialize MPI"
 
 print("Verified that importing simsopt does not initialize MPI")

@@ -12,7 +12,7 @@ TEST_DIR = Path(__file__).parent / ".." / "test_files"
 stellsym_list = [True, False]
 
 
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -25,27 +25,27 @@ class SurfaceGarabedianTests(unittest.TestCase):
         s = SurfaceGarabedian(nmin=-1, nmax=2, mmin=-2, mmax=5)
         self.assertAlmostEqual(s.Delta[2, 1], 0.1)
         self.assertAlmostEqual(s.Delta[3, 1], 1.0)
-        self.assertAlmostEqual(s.get('Delta(0,0)'), 0.1)
-        self.assertAlmostEqual(s.get('Delta(1,0)'), 1.0)
+        self.assertAlmostEqual(s.get("Delta(0,0)"), 0.1)
+        self.assertAlmostEqual(s.get("Delta(1,0)"), 1.0)
         # Verify all other elements are 0:
         d = np.copy(s.Delta)
         d[2, 1] = 0
         d[3, 1] = 0
         np.testing.assert_allclose(d, np.zeros((8, 4)))
 
-        s.set('Delta(-2,-1)', 42)
+        s.set("Delta(-2,-1)", 42)
         self.assertAlmostEqual(s.Delta[0, 0], 42)
         self.assertAlmostEqual(s.get_Delta(-2, -1), 42)
 
-        s.set('Delta(5,-1)', -7)
+        s.set("Delta(5,-1)", -7)
         self.assertAlmostEqual(s.Delta[7, 0], -7)
         self.assertAlmostEqual(s.get_Delta(5, -1), -7)
 
-        s.set('Delta(-2,2)', 13)
+        s.set("Delta(-2,2)", 13)
         self.assertAlmostEqual(s.Delta[0, 3], 13)
         self.assertAlmostEqual(s.get_Delta(-2, 2), 13)
 
-        s.set('Delta(5,2)', -5)
+        s.set("Delta(5,2)", -5)
         self.assertAlmostEqual(s.Delta[7, 3], -5)
         self.assertAlmostEqual(s.get_Delta(5, 2), -5)
 
@@ -87,30 +87,30 @@ class SurfaceGarabedianTests(unittest.TestCase):
         s.fix_range(0, 1, -2, 3, False)
         for m in range(-3, 3):
             for n in range(-4, 4):
-                is_fixed = s.is_fixed(f'Delta({m},{n})')
-                logger.debug(f'm={m} n={n} fixed={is_fixed}')
+                is_fixed = s.is_fixed(f"Delta({m},{n})")
+                logger.debug(f"m={m} n={n} fixed={is_fixed}")
                 if m >= 0 and m <= 1 and n >= -2 and n <= 3:
-                    self.assertTrue(s.is_free(f'Delta({m},{n})'))
+                    self.assertTrue(s.is_free(f"Delta({m},{n})"))
                 else:
-                    self.assertTrue(s.is_fixed(f'Delta({m},{n})'))
+                    self.assertTrue(s.is_fixed(f"Delta({m},{n})"))
 
         s = SurfaceGarabedian(mmin=0, mmax=3, nmin=-4, nmax=4)
         s.local_unfix_all()
         s.fix_range(1, 2, -3, 2)
         for m in range(0, 4):
             for n in range(-4, 5):
-                is_fixed = s.is_fixed(f'Delta({m},{n})')
-                logger.debug(f'm={m} n={n} fixed={is_fixed}')
+                is_fixed = s.is_fixed(f"Delta({m},{n})")
+                logger.debug(f"m={m} n={n} fixed={is_fixed}")
                 if m >= 1 and m <= 2 and n >= -3 and n <= 2:
-                    self.assertTrue(s.is_fixed(f'Delta({m},{n})'))
+                    self.assertTrue(s.is_fixed(f"Delta({m},{n})"))
                 else:
-                    self.assertTrue(s.is_free(f'Delta({m},{n})'))
+                    self.assertTrue(s.is_free(f"Delta({m},{n})"))
 
     def test_shared_dof_init(self):
         s = SurfaceGarabedian(nmin=-1, nmax=2, mmin=-2, mmax=5)
-        s.set('Delta(-2,-1)', 42)
-        s.set('Delta(5,-1)', -7)
-        s.set('Delta(-2,2)', 13)
+        s.set("Delta(-2,-1)", 42)
+        s.set("Delta(5,-1)", -7)
+        s.set("Delta(-2,2)", 13)
         s.set_Delta(5, 2, -50)
 
         s2 = SurfaceGarabedian(nmin=-1, nmax=2, mmin=-2, mmax=5, dofs=s.dofs)

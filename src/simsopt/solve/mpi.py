@@ -37,11 +37,10 @@ CALCULATE_JAC = 2
 CALCULATE_FD_JAC = 3
 CALCULATE_NLC = 4
 
-__all__ = ['least_squares_mpi_solve', 'constrained_mpi_solve']
+__all__ = ["least_squares_mpi_solve", "constrained_mpi_solve"]
 
 
-def _mpi_workers_task(mpi: MpiPartition,
-                      prob: Optimizable):
+def _mpi_workers_task(mpi: MpiPartition, prob: Optimizable):
     """
     This function is called by worker processes when
     MpiPartition.workers_loop() receives a signal to do something.
@@ -53,15 +52,15 @@ def _mpi_workers_task(mpi: MpiPartition,
         prob: Optimizable object
         data: Integer with a value from 1 to 3
     """
-    logger.debug('mpi workers task')
+    logger.debug("mpi workers task")
 
     # x is a buffer for receiving the state vector:
-    x = np.empty(prob.dof_size, dtype='d')
+    x = np.empty(prob.dof_size, dtype="d")
     # If we make it here, we must be doing a fd_jac_par
     # calculation, so receive the state vector: mpi4py has
     # separate bcast and Bcast functions!!  comm.Bcast(x, root=0)
     x = mpi.comm_groups.bcast(x, root=0)
-    logger.debug(f'worker loop worker x={x}')
+    logger.debug(f"worker loop worker x={x}")
     prob.x = x
 
     # We don't store or do anything with f() or jac(), because
@@ -69,19 +68,22 @@ def _mpi_workers_task(mpi: MpiPartition,
     try:
         prob.unweighted_residuals()
     except:
-        logger.warning("Exception caught by worker during residual "
-                       "evaluation in worker loop")
+        logger.warning(
+            "Exception caught by worker during residual evaluation in worker loop"
+        )
         traceback.print_exc()  # Print traceback
 
 
-def least_squares_mpi_solve(prob: LeastSquaresProblem,
-                            mpi: MpiPartition,
-                            grad: bool = False,
-                            abs_step: float = 1.0e-7,
-                            rel_step: float = 0.0,
-                            diff_method: str = "forward",
-                            save_residuals: bool = False,
-                            **kwargs):
+def least_squares_mpi_solve(
+    prob: LeastSquaresProblem,
+    mpi: MpiPartition,
+    grad: bool = False,
+    abs_step: float = 1.0e-7,
+    rel_step: float = 0.0,
+    diff_method: str = "forward",
+    save_residuals: bool = False,
+    **kwargs,
+):
     """
     Solve a nonlinear-least-squares minimization problem using
     MPI. All MPI processes (including group leaders and workers)
@@ -91,7 +93,7 @@ def least_squares_mpi_solve(prob: LeastSquaresProblem,
     min f(x)
     subject to lb <= x <= ub
     where the bounds are taken from the prob.bounds attribute.
-    
+
     Args:
         prob: Optimizable object defining the objective function(s) and
              parameter space.
@@ -118,8 +120,7 @@ def least_squares_mpi_solve(prob: LeastSquaresProblem,
                 can supply ``method`` to choose the optimization algorithm.
     """
     if MPI is None:
-        raise RuntimeError(
-            "least_squares_mpi_solve requires the mpi4py package.")
+        raise RuntimeError("least_squares_mpi_solve requires the mpi4py package.")
     logger.info("Beginning solve.")
 
     x = np.copy(prob.x)  # For use in Bcast later.
@@ -164,8 +165,10 @@ def least_squares_mpi_solve(prob: LeastSquaresProblem,
             # Initialize log file
             datalog_started = True
             datestr = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            objective_file = open(f"objective_{datestr}.dat", 'w')
-            objective_file.write(f"Problem type:\nleast_squares\nnparams:\n{prob.dof_size}\n")
+            objective_file = open(f"objective_{datestr}.dat", "w")
+            objective_file.write(
+                f"Problem type:\nleast_squares\nnparams:\n{prob.dof_size}\n"
+            )
             objective_file.write("function_evaluation,seconds")
 
             for j in range(prob.dof_size):
@@ -173,8 +176,10 @@ def least_squares_mpi_solve(prob: LeastSquaresProblem,
             objective_file.write(",objective_function\n")
 
             if save_residuals:
-                residuals_file = open(f"residuals_{datestr}.dat", 'w')
-                residuals_file.write(f"Problem type:\nleast_squares\nnparams:\n{prob.dof_size}\n")
+                residuals_file = open(f"residuals_{datestr}.dat", "w")
+                residuals_file.write(
+                    f"Problem type:\nleast_squares\nnparams:\n{prob.dof_size}\n"
+                )
                 residuals_file.write("function_evaluation,seconds")
 
                 for j in range(prob.dof_size):
@@ -207,32 +212,57 @@ def least_squares_mpi_solve(prob: LeastSquaresProblem,
 
     if "bounds" in kwargs:
         import warnings
-        warnings.warn("The bounds argument has been deprecated and is being ignored, \
-                      please use prob.bounds instead.", DeprecationWarning, 2)
-        logger.info("The bounds argument has been deprecated and is being ignored, please use prob.bounds instead.")
+
+        warnings.warn(
+            "The bounds argument has been deprecated and is being ignored, \
+                      please use prob.bounds instead.",
+            DeprecationWarning,
+            2,
+        )
+        logger.info(
+            "The bounds argument has been deprecated and is being ignored, please use prob.bounds instead."
+        )
         kwargs.pop("bounds", None)
 
     # For MPI finite difference gradient, get the worker and leader action from
     # MPIFiniteDifference
     if grad:
-        with MPIFiniteDifference(prob.residuals, mpi, abs_step=abs_step,
-                                 rel_step=rel_step, diff_method=diff_method) as fd:
+        with MPIFiniteDifference(
+            prob.residuals,
+            mpi,
+            abs_step=abs_step,
+            rel_step=rel_step,
+            diff_method=diff_method,
+        ) as fd:
             if mpi.proc0_world:
                 # proc0_world does this block, running the optimization.
                 x0 = np.copy(prob.x)
-                logger.info("Using finite difference method implemented in "
-                            "SIMSOPT for evaluating gradient")
+                logger.info(
+                    "Using finite difference method implemented in "
+                    "SIMSOPT for evaluating gradient"
+                )
                 try:
-                    result = least_squares(_f_proc0, x0, bounds=prob.bounds, 
-                                           jac=fd.jac, verbose=2, **kwargs)
+                    result = least_squares(
+                        _f_proc0,
+                        x0,
+                        bounds=prob.bounds,
+                        jac=fd.jac,
+                        verbose=2,
+                        **kwargs,
+                    )
                 except:
                     logger.error("Failure on proc0_world")
                     result = Struct()
                     result.x = x0
 
     else:
-        def leaders_action(mpi, data): return None
-        def workers_action(mpi, data): return _mpi_workers_task(mpi, prob)
+
+        def leaders_action(mpi, data):
+            return None
+
+        def workers_action(mpi, data):
+            return _mpi_workers_task(mpi, prob)
+
         # Send group leaders and workers into their respective loops:
         mpi.apart(leaders_action, workers_action)
 
@@ -240,8 +270,9 @@ def least_squares_mpi_solve(prob: LeastSquaresProblem,
             # proc0_world does this block, running the optimization.
             x0 = np.copy(prob.x)
             logger.info("Using derivative-free method")
-            result = least_squares(_f_proc0, x0, bounds=prob.bounds,
-                                   verbose=2, **kwargs)
+            result = least_squares(
+                _f_proc0, x0, bounds=prob.bounds, verbose=2, **kwargs
+            )
 
         # Stop loops for workers and group leaders:
         mpi.together()
@@ -259,14 +290,12 @@ def least_squares_mpi_solve(prob: LeastSquaresProblem,
 
     # Finally, make sure all procs get the optimal state vector.
     mpi.comm_world.Bcast(x)
-    logger.debug(f'After Bcast, x={x}')
+    logger.debug(f"After Bcast, x={x}")
     # Set Parameters to their values for the optimum
     prob.x = x
 
 
-def _constrained_mpi_workers_task(mpi: MpiPartition,
-                                  prob: Optimizable,
-                                  data: int):
+def _constrained_mpi_workers_task(mpi: MpiPartition, prob: Optimizable, data: int):
     """
     This function is called by worker processes when
     MpiPartition.workers_loop() receives a signal to do something.
@@ -278,15 +307,15 @@ def _constrained_mpi_workers_task(mpi: MpiPartition,
         prob: Optimizable object
         data: Integer with a value from 1 to 3
     """
-    logger.debug('mpi workers task')
+    logger.debug("mpi workers task")
 
     # x is a buffer for receiving the state vector:
-    x = np.empty(prob.dof_size, dtype='d')
+    x = np.empty(prob.dof_size, dtype="d")
     # If we make it here, we must be doing a fd_jac_par
     # calculation, so receive the state vector: mpi4py has
     # separate bcast and Bcast functions!!  comm.Bcast(x, root=0)
     x = mpi.comm_groups.bcast(x, root=0)
-    logger.debug(f'worker loop worker x={x}')
+    logger.debug(f"worker loop worker x={x}")
     prob.x = x
 
     # We don't store or do anything with f() or jac(), because
@@ -295,26 +324,30 @@ def _constrained_mpi_workers_task(mpi: MpiPartition,
         try:
             prob.objective()
         except:
-            logger.warning("Exception caught by worker during objective"
-                           "evaluation in worker loop")
+            logger.warning(
+                "Exception caught by worker during objectiveevaluation in worker loop"
+            )
             traceback.print_exc()  # Print traceback
     elif data == CALCULATE_NLC:
         try:
             prob.nonlinear_constraints()
         except:
-            logger.warning("Exception caught by worker during constraint"
-                           "evaluation in worker loop")
+            logger.warning(
+                "Exception caught by worker during constraintevaluation in worker loop"
+            )
             traceback.print_exc()  # Print traceback
 
 
-def constrained_mpi_solve(prob: ConstrainedProblem,
-                          mpi: MpiPartition,
-                          grad: bool = False,
-                          abs_step: float = 1.0e-7,
-                          rel_step: float = 0.0,
-                          diff_method: str = "forward",
-                          opt_method: str = "SLSQP",
-                          options: dict = None):
+def constrained_mpi_solve(
+    prob: ConstrainedProblem,
+    mpi: MpiPartition,
+    grad: bool = False,
+    abs_step: float = 1.0e-7,
+    rel_step: float = 0.0,
+    diff_method: str = "forward",
+    opt_method: str = "SLSQP",
+    options: dict = None,
+):
     r"""
     Solve a constrained minimization problem using
     MPI. All MPI processes (including group leaders and workers)
@@ -345,8 +378,7 @@ def constrained_mpi_solve(prob: ConstrainedProblem,
             `scipy.optimize.minimize <https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html#scipy.optimize.minimize>`_.
     """
     if MPI is None:
-        raise RuntimeError(
-            "cosntrained_mpi_solve requires the mpi4py package.")
+        raise RuntimeError("cosntrained_mpi_solve requires the mpi4py package.")
     logger.info("Beginning solve.")
 
     x = np.copy(prob.x)  # For use in Bcast later.
@@ -387,8 +419,10 @@ def constrained_mpi_solve(prob: ConstrainedProblem,
             # Initialize log file
             objective_datalog_started = True
             datestr = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            objective_file = open(f"objective_{datestr}.dat", 'w')
-            objective_file.write(f"Problem type:\nconstrained\nnparams:\n{prob.dof_size}\n")
+            objective_file = open(f"objective_{datestr}.dat", "w")
+            objective_file.write(
+                f"Problem type:\nconstrained\nnparams:\n{prob.dof_size}\n"
+            )
             objective_file.write("function_evaluation,seconds")
 
             for j in range(prob.dof_size):
@@ -435,8 +469,10 @@ def constrained_mpi_solve(prob: ConstrainedProblem,
             # Initialize log file
             constraint_datalog_started = True
             datestr = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            constraint_file = open(f"constraint_{datestr}.dat", 'w')
-            constraint_file.write(f"Problem type:\nconstrained\nnparams:\n{prob.dof_size}\n")
+            constraint_file = open(f"constraint_{datestr}.dat", "w")
+            constraint_file.write(
+                f"Problem type:\nconstrained\nnparams:\n{prob.dof_size}\n"
+            )
             constraint_file.write("function_evaluation,seconds")
 
             for j in range(prob.dof_size):
@@ -470,8 +506,13 @@ def constrained_mpi_solve(prob: ConstrainedProblem,
     # For MPI finite difference gradient, get the worker and leader action from
     # MPIFiniteDifference
     if grad:
-        with MPIFiniteDifference(prob.all_funcs, mpi, abs_step=abs_step,
-                                 rel_step=rel_step, diff_method=diff_method) as fd:
+        with MPIFiniteDifference(
+            prob.all_funcs,
+            mpi,
+            abs_step=abs_step,
+            rel_step=rel_step,
+            diff_method=diff_method,
+        ) as fd:
 
             def obj_jac(x):
                 # dummy wrapper for batch finite difference
@@ -479,24 +520,40 @@ def constrained_mpi_solve(prob: ConstrainedProblem,
 
             if mpi.proc0_world:
                 if prob.has_nlc:
+
                     def nlc_jac(x):
                         # dummy wrapper for batch finite difference
                         return fd.jac(x)[1:]
-                    nlc = NonlinearConstraint(_nlc_proc0, lb=-np.inf, ub=0.0, jac=nlc_jac)
+
+                    nlc = NonlinearConstraint(
+                        _nlc_proc0, lb=-np.inf, ub=0.0, jac=nlc_jac
+                    )
                     constraints.append(nlc)
 
                 # proc0_world does this block, running the optimization.
                 x0 = np.copy(prob.x)
-                logger.info("Using finite difference method implemented in "
-                            "SIMSOPT for evaluating gradient")
-                result = minimize(_f_proc0, x0, jac=obj_jac,
-                                  bounds=bounds, constraints=constraints,
-                                  method=opt_method, options=options)
+                logger.info(
+                    "Using finite difference method implemented in "
+                    "SIMSOPT for evaluating gradient"
+                )
+                result = minimize(
+                    _f_proc0,
+                    x0,
+                    jac=obj_jac,
+                    bounds=bounds,
+                    constraints=constraints,
+                    method=opt_method,
+                    options=options,
+                )
 
     else:
 
-        def leaders_action(mpi, data): return None
-        def workers_action(mpi, data): return _constrained_mpi_workers_task(mpi, prob, data)
+        def leaders_action(mpi, data):
+            return None
+
+        def workers_action(mpi, data):
+            return _constrained_mpi_workers_task(mpi, prob, data)
+
         # Send group leaders and workers into their respective loops:
         mpi.apart(leaders_action, workers_action)
 
@@ -507,9 +564,14 @@ def constrained_mpi_solve(prob: ConstrainedProblem,
                 constraints.append(nlc)
             x0 = np.copy(prob.x)
             logger.info("Using derivative-free method")
-            result = minimize(_f_proc0, x0,
-                              bounds=bounds, constraints=constraints,
-                              method=opt_method, options=options)
+            result = minimize(
+                _f_proc0,
+                x0,
+                bounds=bounds,
+                constraints=constraints,
+                method=opt_method,
+                options=options,
+            )
 
         # Stop loops for workers and group leaders:
         mpi.together()
@@ -525,6 +587,6 @@ def constrained_mpi_solve(prob: ConstrainedProblem,
 
     # Finally, make sure all procs get the optimal state vector.
     mpi.comm_world.Bcast(x)
-    logger.debug(f'After Bcast, x={x}')
+    logger.debug(f"After Bcast, x={x}")
     # Set Parameters to their values for the optimum
     prob.x = x

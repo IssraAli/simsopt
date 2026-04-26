@@ -4,14 +4,17 @@ import json
 
 import numpy as np
 
-from simsopt.geo.curveperturbed import GaussianSampler, PerturbationSample, CurvePerturbed
+from simsopt.geo.curveperturbed import (
+    GaussianSampler,
+    PerturbationSample,
+    CurvePerturbed,
+)
 from simsopt.geo.curvexyzfourier import CurveXYZFourier
 from simsopt.geo.curveobjectives import LpCurveTorsion, CurveCurveDistance
 from simsopt._core.json import GSONDecoder, GSONEncoder, SIMSON
 
 
 class CurvePerturbationTesting(unittest.TestCase):
-
     def test_perturbed_gammadash(self):
         sigma = 1
         length_scale = 0.5
@@ -26,8 +29,14 @@ class CurvePerturbationTesting(unittest.TestCase):
             g = sample[idx + 0]
             gd = sample[idx + 1]
 
-            gdest = (-1/12) * g[4:, :] + (2/3) * g[3:-1, :] + 0 * g[2:-2, :] + (-2/3) * g[1:-3, :] + (1/12) * g[0:-4, :]
-            gdest *= 1/dphi
+            gdest = (
+                (-1 / 12) * g[4:, :]
+                + (2 / 3) * g[3:-1, :]
+                + 0 * g[2:-2, :]
+                + (-2 / 3) * g[1:-3, :]
+                + (1 / 12) * g[0:-4, :]
+            )
+            gdest *= 1 / dphi
             err = np.abs(gdest - gd[2:-2, :])
 
             print("np.mean(err)", np.mean(err))
@@ -40,7 +49,7 @@ class CurvePerturbationTesting(unittest.TestCase):
         sigma = 1
         length_scale = 0.5
         n = 100
-        points = np.linspace(0, 2, 2*n, endpoint=False)
+        points = np.linspace(0, 2, 2 * n, endpoint=False)
         sampler = GaussianSampler(points, sigma, length_scale, n_derivs=0)
         rg = Generator(PCG64DXSM(1))
         sample = PerturbationSample(sampler, randomgen=rg)
@@ -61,10 +70,10 @@ class CurvePerturbationTesting(unittest.TestCase):
         order = 4
         nquadpoints = 200
         curve = CurveXYZFourier(nquadpoints, order)
-        dofs = np.zeros((curve.dof_size, ))
-        dofs[1] = 1.
-        dofs[2*order+3] = 1.
-        dofs[4*order+3] = 1.
+        dofs = np.zeros((curve.dof_size,))
+        dofs[1] = 1.0
+        dofs[2 * order + 3] = 1.0
+        dofs[4 * order + 3] = 1.0
         curve.x = dofs
 
         curve = CurvePerturbed(curve, sample)
@@ -81,8 +90,8 @@ class CurvePerturbationTesting(unittest.TestCase):
             eps = 0.5**i
             curve.x = curve_dofs + eps * h
             Jh = J.J()
-            deriv_est = (Jh-J0)/eps
-            err_new = np.linalg.norm(deriv_est-deriv)
+            deriv_est = (Jh - J0) / eps
+            err_new = np.linalg.norm(deriv_est - deriv)
             print("err_new %s" % (err_new))
             assert err_new < 0.55 * err
             err = err_new
@@ -101,17 +110,17 @@ class CurvePerturbationTesting(unittest.TestCase):
         order = 4
         nquadpoints = 200
         curve1 = CurveXYZFourier(nquadpoints, order)
-        dofs = np.zeros((curve1.dof_size, ))
-        dofs[1] = 1.
-        dofs[2*order+3] = 1.
-        dofs[4*order+3] = 1.
+        dofs = np.zeros((curve1.dof_size,))
+        dofs[1] = 1.0
+        dofs[2 * order + 3] = 1.0
+        dofs[4 * order + 3] = 1.0
         curve1.x = dofs
 
         curve2 = CurveXYZFourier(nquadpoints, order)
-        dofs = np.zeros((curve2.dof_size, ))
-        dofs[1] = 2.
-        dofs[2*order+3] = 2.
-        dofs[4*order+3] = 2.
+        dofs = np.zeros((curve2.dof_size,))
+        dofs[1] = 2.0
+        dofs[2 * order + 3] = 2.0
+        dofs[4 * order + 3] = 2.0
         curve2.x = dofs
 
         curve1 = CurvePerturbed(curve1, sample1)
@@ -132,8 +141,8 @@ class CurvePerturbationTesting(unittest.TestCase):
             eps = 0.5**i
             J.x = curve_dofs + eps * h
             Jh = J.J()
-            deriv_est = (Jh-J0)/eps
-            err_new = np.linalg.norm(deriv_est-deriv)
+            deriv_est = (Jh - J0) / eps
+            err_new = np.linalg.norm(deriv_est - deriv)
             # print("err_new %s" % (err_new))
             assert err_new < 0.55 * err
             err = err_new
@@ -149,9 +158,9 @@ class CurvePerturbationTesting(unittest.TestCase):
         nquadpoints = 200
         curve = CurveXYZFourier(nquadpoints, order)
         dofs = np.zeros((curve.dof_size,))
-        dofs[1] = 1.
-        dofs[2 * order + 3] = 1.
-        dofs[4 * order + 3] = 1.
+        dofs[1] = 1.0
+        dofs[2 * order + 3] = 1.0
+        dofs[4 * order + 3] = 1.0
         curve.x = dofs
         curve_per = CurvePerturbed(curve, sample)
 

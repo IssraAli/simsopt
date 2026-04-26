@@ -16,9 +16,9 @@ from weakref import WeakKeyDictionary
 import numpy as np
 
 from .types import RealArray
-from simsoptpp import Curve   # To obtain pybind11 metaclass
+from simsoptpp import Curve  # To obtain pybind11 metaclass
 
-__all__ = ['ObjectiveFailure']
+__all__ = ["ObjectiveFailure"]
 
 
 def isbool(val):
@@ -69,6 +69,7 @@ class ImmutableId:
     instance ids starting with 1 for each of the different classes sublcassing
     InstanceCounterMeta
     """
+
     id: Integral
 
 
@@ -79,6 +80,7 @@ class InstanceCounterMeta(type):
     Ref: https://stackoverflow.com/questions/8628123/counting-instances-of-a-class
     Credits: https://stackoverflow.com/users/3246302/ratiotile
     """
+
     def __init__(cls, name, bases, attrs):
         super().__init__(name, bases, attrs)
         cls._ids = itertools.count(1)
@@ -90,6 +92,7 @@ class OptimizableMeta(InstanceCounterMeta, ABCMeta, type(Curve)):
     type(simsoptpp.Curve) is used to obtain the pybind11_type, which can
     be a parent class from py37
     """
+
     pass
 
 
@@ -101,6 +104,7 @@ class ObjectiveFailure(Exception):
     solvers will catch this specific exception (not others) and set
     the objective function to a large number.
     """
+
     pass
 
 
@@ -112,20 +116,23 @@ class DofLengthMismatchError(Exception):
     and to prevent broadcasting of a single DOF
     """
 
-    def __init__(self,
-                 input_dof_length: Integral,
-                 optim_dof_length: Integral,
-                 message: str = None):
+    def __init__(
+        self,
+        input_dof_length: Integral,
+        optim_dof_length: Integral,
+        message: str = None,
+    ):
         if message is None:
-            message = f"Input dof proerpty size, {input_dof_length}, does not " + \
-                      f"match with Optimizable dof size {optim_dof_length}"
+            message = (
+                f"Input dof proerpty size, {input_dof_length}, does not "
+                + f"match with Optimizable dof size {optim_dof_length}"
+            )
         super().__init__(message)
 
 
-def finite_difference_steps(x: RealArray,
-                            abs_step: Real = 1.0e-7,
-                            rel_step: Real = 0.0
-                            ) -> RealArray:
+def finite_difference_steps(
+    x: RealArray, abs_step: Real = 1.0e-7, rel_step: Real = 0.0
+) -> RealArray:
     """
     Determine an array of step sizes for calculating finite-difference
     derivatives, using absolute or relative step sizes, or a mixture
@@ -167,18 +174,16 @@ def finite_difference_steps(x: RealArray,
         ``x``.
     """
     if abs_step < 0:
-        raise ValueError('abs_step must be >= 0')
+        raise ValueError("abs_step must be >= 0")
     if rel_step < 0:
-        raise ValueError('rel_step must be >= 0')
+        raise ValueError("rel_step must be >= 0")
 
-    steps = np.max((np.abs(x) * rel_step, np.full(len(x), abs_step)),
-                   axis=0)
+    steps = np.max((np.abs(x) * rel_step, np.full(len(x), abs_step)), axis=0)
 
     # If abs_step == 0 and any elements of x are 0, we could end up
     # with a step of size 0:
     if np.any(steps == 0.0):
-        raise ValueError('Finite difference step size cannot be 0. '
-                         'Increase abs_step.')
+        raise ValueError("Finite difference step size cannot be 0. Increase abs_step.")
 
     return steps
 
@@ -237,7 +242,7 @@ def parallel_loop_bounds(comm, n):
         return 0, n
     else:
         size = comm.size
-        idxs = [i*n//size for i in range(size+1)]
+        idxs = [i * n // size for i in range(size + 1)]
         assert idxs[0] == 0
         assert idxs[-1] == n
-        return idxs[comm.rank], idxs[comm.rank+1]
+        return idxs[comm.rank], idxs[comm.rank + 1]

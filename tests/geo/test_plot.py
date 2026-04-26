@@ -9,14 +9,13 @@ from simsopt.geo.curve import create_equally_spaced_curves
 from simsopt.field.coil import Current, coils_via_symmetries
 from simsopt.geo.plotting import plot
 
-#logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
 
 
 class PlotTests(unittest.TestCase):
-
     def test_curves_and_surface(self):
         """
         Verify that a set of curves and a surface can all be plotted
@@ -50,12 +49,14 @@ class PlotTests(unittest.TestCase):
         else:
             engines.append("plotly")
 
-        logger.info(f'Testing these plotting engines: {engines}')
+        logger.info(f"Testing these plotting engines: {engines}")
 
         nphi = 32
         ntheta = 32
         filename = TEST_DIR / "input.LandremanPaul2021_QA"
-        s = SurfaceRZFourier.from_vmec_input(filename, range="half period", nphi=nphi, ntheta=ntheta)
+        s = SurfaceRZFourier.from_vmec_input(
+            filename, range="half period", nphi=nphi, ntheta=ntheta
+        )
         # Number of unique coil shapes:
         ncoils = 5
         # Major radius for the initial circular coils:
@@ -65,7 +66,9 @@ class PlotTests(unittest.TestCase):
         # Number of Fourier modes describing each Cartesian component of each coil:
         order = 5
 
-        base_curves = create_equally_spaced_curves(ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order)
+        base_curves = create_equally_spaced_curves(
+            ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order
+        )
         base_currents = [Current(1e5) for i in range(ncoils)]
         base_currents[0].local_fix_all()
         coils = coils_via_symmetries(base_curves, base_currents, s.nfp, True)

@@ -4,7 +4,7 @@ import simsoptpp as sopp
 from .surface import Surface
 from .surfacerzfourier import SurfaceRZFourier
 
-__all__ = ['SurfaceXYZFourier']
+__all__ = ["SurfaceXYZFourier"]
 
 
 class SurfaceXYZFourier(sopp.SurfaceXYZFourier, Surface):
@@ -55,26 +55,39 @@ class SurfaceXYZFourier(sopp.SurfaceXYZFourier, Surface):
         quadpoints_theta: Set this to a list or 1D array to set the :math:`\theta_j` grid points directly.
     """
 
-    def __init__(self, nfp=1, stellsym=True, mpol=1, ntor=0,
-                 quadpoints_phi=None, quadpoints_theta=None,
-                 dofs=None):
+    def __init__(
+        self,
+        nfp=1,
+        stellsym=True,
+        mpol=1,
+        ntor=0,
+        quadpoints_phi=None,
+        quadpoints_theta=None,
+        dofs=None,
+    ):
 
         if quadpoints_theta is None:
             quadpoints_theta = Surface.get_theta_quadpoints()
         if quadpoints_phi is None:
             quadpoints_phi = Surface.get_phi_quadpoints(nfp=nfp)
 
-        sopp.SurfaceXYZFourier.__init__(self, mpol, ntor, nfp, stellsym,
-                                        quadpoints_phi, quadpoints_theta)
+        sopp.SurfaceXYZFourier.__init__(
+            self, mpol, ntor, nfp, stellsym, quadpoints_phi, quadpoints_theta
+        )
         self.xc[0, ntor] = 1.0
         self.xc[1, ntor] = 0.1
         self.zs[1, ntor] = 0.1
         if dofs is None:
-            Surface.__init__(self, x0=self.get_dofs(), names=self._make_names(),
-                             external_dof_setter=SurfaceXYZFourier.set_dofs_impl)
+            Surface.__init__(
+                self,
+                x0=self.get_dofs(),
+                names=self._make_names(),
+                external_dof_setter=SurfaceXYZFourier.set_dofs_impl,
+            )
         else:
-            Surface.__init__(self, dofs=dofs,
-                             external_dof_setter=SurfaceXYZFourier.set_dofs_impl)
+            Surface.__init__(
+                self, dofs=dofs, external_dof_setter=SurfaceXYZFourier.set_dofs_impl
+            )
 
     def _make_names(self):
         """
@@ -84,16 +97,20 @@ class SurfaceXYZFourier(sopp.SurfaceXYZFourier, Surface):
         in ``src/simsoptpp/surfacexyzfourier.h``.
         """
         if self.stellsym:
-            names = self._make_names_helper('xc', True) \
-                + self._make_names_helper('ys', False) \
-                + self._make_names_helper('zs', False)
+            names = (
+                self._make_names_helper("xc", True)
+                + self._make_names_helper("ys", False)
+                + self._make_names_helper("zs", False)
+            )
         else:
-            names = self._make_names_helper('xc', True) \
-                + self._make_names_helper('xs', False) \
-                + self._make_names_helper('yc', True) \
-                + self._make_names_helper('ys', False) \
-                + self._make_names_helper('zc', True) \
-                + self._make_names_helper('zs', False)
+            names = (
+                self._make_names_helper("xc", True)
+                + self._make_names_helper("xs", False)
+                + self._make_names_helper("yc", True)
+                + self._make_names_helper("ys", False)
+                + self._make_names_helper("zc", True)
+                + self._make_names_helper("zs", False)
+            )
         return names
 
     def _make_names_helper(self, prefix, include0):
@@ -111,9 +128,12 @@ class SurfaceXYZFourier(sopp.SurfaceXYZFourier, Surface):
         else:
             names = []
 
-        names += [prefix + '(0,' + str(n) + ')' for n in range(1, self.ntor + 1)]
+        names += [prefix + "(0," + str(n) + ")" for n in range(1, self.ntor + 1)]
         for m in range(1, self.mpol + 1):
-            names += [prefix + '(' + str(m) + ',' + str(n) + ')' for n in range(-self.ntor, self.ntor + 1)]
+            names += [
+                prefix + "(" + str(m) + "," + str(n) + ")"
+                for n in range(-self.ntor, self.ntor + 1)
+            ]
         return names
 
     def get_dofs(self):
@@ -138,12 +158,14 @@ class SurfaceXYZFourier(sopp.SurfaceXYZFourier, Surface):
         """
         ntor = self.ntor
         mpol = self.mpol
-        surf = SurfaceRZFourier(nfp=self.nfp,
-                                stellsym=self.stellsym,
-                                mpol=mpol,
-                                ntor=ntor,
-                                quadpoints_phi=self.quadpoints_phi,
-                                quadpoints_theta=self.quadpoints_theta)
+        surf = SurfaceRZFourier(
+            nfp=self.nfp,
+            stellsym=self.stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=self.quadpoints_phi,
+            quadpoints_theta=self.quadpoints_theta,
+        )
 
         gamma = np.zeros((surf.quadpoints_phi.size, surf.quadpoints_theta.size, 3))
         for idx in range(gamma.shape[0]):
@@ -161,7 +183,8 @@ class SurfaceXYZFourier(sopp.SurfaceXYZFourier, Surface):
         """
         self._extend_via_normal_for_nonuniform_phi(distance)
 
-
-    return_fn_map = {'area': sopp.SurfaceXYZFourier.area,
-                     'volume': sopp.SurfaceXYZFourier.volume,
-                     'aspect-ratio': Surface.aspect_ratio}
+    return_fn_map = {
+        "area": sopp.SurfaceXYZFourier.area,
+        "volume": sopp.SurfaceXYZFourier.volume,
+        "aspect-ratio": Surface.aspect_ratio,
+    }

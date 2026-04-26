@@ -8,14 +8,17 @@ This module contains the :class:`~simsopt.util.mpi.MpiPartition` class.
 This module should be completely self-contained, depending only on
 mpi4py and numpy, not on any other simsopt components.
 """
-__all__ = ['log', 'MpiPartition']
+
+__all__ = ["log", "MpiPartition"]
 
 import logging
 import numpy as np
 
 from .._core.dev import SimsoptRequires
+
 try:
     from mpi4py import MPI
+
     comm_world = MPI.COMM_WORLD
 except ImportError:
     MPI = None
@@ -23,7 +26,7 @@ except ImportError:
 
 STOP = 0
 
-__all__ = ['log', 'MpiPartition', 'proc0_print', 'comm_world']
+__all__ = ["log", "MpiPartition", "proc0_print", "comm_world"]
 
 
 def log(level: int = logging.INFO):
@@ -32,7 +35,7 @@ def log(level: int = logging.INFO):
     added to all logging entries.
 
     Args:
-        level: Typically ``logging.INFO`` for regular output, or 
+        level: Typically ``logging.INFO`` for regular output, or
           ``logging.DEBUG`` for more extensive output.
     """
     format = "%(levelname)s:%(name)s:%(lineno)d %(message)s"
@@ -89,45 +92,40 @@ class MpiPartition:
     .
     """
 
-    def __init__(self,
-                 ngroups=None,
-                 comm_world=None):
+    def __init__(self, ngroups=None, comm_world=None):
 
         self.is_apart = False
         self.comm_world = comm_world if comm_world is not None else MPI.COMM_WORLD
 
         self.rank_world = self.comm_world.Get_rank()
         self.nprocs_world = self.comm_world.Get_size()
-        self.proc0_world = (self.rank_world == 0)
+        self.proc0_world = self.rank_world == 0
 
         if ngroups is None:
             ngroups = self.nprocs_world
         # Force ngroups to be in the range [1, nprocs_world]
         if ngroups < 1:
             ngroups = 1
-            logger.info('Raising ngroups to 1')
+            logger.info("Raising ngroups to 1")
         if ngroups > self.nprocs_world:
             ngroups = self.nprocs_world
-            logger.info('Lowering ngroups to {}'.format(ngroups))
+            logger.info("Lowering ngroups to {}".format(ngroups))
         self.ngroups = ngroups
 
-        self.group = int(
-            np.floor((self.rank_world * ngroups) / self.nprocs_world))
+        self.group = int(np.floor((self.rank_world * ngroups) / self.nprocs_world))
 
         # Set up the "groups" communicator:
-        self.comm_groups = self.comm_world.Split(color=self.group,
-                                                 key=self.rank_world)
+        self.comm_groups = self.comm_world.Split(color=self.group, key=self.rank_world)
         self.rank_groups = self.comm_groups.Get_rank()
         self.nprocs_groups = self.comm_groups.Get_size()
-        self.proc0_groups = (self.rank_groups == 0)
+        self.proc0_groups = self.rank_groups == 0
 
         # Set up the "leaders" communicator:
         if self.proc0_groups:
             color = 0
         else:
             color = MPI.UNDEFINED
-        self.comm_leaders = self.comm_world.Split(color=color,
-                                                  key=self.rank_world)
+        self.comm_leaders = self.comm_world.Split(color=color, key=self.rank_world)
         if self.proc0_groups:
             self.rank_leaders = self.comm_leaders.Get_rank()
             self.nprocs_leaders = self.comm_leaders.Get_size()
@@ -138,13 +136,27 @@ class MpiPartition:
             self.nprocs_leaders = -1
 
     def write(self):
-        """ Print info about the MPI configuration """
-        columns = ["rank_world", "nprocs_world", "group", "ngroups",
-                   "rank_groups", "nprocs_groups", "rank_leaders",
-                   "nprocs_leaders"]
-        data = [self.rank_world, self.nprocs_world, self.group, self.ngroups,
-                self.rank_groups, self.nprocs_groups, self.rank_leaders,
-                self.nprocs_leaders]
+        """Print info about the MPI configuration"""
+        columns = [
+            "rank_world",
+            "nprocs_world",
+            "group",
+            "ngroups",
+            "rank_groups",
+            "nprocs_groups",
+            "rank_leaders",
+            "nprocs_leaders",
+        ]
+        data = [
+            self.rank_world,
+            self.nprocs_world,
+            self.group,
+            self.ngroups,
+            self.rank_groups,
+            self.nprocs_groups,
+            self.rank_leaders,
+            self.nprocs_leaders,
+        ]
 
         # Each processor sends their data to proc0_world, and
         # proc0_world writes the result to the file in order.
@@ -166,33 +178,31 @@ class MpiPartition:
         group leaders that it is time to begin some action,
         e.g. starting to calculat a finite difference Jacobian.
         """
-        logger.debug('mobilize_leaders, action_const={}'.format(action_const))
+        logger.debug("mobilize_leaders, action_const={}".format(action_const))
         if not self.proc0_world:
-            raise RuntimeError(
-                'Only proc0_world should call mobilize_leaders()')
+            raise RuntimeError("Only proc0_world should call mobilize_leaders()")
 
         self.comm_leaders.bcast(action_const, root=0)
 
     def mobilize_workers(self, action_const):
-        logger.debug('mobilize_workers, action_const={}'.format(action_const))
+        logger.debug("mobilize_workers, action_const={}".format(action_const))
         if not self.proc0_groups:
-            raise RuntimeError(
-                'Only group leaders should call mobilize_workers()')
+            raise RuntimeError("Only group leaders should call mobilize_workers()")
 
         self.comm_groups.bcast(action_const, root=0)
 
     def stop_leaders(self):
-        logger.debug('stop_leaders')
+        logger.debug("stop_leaders")
         if not self.proc0_world:
-            raise RuntimeError('Only proc0_world should call stop_leaders()')
+            raise RuntimeError("Only proc0_world should call stop_leaders()")
 
         data = STOP
         self.comm_leaders.bcast(data, root=0)
 
     def stop_workers(self):
-        logger.debug('stop_workers')
+        logger.debug("stop_workers")
         if not self.proc0_groups:
-            raise RuntimeError('Only proc0_groups should call stop_workers()')
+            raise RuntimeError("Only proc0_groups should call stop_workers()")
 
         data = STOP
         self.comm_groups.bcast(data, root=0)
@@ -205,10 +215,10 @@ class MpiPartition:
         mobilize_leaders.
         """
         if self.proc0_world:
-            logger.debug('proc0_world bypassing leaders_loop')
+            logger.debug("proc0_world bypassing leaders_loop")
             return
 
-        logger.debug('entering leaders_loop')
+        logger.debug("entering leaders_loop")
 
         while True:
             # Wait for proc 0 to send us something:
@@ -222,7 +232,7 @@ class MpiPartition:
             # Call the requested function:
             action(self, data)
 
-        logger.debug('leaders_loop end')
+        logger.debug("leaders_loop end")
 
     def worker_loop(self, action):
         """
@@ -232,23 +242,23 @@ class MpiPartition:
         mobilize_workers.
         """
         if self.proc0_groups:
-            logger.debug('bypassing worker_loop since proc0_groups')
+            logger.debug("bypassing worker_loop since proc0_groups")
             return
 
-        logger.debug('entering worker_loop')
+        logger.debug("entering worker_loop")
 
         while True:
             # Wait for the group leader to send us something:
             data = None
             data = self.comm_groups.bcast(data, root=0)
-            logger.debug(f'worker_loop worker received {data}')
+            logger.debug(f"worker_loop worker received {data}")
             if data == STOP:
                 break
 
             # Call the requested function:
             action(self, data)
 
-        logger.debug('worker_loop end')
+        logger.debug("worker_loop end")
 
     def apart(self, leaders_action, workers_action):
         """

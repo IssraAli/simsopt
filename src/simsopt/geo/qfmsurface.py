@@ -3,7 +3,7 @@ from scipy.optimize import minimize  # , NonlinearConstraint
 from .._core.json import GSONable
 from .surfaceobjectives import QfmResidual
 
-__all__ = ['QfmSurface']
+__all__ = ["QfmSurface"]
 
 
 class QfmSurface(GSONable):
@@ -49,7 +49,7 @@ class QfmSurface(GSONable):
         self.surface.x = x
         l = self.label.J()
         rl = l - self.targetlabel
-        val = 0.5 * rl ** 2
+        val = 0.5 * rl**2
 
         if derivatives:
             dl = self.label.dJ_by_dsurfacecoefficients()
@@ -111,11 +111,12 @@ class QfmSurface(GSONable):
 
         dl = self.label.dJ_by_dsurfacecoefficients()
 
-        dval = dr + constraint_weight*rl*dl
+        dval = dr + constraint_weight * rl * dl
         return val, dval
 
-    def minimize_qfm_penalty_constraints_LBFGS(self, tol=1e-3, maxiter=1000,
-                                               constraint_weight=1.):
+    def minimize_qfm_penalty_constraints_LBFGS(
+        self, tol=1e-3, maxiter=1000, constraint_weight=1.0
+    ):
         r"""
         This function tries to find the surface that approximately solves
 
@@ -128,19 +129,29 @@ class QfmSurface(GSONable):
 
         s = self.surface
         x = s.x
-        def fn(x): return self.qfm_penalty_constraints(
-            x, derivatives=1, constraint_weight=constraint_weight)
+
+        def fn(x):
+            return self.qfm_penalty_constraints(
+                x, derivatives=1, constraint_weight=constraint_weight
+            )
+
         res = minimize(
-            fn, x, jac=True, method='L-BFGS-B',
-            options={'maxiter': maxiter, 'ftol': tol, 'gtol': tol,
-                     'maxcor': 200})
+            fn,
+            x,
+            jac=True,
+            method="L-BFGS-B",
+            options={"maxiter": maxiter, "ftol": tol, "gtol": tol, "maxcor": 200},
+        )
 
         resdict = {
-            "fun": res.fun, "gradient": res.jac, "iter": res.nit, "info": res,
+            "fun": res.fun,
+            "gradient": res.jac,
+            "iter": res.nit,
+            "info": res,
             "success": res.success,
         }
         s.x = res.x
-        resdict['s'] = s
+        resdict["s"] = s
 
         return resdict
 
@@ -161,27 +172,41 @@ class QfmSurface(GSONable):
         s = self.surface
         x = s.x
 
-        def fun(x): return self.qfm_objective(x, derivatives=1)
-        def con(x): return self.qfm_label_constraint(x, derivatives=1)[0]
-        def dcon(x): return self.qfm_label_constraint(x, derivatives=1)[1]
+        def fun(x):
+            return self.qfm_objective(x, derivatives=1)
+
+        def con(x):
+            return self.qfm_label_constraint(x, derivatives=1)[0]
+
+        def dcon(x):
+            return self.qfm_label_constraint(x, derivatives=1)[1]
 
         # nlc = NonlinearConstraint(con, 0, 0)
-        eq_constraints = [{'type': 'eq', 'fun': con, 'jac': dcon}]
+        eq_constraints = [{"type": "eq", "fun": con, "jac": dcon}]
         res = minimize(
-            fun, x, jac=True, method='SLSQP', constraints=eq_constraints,
-            options={'maxiter': maxiter, 'ftol': tol})
+            fun,
+            x,
+            jac=True,
+            method="SLSQP",
+            constraints=eq_constraints,
+            options={"maxiter": maxiter, "ftol": tol},
+        )
 
         resdict = {
-            "fun": res.fun, "gradient": res.jac, "iter": res.nit, "info": res,
+            "fun": res.fun,
+            "gradient": res.jac,
+            "iter": res.nit,
+            "info": res,
             "success": res.success,
         }
         s.x = res.x
-        resdict['s'] = s
+        resdict["s"] = s
 
         return resdict
 
-    def minimize_qfm(self, tol=1e-3, maxiter=1000, method='SLSQP',
-                     constraint_weight=1.):
+    def minimize_qfm(
+        self, tol=1e-3, maxiter=1000, method="SLSQP", constraint_weight=1.0
+    ):
         r"""
         This function tries to find the surface that approximately solves
 
@@ -198,11 +223,11 @@ class QfmSurface(GSONable):
         is used defined by constraint_weight. If 'SLSQP' is chosen, constraint_weight
         is not used, and the constrained optimization problem is solved.
         """
-        if method == 'SLSQP':
-            return self.minimize_qfm_exact_constraints_SLSQP(
-                tol=tol, maxiter=maxiter)
-        elif method == 'LBFGS':
+        if method == "SLSQP":
+            return self.minimize_qfm_exact_constraints_SLSQP(tol=tol, maxiter=maxiter)
+        elif method == "LBFGS":
             return self.minimize_qfm_penalty_constraints_LBFGS(
-                tol=tol, maxiter=maxiter, constraint_weight=constraint_weight)
+                tol=tol, maxiter=maxiter, constraint_weight=constraint_weight
+            )
         else:
             raise ValueError

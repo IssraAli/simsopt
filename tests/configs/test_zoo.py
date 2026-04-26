@@ -20,52 +20,64 @@ class TestGetData(unittest.TestCase):
 
                 # Check that result is a 5-tuple
                 self.assertEqual(
-                    len(result), 5,
-                    f"Expected 5 elements for {config_name}, got {len(result)}")
+                    len(result),
+                    5,
+                    f"Expected 5 elements for {config_name}, got {len(result)}",
+                )
 
                 base_curves, base_currents, ma, nfp, bs = result
 
                 # Check base_curves is a list of Curve objects
                 self.assertIsInstance(
-                    base_curves, list,
-                    f"base_curves should be a list for {config_name}")
+                    base_curves, list, f"base_curves should be a list for {config_name}"
+                )
                 self.assertGreater(
-                    len(base_curves), 0,
-                    f"base_curves should not be empty for {config_name}")
+                    len(base_curves),
+                    0,
+                    f"base_curves should not be empty for {config_name}",
+                )
                 for i, curve in enumerate(base_curves):
                     self.assertIsInstance(
-                        curve, Curve,
-                        f"base_curves[{i}] should be a Curve for {config_name}, got {type(curve)}")
+                        curve,
+                        Curve,
+                        f"base_curves[{i}] should be a Curve for {config_name}, got {type(curve)}",
+                    )
 
                 # Check base_currents is a list of Current objects
                 self.assertIsInstance(
-                    base_currents, list,
-                    f"base_currents should be a list for {config_name}")
+                    base_currents,
+                    list,
+                    f"base_currents should be a list for {config_name}",
+                )
                 self.assertEqual(
-                    len(base_currents), len(base_curves),
-                    f"base_currents length should match base_curves for {config_name}")
+                    len(base_currents),
+                    len(base_curves),
+                    f"base_currents length should match base_curves for {config_name}",
+                )
                 for i, current in enumerate(base_currents):
                     self.assertIsInstance(
-                        current, Current,
-                        f"base_currents[{i}] should be a Current for {config_name}, got {type(current)}")
+                        current,
+                        Current,
+                        f"base_currents[{i}] should be a Current for {config_name}, got {type(current)}",
+                    )
 
                 # Check ma is a CurveRZFourier
                 self.assertIsInstance(
-                    ma, Curve,
-                    f"ma should be a Curve for {config_name}, got {type(ma)}")
+                    ma, Curve, f"ma should be a Curve for {config_name}, got {type(ma)}"
+                )
 
                 # Check nfp is an int
                 self.assertIsInstance(
-                    nfp, int,
-                    f"nfp should be an int for {config_name}, got {type(nfp)}")
-                self.assertGreater(
-                    nfp, 0,
-                    f"nfp should be positive for {config_name}")
+                    nfp, int, f"nfp should be an int for {config_name}, got {type(nfp)}"
+                )
+                self.assertGreater(nfp, 0, f"nfp should be positive for {config_name}")
 
                 # Check bs is a BiotSavart object
                 self.assertIsInstance(
-                    bs, BiotSavart,
-                    f"bs should be a BiotSavart for {config_name}, got {type(bs)}")
+                    bs,
+                    BiotSavart,
+                    f"bs should be a BiotSavart for {config_name}, got {type(bs)}",
+                )
 
     def test_invalid_configuration_raises_error(self):
         """Test that an invalid configuration name raises ValueError."""

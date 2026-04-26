@@ -53,7 +53,7 @@ else:
     MpiPartition = None
 
 
-__all__ = ['Spec', 'Residue']
+__all__ = ["Spec", "Residue"]
 
 
 class Spec(Optimizable):
@@ -90,23 +90,23 @@ class Spec(Optimizable):
           default set to 1E-12.
     """
 
-    def __init__(self,
-                 filename: Optional[str] = None,
-                 mpi: Optional[MpiPartition] = None,
-                 verbose: bool = True,
-                 keep_all_files: bool = False,
-                 tolerance: float = 1e-12):
+    def __init__(
+        self,
+        filename: Optional[str] = None,
+        mpi: Optional[MpiPartition] = None,
+        verbose: bool = True,
+        keep_all_files: bool = False,
+        tolerance: float = 1e-12,
+    ):
 
         if spec is None:
             raise RuntimeError(
-                "Using Spec requires spec python wrapper to be installed.")
-        if py_spec is None:
-            raise RuntimeError(
-                "Using Spec requires py_spec to be installed.")
-        if tolerance <= 0:
-            raise ValueError(
-                'tolerance should be greater than zero'
+                "Using Spec requires spec python wrapper to be installed."
             )
+        if py_spec is None:
+            raise RuntimeError("Using Spec requires py_spec to be installed.")
+        if tolerance <= 0:
+            raise ValueError("tolerance should be greater than zero")
         self.tolerance = tolerance
 
         self.lib = spec
@@ -132,17 +132,18 @@ class Spec(Optimizable):
         if filename is None:
             # Read default input file, which should be in the same
             # directory as this file:
-            filename = os.path.join(os.path.dirname(__file__), 'defaults.sp')
+            filename = os.path.join(os.path.dirname(__file__), "defaults.sp")
             if self.mpi.proc0_groups:
-                logger.info(
-                    f"Initializing a SPEC object from defaults in {filename}")
+                logger.info(f"Initializing a SPEC object from defaults in {filename}")
         else:
-            if not filename.endswith('.sp'):
+            if not filename.endswith(".sp"):
                 filename = f"{filename}.sp"
             if self.mpi.proc0_groups:
-                logger.info(f"Group {self.mpi.group}: Initializing a SPEC object from file: {filename}")
+                logger.info(
+                    f"Group {self.mpi.group}: Initializing a SPEC object from file: {filename}"
+                )
 
-        #If spec has run before, clear the f90wrap array caches.
+        # If spec has run before, clear the f90wrap array caches.
         # See https://github.com/hiddenSymmetries/simsopt/pull/431
         # This addresses the issue https://github.com/hiddenSymmetries/simsopt/issues/357
         if spec.allglobal._arrays:
@@ -184,38 +185,54 @@ class Spec(Optimizable):
 
         # Store axis data
         self.axis = {}
-        self.axis['rac'] = copy.copy(si.rac[0:si.ntor+1])
-        self.axis['zas'] = copy.copy(si.zas[0:si.ntor+1])
+        self.axis["rac"] = copy.copy(si.rac[0 : si.ntor + 1])
+        self.axis["zas"] = copy.copy(si.zas[0 : si.ntor + 1])
         if si.istellsym == 0:
-            self.axis['ras'] = copy.copy(si.ras[0:si.ntor+1])
-            self.axis['zac'] = copy.copy(si.zac[0:si.ntor+1])
+            self.axis["ras"] = copy.copy(si.ras[0 : si.ntor + 1])
+            self.axis["zac"] = copy.copy(si.zac[0 : si.ntor + 1])
 
         self.extension = filename[:-3]
         self.keep_all_files = keep_all_files
         self.files_to_delete = []
 
         # Create a surface object for the boundary:
-        self._boundary = SurfaceRZFourier(nfp=self.nfp, stellsym=self.stellsym,
-                                          mpol=self.mpol, ntor=self.ntor)
-        self._boundary.rc[:] = self.array_translator(si.rbc, style='spec').as_simsopt
-        self._boundary.zs[:] = self.array_translator(si.zbs, style='spec').as_simsopt
+        self._boundary = SurfaceRZFourier(
+            nfp=self.nfp, stellsym=self.stellsym, mpol=self.mpol, ntor=self.ntor
+        )
+        self._boundary.rc[:] = self.array_translator(si.rbc, style="spec").as_simsopt
+        self._boundary.zs[:] = self.array_translator(si.zbs, style="spec").as_simsopt
         if not self.stellsym:
-            self._boundary.rs[:] = self.array_translator(si.rbs, style='spec').as_simsopt
-            self._boundary.zc[:] = self.array_translator(si.zbc, style='spec').as_simsopt
+            self._boundary.rs[:] = self.array_translator(
+                si.rbs, style="spec"
+            ).as_simsopt
+            self._boundary.zc[:] = self.array_translator(
+                si.zbc, style="spec"
+            ).as_simsopt
         self._boundary.local_full_x = self._boundary.get_dofs()
 
         # If the equilibrium is freeboundary, we need to read the computational
         # boundary as well. Otherwise set the outermost boundary as the
         # computational boundary.
         if self.freebound:
-            self._computational_boundary = SurfaceRZFourier(nfp=self.nfp, stellsym=self.stellsym,
-                                                            mpol=self.mpol, ntor=self.ntor)
-            self._computational_boundary.rc[:] = self.array_translator(si.rwc, style='spec').as_simsopt
-            self._computational_boundary.zs[:] = self.array_translator(si.zws, style='spec').as_simsopt
+            self._computational_boundary = SurfaceRZFourier(
+                nfp=self.nfp, stellsym=self.stellsym, mpol=self.mpol, ntor=self.ntor
+            )
+            self._computational_boundary.rc[:] = self.array_translator(
+                si.rwc, style="spec"
+            ).as_simsopt
+            self._computational_boundary.zs[:] = self.array_translator(
+                si.zws, style="spec"
+            ).as_simsopt
             if not self.stellsym:
-                self._computational_boundary.rs[:] = self.array_translator(si.rws, style='spec').as_simsopt
-                self._computational_boundary.zc[:] = self.array_translator(si.zwc, style='spec').as_simsopt
-            self._computational_boundary.local_full_x = self._computational_boundary.get_dofs()
+                self._computational_boundary.rs[:] = self.array_translator(
+                    si.rws, style="spec"
+                ).as_simsopt
+                self._computational_boundary.zc[:] = self.array_translator(
+                    si.zwc, style="spec"
+                ).as_simsopt
+            self._computational_boundary.local_full_x = (
+                self._computational_boundary.get_dofs()
+            )
 
         self.need_to_run_code = True
         self.counter = -1
@@ -237,10 +254,15 @@ class Spec(Optimizable):
         if self.freebound:
             vns = self.array_translator(si.vns)
             vnc = self.array_translator(si.vnc)
-            self._normal_field = NormalField(nfp=self.nfp, stellsym=self.stellsym,
-                                             mpol=self.mpol, ntor=self.ntor,
-                                             vns=vns.as_simsopt, vnc=vnc.as_simsopt,
-                                             surface=self._computational_boundary)
+            self._normal_field = NormalField(
+                nfp=self.nfp,
+                stellsym=self.stellsym,
+                mpol=self.mpol,
+                ntor=self.ntor,
+                vns=vns.as_simsopt,
+                vnc=vnc.as_simsopt,
+                surface=self._computational_boundary,
+            )
         else:
             self._normal_field: Optional[NormalField] = None
 
@@ -248,15 +270,19 @@ class Spec(Optimizable):
         # dofs owned by the boundary surface object, are fixed.
         x0 = self.get_dofs()
         fixed = np.full(len(x0), True)
-        names = ['phiedge', 'curtor']
+        names = ["phiedge", "curtor"]
         if self.freebound:
             depends_on = [self._normal_field]
         else:
             depends_on = [self._boundary]
 
-        super().__init__(x0=x0, fixed=fixed, names=names,
-                         depends_on=depends_on,
-                         external_dof_setter=Spec.set_dofs)
+        super().__init__(
+            x0=x0,
+            fixed=fixed,
+            names=names,
+            depends_on=depends_on,
+            external_dof_setter=Spec.set_dofs,
+        )
 
     @classmethod
     def default_freeboundary(cls, copy_to_pwd, verbose=True):
@@ -266,9 +292,11 @@ class Spec(Optimizable):
             copy_to_pwd: boolean, if True, the default input file will be copied to the current working directory. Has to be set True as free-boundary SPEC can only handle files in the current working directory.
             verbose: boolean, if True, print statements will be printed
         """
-        filename = 'defaults_freebound.sp'
+        filename = "defaults_freebound.sp"
         if verbose:
-            print(f'Copying {os.path.join(os.path.dirname(__file__), filename)} to {os.getcwd()}/{filename}')
+            print(
+                f"Copying {os.path.join(os.path.dirname(__file__), filename)} to {os.getcwd()}/{filename}"
+            )
         shutil.copy(os.path.join(os.path.dirname(__file__), filename), os.getcwd())
         return cls(filename=filename, verbose=verbose)
 
@@ -284,8 +312,10 @@ class Spec(Optimizable):
         Read initial guesses from SPEC and return a list of surfaceRZFourier objects.
         """
         nmodes = self.allglobal.num_modes
-        interfaces = []    # initialize list
-        n_guess_surfs = self.nvol if self.freebound else self.nvol - 1  # if freeboundary, plasma boundary is also a guess surface
+        interfaces = []  # initialize list
+        n_guess_surfs = (
+            self.nvol if self.freebound else self.nvol - 1
+        )  # if freeboundary, plasma boundary is also a guess surface
         for lvol in range(0, n_guess_surfs):  # loop over volumes
             # the fourier comonents of the initial guess are stored in the allrzrz array
             thissurf_rc = self.allglobal.allrzrz[0, lvol, :nmodes]
@@ -293,12 +323,15 @@ class Spec(Optimizable):
             if not self.stellsym:
                 thissurf_rs = self.allglobal.allrzrz[2, lvol, :nmodes]
                 thissurf_zc = self.allglobal.allrzrz[3, lvol, :nmodes]
-            thissurf = SurfaceRZFourier(nfp=self.nfp, stellsym=self.stellsym,
-                                        mpol=self.mpol, ntor=self.ntor)
+            thissurf = SurfaceRZFourier(
+                nfp=self.nfp, stellsym=self.stellsym, mpol=self.mpol, ntor=self.ntor
+            )
             # the mode number convention is different in SPEC. Best to use the
             # in-built array mmrzrz to get the numbers for each fourier component:
             for imode in range(0, nmodes):
-                mm = self.allglobal.mmrzrz[imode]  # helper arrays to get index for each mode
+                mm = self.allglobal.mmrzrz[
+                    imode
+                ]  # helper arrays to get index for each mode
                 nn = self.allglobal.nnrzrz[imode]
                 # The guess surface could have more modes than we are running SPEC with, skip if case
                 if mm > self.mpol or abs(nn) > self.ntor:
@@ -325,8 +358,8 @@ class Spec(Optimizable):
 
         # Loop on modes
         imn = -1  # counter
-        for mm in range(0, self.mpol+1):
-            for nn in range(-self.ntor, self.ntor+1):
+        for mm in range(0, self.mpol + 1):
+            for nn in range(-self.ntor, self.ntor + 1):
                 if mm == 0 and nn < 0:
                     continue
 
@@ -336,30 +369,39 @@ class Spec(Optimizable):
                 spec.allglobal.nnrzrz[imn] = nn
 
                 # Populate inner plasma boundaries
-                for lvol in range(0, self.nvol-1):
-                    spec.allglobal.allrzrz[0, lvol, imn] = initial_guess[lvol].get_rc(mm, nn)
-                    spec.allglobal.allrzrz[1, lvol, imn] = initial_guess[lvol].get_zs(mm, nn)
+                for lvol in range(0, self.nvol - 1):
+                    spec.allglobal.allrzrz[0, lvol, imn] = initial_guess[lvol].get_rc(
+                        mm, nn
+                    )
+                    spec.allglobal.allrzrz[1, lvol, imn] = initial_guess[lvol].get_zs(
+                        mm, nn
+                    )
 
                     if not self.stellsym:
-                        spec.allglobal.allrzrz[2, lvol, imn] = initial_guess[lvol].get_rs(mm, nn)
-                        spec.allglobal.allrzrz[3, lvol, imn] = initial_guess[lvol].get_zc(mm, nn)
+                        spec.allglobal.allrzrz[2, lvol, imn] = initial_guess[
+                            lvol
+                        ].get_rs(mm, nn)
+                        spec.allglobal.allrzrz[3, lvol, imn] = initial_guess[
+                            lvol
+                        ].get_zc(mm, nn)
         spec.allglobal.num_modes = imn + 1
+
     # possibly cleaner way to do this (tested to work Chris Smiet 11/9/2023):
-#            n_indices, m_values = np.indices([2*si.ntor+1, si.mpol+1]) #get indices for array
-#            n_values = n_indices - si.ntor # offset indices to correspond with mode numbers
-#            index_mask = ~np.logical_and(m_values==0, n_values < 0) # twiddle ~ NOT, pick elements
-#            numel = np.sum(index_mask) # number of trues in mask, i.e. chosen elements
-#            spec.allglobal.mmrzrz[:numel] = m_values[index_mask] # skip elements, make 1
-#            spec.allglobal.nnrzrz[:numel] = n_values[index_mask] # skip m==0 n<0 elements
-#
-#            initial_guess = [s.to_RZFourier() for s in self.initial_guess]
-#            for lvol, surface in enumerate(initial_guess):
-#                # EXPLAIN: surface.rc is m,n indexed, transpose, apply above mask which unravels to 1d
-#                spec.allglobal.allrzrz[0, lvol, :numel] = surface.rc.transpose()[index_mask]
-#                spec.allglobal.allrzrz[1, lvol, :numel] = surface.zs.transpose()[index_mask]
-#                if not self.stellsym:
-#                    spec.allglobal.allrzrz[2, lvol, :numel] = surface.rs.transpose()[index_mask]
-#                    spec.allglobal.allrzrz[3, lvol, :numel] = surface.zc.transpose()[index_mask]
+    #            n_indices, m_values = np.indices([2*si.ntor+1, si.mpol+1]) #get indices for array
+    #            n_values = n_indices - si.ntor # offset indices to correspond with mode numbers
+    #            index_mask = ~np.logical_and(m_values==0, n_values < 0) # twiddle ~ NOT, pick elements
+    #            numel = np.sum(index_mask) # number of trues in mask, i.e. chosen elements
+    #            spec.allglobal.mmrzrz[:numel] = m_values[index_mask] # skip elements, make 1
+    #            spec.allglobal.nnrzrz[:numel] = n_values[index_mask] # skip m==0 n<0 elements
+    #
+    #            initial_guess = [s.to_RZFourier() for s in self.initial_guess]
+    #            for lvol, surface in enumerate(initial_guess):
+    #                # EXPLAIN: surface.rc is m,n indexed, transpose, apply above mask which unravels to 1d
+    #                spec.allglobal.allrzrz[0, lvol, :numel] = surface.rc.transpose()[index_mask]
+    #                spec.allglobal.allrzrz[1, lvol, :numel] = surface.zs.transpose()[index_mask]
+    #                if not self.stellsym:
+    #                    spec.allglobal.allrzrz[2, lvol, :numel] = surface.rs.transpose()[index_mask]
+    #                    spec.allglobal.allrzrz[3, lvol, :numel] = surface.zc.transpose()[index_mask]
 
     @property
     def boundary(self):
@@ -398,9 +440,9 @@ class Spec(Optimizable):
         Setter for the normal field
         """
         if not self.freebound:
-            raise ValueError('Normal field can only be set in freeboundary case')
+            raise ValueError("Normal field can only be set in freeboundary case")
         if not isinstance(normal_field, NormalField):
-            raise ValueError('Input should be a NormalField or CoilNormalField')
+            raise ValueError("Input should be a NormalField or CoilNormalField")
         if self._normal_field is not normal_field:
             self.remove_parent(self._normal_field)
             if self._computational_boundary is not normal_field.surface:
@@ -412,8 +454,8 @@ class Spec(Optimizable):
     @property
     def computational_boundary(self):
         """
-        Getter for the computational boundary. 
-        Same as the plasma boundary in the non-free-boundary case, 
+        Getter for the computational boundary.
+        Same as the plasma boundary in the non-free-boundary case,
         gives the surface on which Vns and Vnc are defined in the free-boundary case.
 
         Returns:
@@ -442,15 +484,15 @@ class Spec(Optimizable):
 
         # Check inputs
         if not isinstance(pressure_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if pressure_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         # Update pressure profile
         if pressure_profile is not self._pressure_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._pressure_profile is not None:
                 self.remove_parent(self._pressure_profile)
             self._pressure_profile = pressure_profile
@@ -478,17 +520,17 @@ class Spec(Optimizable):
         """
 
         if not isinstance(volume_current_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if volume_current_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         # Volume current is a cumulative property
         volume_current_profile.cumulative = True
 
         if volume_current_profile is not self._volume_current_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._volume_current_profile is not None:
                 self.remove_parent(self._volume_current_profile)
             self._volume_current_profile = volume_current_profile
@@ -516,14 +558,14 @@ class Spec(Optimizable):
         """
 
         if not isinstance(interface_current_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if interface_current_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         if interface_current_profile is not self._interface_current_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._interface_current_profile is not None:
                 self.remove_parent(self._interface_current_profile)
             self._interface_current_profile = interface_current_profile
@@ -551,14 +593,14 @@ class Spec(Optimizable):
         """
 
         if not isinstance(iota_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if iota_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         if iota_profile is not self._iota_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._iota_profile is not None:
                 self.remove_parent(self._iota_profile)
             self._iota_profile = iota_profile
@@ -586,14 +628,14 @@ class Spec(Optimizable):
         """
 
         if not isinstance(oita_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if oita_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         if oita_profile is not self._oita_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._oita_profile is not None:
                 self.remove_parent(self._oita_profile)
             self._oita_profile = oita_profile
@@ -621,14 +663,14 @@ class Spec(Optimizable):
         """
 
         if not isinstance(mu_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if mu_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         if mu_profile is not self._mu_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._mu_profile is not None:
                 self.remove_parent(self._mu_profile)
             self._mu_profile = mu_profile
@@ -656,17 +698,17 @@ class Spec(Optimizable):
         """
 
         if not isinstance(pflux_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if pflux_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         # pflux is a cumulative property
         pflux_profile.cumulative = True
 
         if pflux_profile is not self._pflux_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._pflux_profile is not None:
                 self.remove_parent(self._pflux_profile)
             self._pflux_profile = pflux_profile
@@ -694,17 +736,17 @@ class Spec(Optimizable):
         """
 
         if not isinstance(tflux_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if tflux_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         # pflux is a cumulative property
         tflux_profile.cumulative = True
 
         if tflux_profile is not self._tflux_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._tflux_profile is not None:
                 self.remove_parent(self._tflux_profile)
             self._tflux_profile = tflux_profile
@@ -732,14 +774,14 @@ class Spec(Optimizable):
         """
 
         if not isinstance(helicity_profile, ProfileSpec):
-            ValueError('Input should be a ProfileSpec')
+            ValueError("Input should be a ProfileSpec")
 
         # Check size
         if helicity_profile.dofs.full_x.size != self.mvol:
-            ValueError('Invalid number of dofs. Shoudl be equal to Mvol!')
+            ValueError("Invalid number of dofs. Shoudl be equal to Mvol!")
 
         if helicity_profile is not self._helicity_profile:
-            logging.debug('Replacing pressure_profile in setter')
+            logging.debug("Replacing pressure_profile in setter")
             if self._helicity_profile is not None:
                 self.remove_parent(self._tflux_profile)
             self._helicity_profile = helicity_profile
@@ -749,30 +791,52 @@ class Spec(Optimizable):
 
     def activate_profile(self, longname):
         """
-        Take a profile from the inputlist, and make it optimizable in 
+        Take a profile from the inputlist, and make it optimizable in
         simsopt.
 
         Args:
-            longname: string, one of ``"pressure"``, ``"volume_current"``, 
-                ``"interface_current"``, ``"iota"``, ``"oita"``, ``"mu"``, 
+            longname: string, one of ``"pressure"``, ``"volume_current"``,
+                ``"interface_current"``, ``"iota"``, ``"oita"``, ``"mu"``,
                 ``"pflux"``, ``"tflux"`` or ``"helicity"``.
         """
         profile_dict = {
-            'pressure': {'specname': 'pressure', 'cumulative': False, 'length': self.nvol},
-            'volume_current': {'specname': 'ivolume', 'cumulative': True, 'length': self.nvol},
-            'interface_current': {'specname': 'isurf', 'cumulative': False, 'length': self.nvol-1},
-            'helicity': {'specname': 'helicity', 'cumulative': False, 'length': self.mvol},
-            'iota': {'specname': 'iota', 'cumulative': False, 'length': self.mvol},
-            'oita': {'specname': 'oita', 'cumulative': False, 'length': self.mvol},
-            'mu': {'specname': 'mu', 'cumulative': False, 'length': self.mvol},
-            'pflux': {'specname': 'pflux', 'cumulative': True, 'length': self.mvol},
-            'tflux': {'specname': 'tflux', 'cumulative': True, 'length': self.mvol}
+            "pressure": {
+                "specname": "pressure",
+                "cumulative": False,
+                "length": self.nvol,
+            },
+            "volume_current": {
+                "specname": "ivolume",
+                "cumulative": True,
+                "length": self.nvol,
+            },
+            "interface_current": {
+                "specname": "isurf",
+                "cumulative": False,
+                "length": self.nvol - 1,
+            },
+            "helicity": {
+                "specname": "helicity",
+                "cumulative": False,
+                "length": self.mvol,
+            },
+            "iota": {"specname": "iota", "cumulative": False, "length": self.mvol},
+            "oita": {"specname": "oita", "cumulative": False, "length": self.mvol},
+            "mu": {"specname": "mu", "cumulative": False, "length": self.mvol},
+            "pflux": {"specname": "pflux", "cumulative": True, "length": self.mvol},
+            "tflux": {"specname": "tflux", "cumulative": True, "length": self.mvol},
         }
 
-        profile_data = self.inputlist.__getattribute__(profile_dict[longname]['specname'])[0:profile_dict[longname]['length']]
-        profile = ProfileSpec(profile_data, cumulative=profile_dict[longname]['cumulative'], psi_edge=self.inputlist.phiedge)
+        profile_data = self.inputlist.__getattribute__(
+            profile_dict[longname]["specname"]
+        )[0 : profile_dict[longname]["length"]]
+        profile = ProfileSpec(
+            profile_data,
+            cumulative=profile_dict[longname]["cumulative"],
+            psi_edge=self.inputlist.phiedge,
+        )
         profile.unfix_all()
-        self.__setattr__(longname + '_profile', profile)
+        self.__setattr__(longname + "_profile", profile)
 
     def set_profile(self, longname, lvol, value):
         """
@@ -780,7 +844,7 @@ class Spec(Optimizable):
         mu pflux and/or tflux in volume lvol
 
         Args:
-            longname: string, either 
+            longname: string, either
                 - 'pressure'
                 - 'volume_current'
                 - 'surface_current'
@@ -839,8 +903,7 @@ class Spec(Optimizable):
         self.need_to_run_code = True
 
     def get_dofs(self):
-        return np.array([self.inputlist.phiedge,
-                         self.inputlist.curtor])
+        return np.array([self.inputlist.phiedge, self.inputlist.curtor])
 
     def set_dofs(self, x):
         self.need_to_run_code = True
@@ -856,7 +919,7 @@ class Spec(Optimizable):
             self._mu_profile,
             self._pflux_profile,
             self._tflux_profile,
-            self._helicity_profile
+            self._helicity_profile,
         ]
         for p in profiles:
             if p is not None:
@@ -866,10 +929,10 @@ class Spec(Optimizable):
     def poloidal_current_amperes(self):
         """
         return the total poloidal current in Amperes,
-        i.e. the current that must be carried by the coils that link the plasma 
+        i.e. the current that must be carried by the coils that link the plasma
         poloidally
         """
-        return self.inputlist.curpol/(mu_0)
+        return self.inputlist.curpol / (mu_0)
 
     def _clear_f90wrap_array_caches(self):
         """
@@ -899,24 +962,24 @@ class Spec(Optimizable):
             logger.debug("Done with read_inputlists_from_file")
             spec.allglobal.check_inputs()
 
-        logger.debug('About to call broadcast_inputs')
+        logger.debug("About to call broadcast_inputs")
         spec.allglobal.broadcast_inputs()
-        logger.debug('About to call preset')
+        logger.debug("About to call preset")
         spec.preset()
         logger.debug("Done with init")
 
     def run(self, update_guess: bool = True):
         """
         Run SPEC, if needed.
-        The FORTRAN state has been created in the __init__ method (there can be only one for one python kernel), and the values in the FORTRAN memory are updated by python. 
+        The FORTRAN state has been created in the __init__ method (there can be only one for one python kernel), and the values in the FORTRAN memory are updated by python.
 
-        The most important values are in inputlist and allglobal. 
+        The most important values are in inputlist and allglobal.
 
         Note: Since all calls to fortran memory access the same memory, there is no difference between spec.inputlist and self.inputlist (or even my_other_spec2.inputlist).
 
         Args:
             - update_guess: boolean. If True, initial guess will be updated with
-              the geometry of the interfaces found at equilibrium. Default is 
+              the geometry of the interfaces found at equilibrium. Default is
               True
         """
         if not self.need_to_run_code:
@@ -936,7 +999,7 @@ class Spec(Optimizable):
         # Check that number of volumes in internal memory is consistent with
         # the input file
         if self.nvol != si.nvol:
-            ValueError('Inconsistent Nvol')
+            ValueError("Inconsistent Nvol")
 
         # nfp must be consistent between the surface and SPEC. The surface's
         # value trumps.
@@ -947,48 +1010,71 @@ class Spec(Optimizable):
         boundary_RZFourier = self.boundary.to_RZFourier()
 
         # Transfer boundary data to fortran:
-        si.rbc[:, :] = self.array_translator(boundary_RZFourier.rc, style='simsopt').as_spec
-        si.zbs[:, :] = self.array_translator(boundary_RZFourier.zs, style='simsopt').as_spec
+        si.rbc[:, :] = self.array_translator(
+            boundary_RZFourier.rc, style="simsopt"
+        ).as_spec
+        si.zbs[:, :] = self.array_translator(
+            boundary_RZFourier.zs, style="simsopt"
+        ).as_spec
         si.rbs[:, :] = 0.0
         si.zbc[:, :] = 0.0
         if not self.stellsym:
-            si.rbs[:, :] = self.array_translator(boundary_RZFourier.rs, style='simsopt').as_spec
-            si.zbc[:, :] = self.array_translator(boundary_RZFourier.zc, style='simsopt').as_spec
+            si.rbs[:, :] = self.array_translator(
+                boundary_RZFourier.rs, style="simsopt"
+            ).as_spec
+            si.zbc[:, :] = self.array_translator(
+                boundary_RZFourier.zc, style="simsopt"
+            ).as_spec
 
         # transfer normal field to fortran:
         if self.freebound:
-            si.vns[:, :] = self.array_translator(self.normal_field.get_vns_asarray(), style='simsopt').as_spec
+            si.vns[:, :] = self.array_translator(
+                self.normal_field.get_vns_asarray(), style="simsopt"
+            ).as_spec
             if not self.stellsym:
-                si.vnc[:, :] = self.array_translator(self.normal_field.get_vnc_asarray(), style='simsopt').as_spec
+                si.vnc[:, :] = self.array_translator(
+                    self.normal_field.get_vnc_asarray(), style="simsopt"
+                ).as_spec
 
         # Set the coordinate axis using the lrzaxis=2 feature:
         si.lrzaxis = 2
 
         # Set axis from latest converged state
-        mn = self.axis['rac'].size
-        si.rac[0:mn] = self.axis['rac']
-        si.zas[0:mn] = self.axis['zas']
+        mn = self.axis["rac"].size
+        si.rac[0:mn] = self.axis["rac"]
+        si.zas[0:mn] = self.axis["zas"]
         if si.istellsym == 0:
-            si.ras[0:mn] = self.axis['ras']
-            si.zac[0:mn] = self.axis['zac']
+            si.ras[0:mn] = self.axis["ras"]
+            si.zac[0:mn] = self.axis["zac"]
 
         # Set initial guess
-        if self.initial_guess is not None:  # note: self.initial_guess is None for workers!! only leaders read and do_stuff with initial_guess
+        if (
+            self.initial_guess is not None
+        ):  # note: self.initial_guess is None for workers!! only leaders read and do_stuff with initial_guess
             self._set_spec_initial_guess()  # workers get the info through a broadcast. this line fails if workers get a guess set
 
             # write the boundary which is a guess in freeboundary
             if self.freebound:
                 boundaryguess = self.initial_guess[-1].to_RZFourier()
-                si.rbc[:] = self.array_translator(boundaryguess.rc, style='simsopt').as_spec
-                si.zbs[:] = self.array_translator(boundaryguess.zs, style='simsopt').as_spec
+                si.rbc[:] = self.array_translator(
+                    boundaryguess.rc, style="simsopt"
+                ).as_spec
+                si.zbs[:] = self.array_translator(
+                    boundaryguess.zs, style="simsopt"
+                ).as_spec
                 if not self.stellsym:
-                    si.rbs[:] = self.array_translator(boundaryguess.rs, style='simsopt').as_spec
-                    si.zbc[:] = self.array_translator(boundaryguess.zc, style='simsopt').as_spec
+                    si.rbs[:] = self.array_translator(
+                        boundaryguess.rs, style="simsopt"
+                    ).as_spec
+                    si.zbc[:] = self.array_translator(
+                        boundaryguess.zc, style="simsopt"
+                    ).as_spec
 
         # Set profiles from dofs
         if self.pressure_profile is not None:
-            si.pressure[0:self.nvol] = self.pressure_profile.get(
-                np.arange(0, self.nvol))
+            si.pressure[0 : self.nvol] = self.pressure_profile.get(
+                np.arange(0, self.nvol)
+            )
             if si.lfreebound:
                 si.pressure[self.nvol] = 0
 
@@ -999,37 +1085,44 @@ class Spec(Optimizable):
             for lvol in range(0, self.mvol):
                 if self.volume_current_profile.is_fixed(lvol):
                     if lvol != 0:
-                        si.ivolume[lvol] = si.ivolume[lvol] - \
-                            old_ivolume[lvol - 1] + si.ivolume[lvol - 1]
+                        si.ivolume[lvol] = (
+                            si.ivolume[lvol]
+                            - old_ivolume[lvol - 1]
+                            + si.ivolume[lvol - 1]
+                        )
                         self.set_profile(
-                            'volume_current', lvol=lvol, value=si.ivolume[lvol])
+                            "volume_current", lvol=lvol, value=si.ivolume[lvol]
+                        )
                 else:
-                    si.ivolume[lvol] = self.get_profile('volume_current', lvol)
+                    si.ivolume[lvol] = self.get_profile("volume_current", lvol)
 
             if si.lfreebound:
                 si.ivolume[self.nvol] = si.ivolume[self.nvol - 1]
                 self.volume_current_profile.set(
-                    key=self.mvol - 1, new_val=si.ivolume[self.nvol - 1])
+                    key=self.mvol - 1, new_val=si.ivolume[self.nvol - 1]
+                )
 
         if self.interface_current_profile is not None:
-            si.isurf[0:self.mvol - 1] = \
-                self.interface_current_profile.get(np.arange(0, self.mvol-1))
+            si.isurf[0 : self.mvol - 1] = self.interface_current_profile.get(
+                np.arange(0, self.mvol - 1)
+            )
 
         # Update total plasma toroidal current in case of freeboundary
         # calculation
-        if ((self.volume_current_profile is not None) or
-            (self.interface_current_profile is not None)) and \
-                si.lfreebound:
+        if (
+            (self.volume_current_profile is not None)
+            or (self.interface_current_profile is not None)
+        ) and si.lfreebound:
             si.curtor = si.ivolume[self.nvol - 1] + np.sum(si.isurf)
 
         if self.iota_profile is not None:
-            si.iota[0:self.nvol+1] = self.iota_profile.get(np.arange(0, self.nvol))
+            si.iota[0 : self.nvol + 1] = self.iota_profile.get(np.arange(0, self.nvol))
 
         if self.oita_profile is not None:
-            si.oita[0:self.nvol+1] = self.oita_profile.get(np.arange(0, self.nvol))
+            si.oita[0 : self.nvol + 1] = self.oita_profile.get(np.arange(0, self.nvol))
 
         if self.mu_profile is not None:
-            si.mu[0:self.nvol] = self.mu_profile.get(np.arange(0, self.nvol))
+            si.mu[0 : self.nvol] = self.mu_profile.get(np.arange(0, self.nvol))
             if si.lfreebound:
                 si.mu[self.mvol] = 0
 
@@ -1040,10 +1133,10 @@ class Spec(Optimizable):
             for lvol in range(0, self.mvol):
                 if self.pflux_profile.is_fixed(lvol):
                     if lvol != 0:
-                        si.pflux[lvol] = si.pflux[lvol] - \
-                            old_pflux[lvol - 1] + si.pflux[lvol - 1]
-                        self.pflux_profile.set(
-                            key=lvol, new_val=si.pflux[lvol])
+                        si.pflux[lvol] = (
+                            si.pflux[lvol] - old_pflux[lvol - 1] + si.pflux[lvol - 1]
+                        )
+                        self.pflux_profile.set(key=lvol, new_val=si.pflux[lvol])
                 else:
                     si.pflux[lvol] = self.pflux_profile.get(lvol)
 
@@ -1054,15 +1147,17 @@ class Spec(Optimizable):
             for lvol in range(0, self.mvol):
                 if self.tflux_profile.is_fixed(lvol):
                     if lvol != 0:
-                        si.tflux[lvol] = si.tflux[lvol] - \
-                            old_tflux[lvol - 1] + si.tflux[lvol - 1]
-                        self.tflux_profile.set(
-                            key=lvol, new_val=si.tflux[lvol])
+                        si.tflux[lvol] = (
+                            si.tflux[lvol] - old_tflux[lvol - 1] + si.tflux[lvol - 1]
+                        )
+                        self.tflux_profile.set(key=lvol, new_val=si.tflux[lvol])
                 else:
                     si.tflux[lvol] = self.tflux_profile.get(lvol)
 
         if self.helicity_profile is not None:
-            si.helicity[0:self.nvol] = self.helicity_profile.get(np.arange(0, self.nvol))
+            si.helicity[0 : self.nvol] = self.helicity_profile.get(
+                np.arange(0, self.nvol)
+            )
             if si.lfreebound:
                 si.helicity[self.mvol] = 0
 
@@ -1072,43 +1167,42 @@ class Spec(Optimizable):
         # for n in range(2):
         #     si.rac[n] = si.rbc[n + si.mntor, m + si.mmpol]
         #     si.zas[n] = si.zbs[n + si.mntor, m + si.mmpol]
-        filename = self.extension + \
-            '_{:03}_{:06}'.format(self.mpi.group, self.counter)
+        filename = self.extension + "_{:03}_{:06}".format(self.mpi.group, self.counter)
         logger.info("Running SPEC using filename " + filename)
         self.allglobal.ext = filename
         try:
             # Here is where we actually run SPEC:
             if self.mpi.proc0_groups:
-                logger.debug('About to call check_inputs')
+                logger.debug("About to call check_inputs")
                 spec.allglobal.check_inputs()
-            logger.debug('About to call broadcast_inputs')
+            logger.debug("About to call broadcast_inputs")
             self.mpi.comm_groups.Barrier()  # Barrier to ensure all groups are ready to broadcast.
             spec.allglobal.broadcast_inputs()
-            logger.debug('About to call preset')
+            logger.debug("About to call preset")
             spec.preset()
-            logger.debug('About to call init_outfile')
+            logger.debug("About to call init_outfile")
             spec.sphdf5.init_outfile()
-            logger.debug('About to call mirror_input_to_outfile')
+            logger.debug("About to call mirror_input_to_outfile")
             spec.sphdf5.mirror_input_to_outfile()
             if self.mpi.proc0_groups:
-                logger.debug('About to call wrtend')
+                logger.debug("About to call wrtend")
                 spec.allglobal.wrtend()
-            logger.debug('About to call init_convergence_output')
+            logger.debug("About to call init_convergence_output")
             spec.sphdf5.init_convergence_output()
-            logger.debug('About to call spec')
+            logger.debug("About to call spec")
             spec.spec()
-            logger.debug('About to call diagnostics')
+            logger.debug("About to call diagnostics")
             spec.final_diagnostics()
-            logger.debug('About to call write_grid')
+            logger.debug("About to call write_grid")
             spec.sphdf5.write_grid()
             if self.mpi.proc0_groups:
-                logger.debug('About to call wrtend')
+                logger.debug("About to call wrtend")
                 spec.allglobal.wrtend()
-            logger.debug('About to call hdfint')
+            logger.debug("About to call hdfint")
             spec.sphdf5.hdfint()
-            logger.debug('About to call finish_outfile')
+            logger.debug("About to call finish_outfile")
             spec.sphdf5.finish_outfile()
-            logger.debug('About to call ending')
+            logger.debug("About to call ending")
             spec.ending()
 
         except BaseException:
@@ -1123,12 +1217,11 @@ class Spec(Optimizable):
 
         # Try to read SPEC output.
         try:
-            self.results = py_spec.SPECout(filename + '.sp.h5')
+            self.results = py_spec.SPECout(filename + ".sp.h5")
         except BaseException:
             if self.verbose:
                 traceback.print_exc()
-            raise ObjectiveFailure(
-                "Unable to read results following SPEC execution")
+            raise ObjectiveFailure("Unable to read results following SPEC execution")
 
         if self.mpi.proc0_groups:
             logger.info("Successfully loaded SPEC results.")
@@ -1139,47 +1232,68 @@ class Spec(Optimizable):
         if self.results.output.ForceErr > self.tolerance:
             # re-set the boundary field guess before failing, so the next run does not start unconverged.
             if self.freebound:
-                logger.info(f"run {filename}: Force balance unconverged, re-setting boundary field guess and raising ObjectiveFailure")
+                logger.info(
+                    f"run {filename}: Force balance unconverged, re-setting boundary field guess and raising ObjectiveFailure"
+                )
                 si.bns, si.bnc = initial_bns, initial_bnc
-            raise ObjectiveFailure(
-                'SPEC could not find force balance'
-            )
+            raise ObjectiveFailure("SPEC could not find force balance")
 
         # check for picard convergence once SPEC is updated
         if self.freebound:
             try:
                 if self.results.output.BnsErr > self.inputlist.gbntol:
                     if self.mpi.proc0_groups:
-                        logger.info(f"run {filename}: Picard iteration unconverged, re-setting boundary field guess and raising ObjectiveFailure")
+                        logger.info(
+                            f"run {filename}: Picard iteration unconverged, re-setting boundary field guess and raising ObjectiveFailure"
+                        )
                     si.bns, si.bnc = initial_bns, initial_bnc
                     raise ObjectiveFailure(
-                        'Picard iteration failed to reach convergence, increase mfreeits or gbntol'
+                        "Picard iteration failed to reach convergence, increase mfreeits or gbntol"
                     )
             except AttributeError:
-                logger.info('Picard convergence not checked, please update SPEC version 3.22 or higher')
-                print("Picard convergence not checked, please update SPEC version 3.22 or higher")
+                logger.info(
+                    "Picard convergence not checked, please update SPEC version 3.22 or higher"
+                )
+                print(
+                    "Picard convergence not checked, please update SPEC version 3.22 or higher"
+                )
 
         # Save geometry as initial guess for next iterations
         if update_guess:
             new_guess = None
             if self.mvol > 1:
                 new_guess = [
-                    SurfaceRZFourier(nfp=si.nfp, stellsym=si.istellsym, mpol=si.mpol, ntor=si.ntor) for n in range(0, self.mvol-1)
+                    SurfaceRZFourier(
+                        nfp=si.nfp, stellsym=si.istellsym, mpol=si.mpol, ntor=si.ntor
+                    )
+                    for n in range(0, self.mvol - 1)
                 ]
 
-                for ii, (mm, nn) in enumerate(zip(self.results.output.im, self.results.output.in_)):
-                    nnorm = (nn / si.nfp).astype('int')  # results.output.in_ is fourier number for 1 field period for reasons...
-                    for lvol in range(0, self.mvol-1):
-                        new_guess[lvol].set_rc(mm, nnorm, self.results.output.Rbc[lvol+1, ii])
-                        new_guess[lvol].set_zs(mm, nnorm, self.results.output.Zbs[lvol+1, ii])
+                for ii, (mm, nn) in enumerate(
+                    zip(self.results.output.im, self.results.output.in_)
+                ):
+                    nnorm = (nn / si.nfp).astype(
+                        "int"
+                    )  # results.output.in_ is fourier number for 1 field period for reasons...
+                    for lvol in range(0, self.mvol - 1):
+                        new_guess[lvol].set_rc(
+                            mm, nnorm, self.results.output.Rbc[lvol + 1, ii]
+                        )
+                        new_guess[lvol].set_zs(
+                            mm, nnorm, self.results.output.Zbs[lvol + 1, ii]
+                        )
 
                         if not si.istellsym:
-                            new_guess[lvol].set_rs(mm, nnorm, self.results.output.Rbs[lvol+1, ii])
-                            new_guess[lvol].set_zc(mm, nnorm, self.results.output.Zbc[lvol+1, ii])
+                            new_guess[lvol].set_rs(
+                                mm, nnorm, self.results.output.Rbs[lvol + 1, ii]
+                            )
+                            new_guess[lvol].set_zc(
+                                mm, nnorm, self.results.output.Zbc[lvol + 1, ii]
+                            )
 
                 axis = {}
-                axis['rac'] = self.results.output.Rbc[0, 0:si.ntor+1]
-                axis['zas'] = self.results.output.Zbs[0, 0:si.ntor+1]
+                axis["rac"] = self.results.output.Rbc[0, 0 : si.ntor + 1]
+                axis["zas"] = self.results.output.Zbs[0, 0 : si.ntor + 1]
                 self.axis = copy.copy(axis)
 
             # Enforce SPEC to use initial guess, but only group leaders have the necessary arrays
@@ -1192,10 +1306,10 @@ class Spec(Optimizable):
             # If the worker group is not 0, delete all wout files, unless
             # keep_all_files is True:
             if (not self.keep_all_files) and (self.mpi.group > 0):
-                os.remove(filename + '.sp.h5')
-                os.remove(filename + '.sp.end')
-                if os.path.exists('.' + filename + '.sp.DF'):
-                    os.remove('.' + filename + '.sp.DF')
+                os.remove(filename + ".sp.h5")
+                os.remove(filename + ".sp.end")
+                if os.path.exists("." + filename + ".sp.DF"):
+                    os.remove("." + filename + ".sp.DF")
 
             # Delete the previous output file, if desired:
             for file_to_delete in self.files_to_delete:
@@ -1203,10 +1317,13 @@ class Spec(Optimizable):
             self.files_to_delete = []
 
             # Record the latest output file to delete if we run again:
-            if (self.mpi.group == 0) and (
-                    self.counter > 0) and (not self.keep_all_files):
-                self.files_to_delete.append(filename + '.sp.h5')
-                self.files_to_delete.append(filename + '.sp.end')
+            if (
+                (self.mpi.group == 0)
+                and (self.counter > 0)
+                and (not self.keep_all_files)
+            ):
+                self.files_to_delete.append(filename + ".sp.h5")
+                self.files_to_delete.append(filename + ".sp.end")
         if self.mpi.proc0_groups:
             logger.info(f"file {filename} completed run sucessfully")
 
@@ -1224,34 +1341,36 @@ class Spec(Optimizable):
         self.run()
         return self.results.transform.fiota[1, 0]
 
-    def array_translator(self, array=None, style='spec'):
+    def array_translator(self, array=None, style="spec"):
         """
         Returns a SpecFourierArray object to help transforming between
         arrays using SPEC conventions and simsopt conventions.
 
         create from an array of either style by setting style='spec' or
-        style='simsopt' upon creation. 
+        style='simsopt' upon creation.
 
         The created class will have properties:
         - as_spec: returns the SPEC style array
         - as_simsopt: returns the simsopt style array
         and setters to set the arrays from either convention after creation.
 
-        SPEC arrays are zero-padded and indexed with Fortran conventions, 
+        SPEC arrays are zero-padded and indexed with Fortran conventions,
         in python that means the m=0,n=0 component is at [nmtor,mmpol].
 
-        use: 
+        use:
         vnc = myspec.array_translator(myspec.inputlist.rbc)
-        mysurf.rc = vnc.as_simsopt 
+        mysurf.rc = vnc.as_simsopt
         """
-        if style == 'spec':
+        if style == "spec":
             return Spec.SpecFourierArray(self, array)
-        elif style == 'simsopt':
+        elif style == "simsopt":
             obj = Spec.SpecFourierArray(self)
             obj.as_simsopt = array  # setter function
             return obj
         else:
-            raise ValueError(f'array style:{style} not supported, options: [simsopt, spec]')
+            raise ValueError(
+                f"array style:{style} not supported, options: [simsopt, spec]"
+            )
 
     # Inner class of Spec
     class SpecFourierArray:
@@ -1260,9 +1379,9 @@ class Spec(Optimizable):
         strange SPEC array sizing and indexing conventions.
 
         SPEC stores Fourier series in a very large zero-padded
-        array with Fortran variable indexing and 'n,m' indexing 
+        array with Fortran variable indexing and 'n,m' indexing
         convention.
-        In python this means the m=0,n=0 component is at [nmtor,mmpol]. 
+        In python this means the m=0,n=0 component is at [nmtor,mmpol].
 
 
         """
@@ -1272,7 +1391,7 @@ class Spec(Optimizable):
             self._mmpol = outer_spec.inputlist.mmpol
             self._mntor = outer_spec.inputlist.mntor
             if array is None:
-                array = np.zeros((2*self._mntor+1, 2*self._mmpol+1))
+                array = np.zeros((2 * self._mntor + 1, 2 * self._mmpol + 1))
             self._array = np.array(array)
 
         @property
@@ -1281,14 +1400,14 @@ class Spec(Optimizable):
 
         @as_spec.setter
         def as_spec(self, array):
-            if array.shape != [2*self.mntor+1, 2*self.mmpol+1]:
-                raise ValueError('Array size is not consistent witn mmpol and mntor')
+            if array.shape != [2 * self.mntor + 1, 2 * self.mmpol + 1]:
+                raise ValueError("Array size is not consistent witn mmpol and mntor")
             self._array = array
 
         @property
         def as_simsopt(self, ntor=None, mpol=None):
             """
-            get a simsopt style 'n,m' intexed non-padded array 
+            get a simsopt style 'n,m' intexed non-padded array
             from the SpecFourierArray.
             """
             if ntor is None:
@@ -1299,7 +1418,9 @@ class Spec(Optimizable):
             n_end = self._mntor + ntor + 1
             m_start = self._mmpol
             m_end = self._mmpol + mpol + 1
-            return self._array[n_start:n_end, m_start:m_end].transpose()  # switch n and m
+            return self._array[
+                n_start:n_end, m_start:m_end
+            ].transpose()  # switch n and m
 
         @as_simsopt.setter
         def as_simsopt(self, array, ntor=None, mpol=None):
@@ -1307,14 +1428,14 @@ class Spec(Optimizable):
             set the SpecFourierArray from a simsopt style 'm,n' intexed non-padded array
             """
             if mpol is None:
-                mpol = array.shape[0]-1
+                mpol = array.shape[0] - 1
             if ntor is None:
-                ntor = int((array.shape[1]-1)/2)
+                ntor = int((array.shape[1] - 1) / 2)
             n_start = self._mntor - ntor
             n_end = self._mntor + ntor + 1
             m_start = self._mmpol
             m_end = self._mmpol + mpol + 1
-            self._array = np.zeros((2*self._mntor+1, 2*self._mmpol+1))
+            self._array = np.zeros((2 * self._mntor + 1, 2 * self._mmpol + 1))
             self._array[n_start:n_end, m_start:m_end] = array.transpose()
 
 
@@ -1333,16 +1454,24 @@ class Residue(Optimizable):
         rtol: the relative tolerance of the integrator
     """
 
-    def __init__(self, spec, pp, qq, vol=1, theta=0., s_guess=None, s_min=-1.0,
-                 s_max=1.0, rtol=1e-9):
+    def __init__(
+        self,
+        spec,
+        pp,
+        qq,
+        vol=1,
+        theta=0.0,
+        s_guess=None,
+        s_min=-1.0,
+        s_max=1.0,
+        rtol=1e-9,
+    ):
         # if not spec_found:
         if spec is None:
-            raise RuntimeError(
-                "Residue requires spec package to be installed.")
+            raise RuntimeError("Residue requires spec package to be installed.")
         # if not pyoculus_found:
         if pyoculus is None:
-            raise RuntimeError(
-                "Residue requires pyoculus package to be installed.")
+            raise RuntimeError("Residue requires pyoculus package to be installed.")
 
         self.spec = spec
         self.pp = pp
@@ -1356,7 +1485,7 @@ class Residue(Optimizable):
             self.s_guess = s_guess
         self.s_min = s_min
         self.s_max = s_max
-        self.depends_on = ['spec']
+        self.depends_on = ["spec"]
         self.need_to_run_code = True
         self.fixed_point = None
         # We may at some point want to allow Residue to use a
@@ -1378,7 +1507,8 @@ class Residue(Optimizable):
 
         if not self.mpi.proc0_groups:
             logger.debug(
-                "This proc is skipping Residue.J() since it is not a group leader.")
+                "This proc is skipping Residue.J() since it is not a group leader."
+            )
             return 0.0
         else:
             specb = pyoculus.problems.SPECBfield(self.spec.results, self.vol)
@@ -1386,17 +1516,19 @@ class Residue(Optimizable):
             # pyoculus can cause examples/tests to be
             # non-reproducible.
             fp = pyoculus.solvers.FixedPoint(
-                specb, {
-                    'theta': self.theta, 'nrestart': 0}, integrator_params={
-                    'rtol': self.rtol})
-            self.fixed_point = fp.compute(self.s_guess,
-                                          sbegin=self.s_min,
-                                          send=self.s_max,
-                                          pp=self.pp, qq=self.qq)
+                specb,
+                {"theta": self.theta, "nrestart": 0},
+                integrator_params={"rtol": self.rtol},
+            )
+            self.fixed_point = fp.compute(
+                self.s_guess, sbegin=self.s_min, send=self.s_max, pp=self.pp, qq=self.qq
+            )
             self.need_to_run_code = False
 
         if self.fixed_point is None:
             raise ObjectiveFailure("Residue calculation failed")
-        logger.info(f"group {self.mpi.group} found residue {self.fixed_point.GreenesResidue} for {self.pp}/{self.qq} in {self.spec.allglobal.ext}")
+        logger.info(
+            f"group {self.mpi.group} found residue {self.fixed_point.GreenesResidue} for {self.pp}/{self.qq} in {self.spec.allglobal.ext}"
+        )
 
         return self.fixed_point.GreenesResidue

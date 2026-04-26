@@ -12,7 +12,7 @@ class Opt(Optimizable):
 
     def __init__(self, n=3, x0=None):
         self.n = n
-        x = x0 if x0 is not None else np.ones((n, ))
+        x = x0 if x0 is not None else np.ones((n,))
         super().__init__(x)
 
     def foo(self):
@@ -28,22 +28,21 @@ class Opt(Optimizable):
 
 
 class InterSum(Optimizable):
-
     def __init__(self, opt_a, opt_b):
         Optimizable.__init__(self, x0=np.asarray([]), depends_on=[opt_a, opt_b])
         self.opt_a = opt_a
         self.opt_b = opt_b
 
     def bar(self):
-        return np.sum(self.opt_a.foo()**2) + np.sum(self.opt_b.foo()**2)
+        return np.sum(self.opt_a.foo() ** 2) + np.sum(self.opt_b.foo() ** 2)
 
     def dbar_vjp(self, v):
-        return v[0] * self.opt_a.dfoo_vjp(2*self.opt_a.foo()) \
-            + v[0] * self.opt_b.dfoo_vjp(2*self.opt_b.foo())
+        return v[0] * self.opt_a.dfoo_vjp(2 * self.opt_a.foo()) + v[
+            0
+        ] * self.opt_b.dfoo_vjp(2 * self.opt_b.foo())
 
 
 class InterProd(Optimizable):
-
     def __init__(self, opt_a, opt_b):
         Optimizable.__init__(self, x0=np.asarray([]), depends_on=[opt_a, opt_b])
         self.opt_a = opt_a
@@ -54,24 +53,21 @@ class InterProd(Optimizable):
 
     def dbar_vjp(self, v):
         n_a = self.opt_a.n
-        v_a = np.zeros((n_a, ))
+        v_a = np.zeros((n_a,))
         for i in range(n_a):
-            v_a[i] = np.prod(self.opt_a.foo())/self.opt_a.foo()[i]
+            v_a[i] = np.prod(self.opt_a.foo()) / self.opt_a.foo()[i]
         v_a *= np.prod(self.opt_b.foo())
 
         n_b = self.opt_b.n
-        v_b = np.zeros((n_b, ))
+        v_b = np.zeros((n_b,))
         for i in range(n_b):
-            v_b[i] = np.prod(self.opt_b.foo())/self.opt_b.foo()[i]
+            v_b[i] = np.prod(self.opt_b.foo()) / self.opt_b.foo()[i]
         v_b *= np.prod(self.opt_a.foo())
 
-        return v[0] * self.opt_a.dfoo_vjp(v_a) \
-            + v[0] * self.opt_b.dfoo_vjp(v_b) \
-
+        return v[0] * self.opt_a.dfoo_vjp(v_a) + v[0] * self.opt_b.dfoo_vjp(v_b)
 
 
 class Obj(Optimizable):
-
     def __init__(self, inter_a, inter_b):
         Optimizable.__init__(self, x0=np.asarray([]), depends_on=[inter_a, inter_b])
         self.inter_a = inter_a
@@ -82,7 +78,9 @@ class Obj(Optimizable):
 
     @derivative_dec
     def dJ(self):
-        return self.inter_a.dbar_vjp([self.inter_b.bar()]) + self.inter_b.dbar_vjp([self.inter_a.bar()])
+        return self.inter_a.dbar_vjp([self.inter_b.bar()]) + self.inter_b.dbar_vjp(
+            [self.inter_a.bar()]
+        )
 
 
 def taylor_test(obj):
@@ -107,15 +105,14 @@ def taylor_test(obj):
         fmm = obj.J()
         obj.x = x - 3 * eps * h
         # print(np.abs((fp-fm)/(2*eps) - dfh))
-        dfhest = ((1/12) * fmm - (2/3) * fm + (2/3) * fp - (1/12) * fpp)/eps
+        dfhest = ((1 / 12) * fmm - (2 / 3) * fm + (2 / 3) * fp - (1 / 12) * fpp) / eps
         err = np.abs(dfhest - dfh)
-        assert err < (0.6)**4 * err_old
-        print(err_old/err)
+        assert err < (0.6) ** 4 * err_old
+        print(err_old / err)
         err_old = err
 
 
 class DerivativeTests(unittest.TestCase):
-
     def test_taylor_graph(self):
         # built a reasonably complex graph of two inputs, that both feed into
         # two intermediary results and then are combined into a final result.
@@ -177,13 +174,13 @@ class DerivativeTests(unittest.TestCase):
         np.testing.assert_allclose(obj3.dJ(), factor * obj1.dJ())
         w *= 3
         taylor_test(obj3)
-        np.testing.assert_allclose(obj3.J(), 3*factor * obj1.J())
-        np.testing.assert_allclose(obj3.dJ(), 3*factor * obj1.dJ())
+        np.testing.assert_allclose(obj3.J(), 3 * factor * obj1.J())
+        np.testing.assert_allclose(obj3.dJ(), 3 * factor * obj1.dJ())
         shift = 46.2
         w += shift
         taylor_test(obj3)
-        np.testing.assert_allclose(obj3.J(), (3*factor + shift) * obj1.J())
-        np.testing.assert_allclose(obj3.dJ(), (3*factor + shift) * obj1.dJ())
+        np.testing.assert_allclose(obj3.J(), (3 * factor + shift) * obj1.J())
+        np.testing.assert_allclose(obj3.dJ(), (3 * factor + shift) * obj1.dJ())
 
     def test_optimizable_sum(self):
         """
@@ -272,8 +269,8 @@ class DerivativeTests(unittest.TestCase):
         dj1 = opt1.dfoo_vjp(np.ones(3))
         dj2 = opt2.dfoo_vjp(np.ones(2))
 
-        dj1p2 = dj1 + dj2 + 2*dj1
-        assert np.allclose(dj1p2(opt1), 3*dj1(opt1))
+        dj1p2 = dj1 + dj2 + 2 * dj1
+        assert np.allclose(dj1p2(opt1), 3 * dj1(opt1))
         assert np.allclose(dj1p2(opt2), dj2(opt2))
 
     def test_sub_mul(self):
@@ -283,8 +280,8 @@ class DerivativeTests(unittest.TestCase):
         dj1 = opt1.dfoo_vjp(np.ones(3))
         dj2 = opt2.dfoo_vjp(np.ones(2))
 
-        dj1m2 = dj1 - dj2 - 2*dj1
-        assert np.allclose(dj1m2(opt1), -1*dj1(opt1))
+        dj1m2 = dj1 - dj2 - 2 * dj1
+        assert np.allclose(dj1m2(opt1), -1 * dj1(opt1))
         assert np.allclose(dj1m2(opt2), -dj2(opt2))
 
     def test_iadd(self):
@@ -298,7 +295,7 @@ class DerivativeTests(unittest.TestCase):
 
         dj1 += dj1_
         dj1 += dj2
-        assert np.allclose(dj1(opt1), 2*dj1_(opt1))
+        assert np.allclose(dj1(opt1), 2 * dj1_(opt1))
         assert np.allclose(dj1(opt2), dj2_(opt2))
 
     def test_isub(self):
@@ -310,9 +307,9 @@ class DerivativeTests(unittest.TestCase):
         dj2 = opt2.dfoo_vjp(np.ones(2))
         dj2_ = opt2.dfoo_vjp(np.ones(2))
 
-        dj1 -= 2*dj1_
+        dj1 -= 2 * dj1_
         dj1 -= dj2
-        assert np.allclose(dj1(opt1), (-1)*dj1_(opt1))
+        assert np.allclose(dj1(opt1), (-1) * dj1_(opt1))
         assert np.allclose(dj1(opt2), -dj2_(opt2))
 
     def test_imul(self):
@@ -325,15 +322,15 @@ class DerivativeTests(unittest.TestCase):
         dj1_ = opt1.dfoo_vjp(np.ones(3))
         dj2_ = opt2.dfoo_vjp(np.ones(2))
 
-        dj1 *= 2.
-        assert np.allclose(dj1(opt1), 2*dj1_(opt1))
-        dj = dj1 + 4*dj2
-        assert np.allclose(dj(opt1), 2*dj1_(opt1))
-        assert np.allclose(dj(opt2), 4*dj2_(opt2))
+        dj1 *= 2.0
+        assert np.allclose(dj1(opt1), 2 * dj1_(opt1))
+        dj = dj1 + 4 * dj2
+        assert np.allclose(dj(opt1), 2 * dj1_(opt1))
+        assert np.allclose(dj(opt2), 4 * dj2_(opt2))
 
     def test_zero_when_not_found(self):
         opt1 = Opt(n=3)
         opt2 = Opt(n=2)
 
         dj1 = opt1.dfoo_vjp(np.ones(3))
-        assert np.allclose(dj1(opt2), np.zeros((2, )))
+        assert np.allclose(dj1(opt2), np.zeros((2,)))

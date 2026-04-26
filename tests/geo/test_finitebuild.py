@@ -1,10 +1,20 @@
 import unittest
 from .surface_test_helpers import get_surface
 from simsopt.field.biotsavart import BiotSavart
-from simsopt.field.coil import Coil, apply_symmetries_to_curves, apply_symmetries_to_currents
+from simsopt.field.coil import (
+    Coil,
+    apply_symmetries_to_curves,
+    apply_symmetries_to_currents,
+)
 from simsopt.geo.curveobjectives import CurveLength, CurveCurveDistance
-from simsopt.geo import CurveFilament, FrameRotation, \
-    create_multifilament_grid, ZeroRotation, FramedCurveCentroid, FramedCurveFrenet
+from simsopt.geo import (
+    CurveFilament,
+    FrameRotation,
+    create_multifilament_grid,
+    ZeroRotation,
+    FramedCurveCentroid,
+    FramedCurveFrenet,
+)
 from simsopt.objectives.fluxobjective import SquaredFlux
 from simsopt.objectives.utilities import QuadraticPenalty
 from simsopt.configs.zoo import get_data
@@ -13,7 +23,6 @@ import numpy as np
 
 
 class MultifilamentTesting(unittest.TestCase):
-
     def test_multifilament_gammadash(self):
         for centroid in [True, False]:
             for order in [None, 1]:
@@ -22,15 +31,21 @@ class MultifilamentTesting(unittest.TestCase):
 
     def subtest_multifilament_gammadash(self, order, centroid):
         assert order in [1, None]
-        base_curves, base_currents, ma, nfp, bs = get_data("ncsx", coil_order=6, points_per_period=120)
+        base_curves, base_currents, ma, nfp, bs = get_data(
+            "ncsx", coil_order=6, points_per_period=120
+        )
         c = base_curves[0]
 
         if order == 1:
             rotation = FrameRotation(c.quadpoints, order)
             rotation.x = np.array([0, 0.1, 0.3])
-            rotationShared = FrameRotation(base_curves[0].quadpoints, order, dofs=rotation.dofs)
+            rotationShared = FrameRotation(
+                base_curves[0].quadpoints, order, dofs=rotation.dofs
+            )
             assert np.allclose(rotation.x, rotationShared.x)
-            assert np.allclose(rotation.alpha(c.quadpoints), rotationShared.alpha(c.quadpoints))
+            assert np.allclose(
+                rotation.alpha(c.quadpoints), rotationShared.alpha(c.quadpoints)
+            )
         else:
             rotation = ZeroRotation(c.quadpoints)
 
@@ -45,11 +60,21 @@ class MultifilamentTesting(unittest.TestCase):
         idx = 16
 
         dphi = c.quadpoints[1]
-        weights = [1/280, -4/105, 1/5, -4/5, 0, 4/5, -1/5, 4/105, -1/280]
+        weights = [
+            1 / 280,
+            -4 / 105,
+            1 / 5,
+            -4 / 5,
+            0,
+            4 / 5,
+            -1 / 5,
+            4 / 105,
+            -1 / 280,
+        ]
         est = 0
         for j in range(-4, 5):
-            est += weights[j+4] * g[idx+j, :]
-        est *= 1./dphi
+            est += weights[j + 4] * g[idx + j, :]
+        est *= 1.0 / dphi
         print(est)
         print(gd[idx])
         assert np.all(np.abs(est - gd[idx]) < 1e-10)
@@ -63,7 +88,9 @@ class MultifilamentTesting(unittest.TestCase):
     def subtest_multifilament_coefficient_derivative(self, order, centroid):
         assert order in [1, None]
 
-        base_curves, base_currents, ma, nfp, bs = get_data("ncsx", coil_order=4, points_per_period=10)
+        base_curves, base_currents, ma, nfp, bs = get_data(
+            "ncsx", coil_order=4, points_per_period=10
+        )
         c = base_curves[0]
 
         if order == 1:
@@ -87,19 +114,19 @@ class MultifilamentTesting(unittest.TestCase):
 
         v = np.random.standard_normal(size=g.shape)
         h = np.random.standard_normal(size=dofs.shape)
-        df = np.sum(c.dgamma_by_dcoeff_vjp(v)(c)*h)
-        dg = np.sum(c.dgammadash_by_dcoeff_vjp(v)(c)*h)
+        df = np.sum(c.dgamma_by_dcoeff_vjp(v)(c) * h)
+        dg = np.sum(c.dgammadash_by_dcoeff_vjp(v)(c) * h)
 
         errf_old = 1e10
         errg_old = 1e10
 
         for i in range(12, 17):
             eps = 0.5**i
-            c.x = dofs + eps*h
-            f1 = np.sum(c.gamma()*v)
-            c.x = dofs - eps*h
-            f2 = np.sum(c.gamma()*v)
-            errf = (f1-f2)/(2*eps) - df
+            c.x = dofs + eps * h
+            f1 = np.sum(c.gamma() * v)
+            c.x = dofs - eps * h
+            f2 = np.sum(c.gamma() * v)
+            errf = (f1 - f2) / (2 * eps) - df
             print(errf)
             assert errf < 0.3 * errf_old
             errf_old = errf
@@ -107,18 +134,20 @@ class MultifilamentTesting(unittest.TestCase):
         print("==============")
         for i in range(10, 17):
             eps = 0.5**i
-            c.x = dofs + eps*h
-            g1 = np.sum(c.gammadash()*v)
-            c.x = dofs - eps*h
-            g2 = np.sum(c.gammadash()*v)
-            errg = (g1-g2)/(2*eps) - dg
+            c.x = dofs + eps * h
+            g1 = np.sum(c.gammadash() * v)
+            c.x = dofs - eps * h
+            g2 = np.sum(c.gammadash() * v)
+            errg = (g1 - g2) / (2 * eps) - dg
             # errg = (g1-g0)/(eps) - dg
             print(errg)
             assert errg < 0.3 * errg_old
             errg_old = errg
 
     def test_filamentpack(self):
-        base_curves, base_currents, ma, nfp, bs = get_data("ncsx", coil_order=6, points_per_period=80)
+        base_curves, base_currents, ma, nfp, bs = get_data(
+            "ncsx", coil_order=6, points_per_period=80
+        )
         c = base_curves[0]
 
         gapsize_n = 0.01
@@ -126,34 +155,68 @@ class MultifilamentTesting(unittest.TestCase):
 
         def check(fils, c, numfilaments_n, numfilaments_b):
             assert len(fils) == numfilaments_n * numfilaments_b
-            dists = np.linalg.norm(fils[0].gamma()-fils[-1].gamma(), axis=1)
+            dists = np.linalg.norm(fils[0].gamma() - fils[-1].gamma(), axis=1)
             # check that filaments are equidistant everywhere
             assert np.var(dists) < 1e-16
             # check that first and last filament are on opossing corners of filament pack and have correct distance
-            assert abs(dists[0] - (((numfilaments_n-1)*gapsize_n) ** 2+((numfilaments_b-1)*gapsize_b)**2)**0.5) < 1e-13
+            assert (
+                abs(
+                    dists[0]
+                    - (
+                        ((numfilaments_n - 1) * gapsize_n) ** 2
+                        + ((numfilaments_b - 1) * gapsize_b) ** 2
+                    )
+                    ** 0.5
+                )
+                < 1e-13
+            )
             # check that the coil pack is centered around the underlying curve
-            assert np.linalg.norm(np.mean([f.gamma() for f in fils], axis=0)-c.gamma()) < 1e-13
+            assert (
+                np.linalg.norm(np.mean([f.gamma() for f in fils], axis=0) - c.gamma())
+                < 1e-13
+            )
 
-        for frame in ['centroid', 'frenet']:
+        for frame in ["centroid", "frenet"]:
             numfilaments_n = 2
             numfilaments_b = 3
             fils = create_multifilament_grid(
-                c, numfilaments_n, numfilaments_b, gapsize_n, gapsize_b,
-                rotation_order=None, rotation_scaling=None, frame=frame)
+                c,
+                numfilaments_n,
+                numfilaments_b,
+                gapsize_n,
+                gapsize_b,
+                rotation_order=None,
+                rotation_scaling=None,
+                frame=frame,
+            )
             check(fils, c, numfilaments_n, numfilaments_b)
 
             numfilaments_n = 3
             numfilaments_b = 2
             fils = create_multifilament_grid(
-                c, numfilaments_n, numfilaments_b, gapsize_n, gapsize_b,
-                rotation_order=None, rotation_scaling=None, frame=frame)
+                c,
+                numfilaments_n,
+                numfilaments_b,
+                gapsize_n,
+                gapsize_b,
+                rotation_order=None,
+                rotation_scaling=None,
+                frame=frame,
+            )
             check(fils, c, numfilaments_n, numfilaments_b)
 
             fils = create_multifilament_grid(
-                c, numfilaments_n, numfilaments_b, gapsize_n, gapsize_b,
-                rotation_order=3, rotation_scaling=None, frame=frame)
+                c,
+                numfilaments_n,
+                numfilaments_b,
+                gapsize_n,
+                gapsize_b,
+                rotation_order=3,
+                rotation_scaling=None,
+                frame=frame,
+            )
             xr = fils[0].rotation.x
-            fils[0].rotation.x = xr + 1e-2*np.random.standard_normal(size=xr.shape)
+            fils[0].rotation.x = xr + 1e-2 * np.random.standard_normal(size=xr.shape)
             check(fils, c, numfilaments_n, numfilaments_b)
 
     def test_biotsavart_with_symmetries(self):
@@ -165,15 +228,23 @@ class MultifilamentTesting(unittest.TestCase):
         np.random.seed(1)
         base_curves, base_currents, ma, nfp, bs = get_data("ncsx", coil_order=5)
 
-        for frame in ['centroid', 'frenet']:
-
+        for frame in ["centroid", "frenet"]:
             base_curves_finite_build = sum(
-                [create_multifilament_grid(c, 2, 2, 0.01, 0.01, rotation_order=1, frame=frame) for c in base_curves], [])
-            base_currents_finite_build = sum([[c]*4 for c in base_currents], [])
+                [
+                    create_multifilament_grid(
+                        c, 2, 2, 0.01, 0.01, rotation_order=1, frame=frame
+                    )
+                    for c in base_curves
+                ],
+                [],
+            )
+            base_currents_finite_build = sum([[c] * 4 for c in base_currents], [])
 
             curves = apply_symmetries_to_curves(base_curves, nfp, True)
             curves_fb = apply_symmetries_to_curves(base_curves_finite_build, nfp, True)
-            currents_fb = apply_symmetries_to_currents(base_currents_finite_build, nfp, True)
+            currents_fb = apply_symmetries_to_currents(
+                base_currents_finite_build, nfp, True
+            )
 
             coils_fb = [Coil(c, curr) for (c, curr) in zip(curves_fb, currents_fb)]
 
@@ -185,9 +256,15 @@ class MultifilamentTesting(unittest.TestCase):
             Jdist = CurveCurveDistance(curves, 0.5)
             LENGTH_PEN = 1e-2
             DIST_PEN = 1e-2
-            JF = Jf \
-                + LENGTH_PEN * sum(QuadraticPenalty(Jls[i], Jls[i].J()) for i in range(len(base_curves))) \
+            JF = (
+                Jf
+                + LENGTH_PEN
+                * sum(
+                    QuadraticPenalty(Jls[i], Jls[i].J())
+                    for i in range(len(base_curves))
+                )
                 + DIST_PEN * Jdist
+            )
 
             def fun(dofs, grad=True):
                 JF.x = dofs
@@ -202,9 +279,9 @@ class MultifilamentTesting(unittest.TestCase):
             err = 1e6
             for i in range(10, 15):
                 eps = 0.5**i
-                J1 = fun(dofs + eps*h, grad=False)
-                J2 = fun(dofs - eps*h, grad=False)
-                err_new = abs((J1-J2)/(2*eps) - dJh)
+                J1 = fun(dofs + eps * h, grad=False)
+                J2 = fun(dofs - eps * h, grad=False)
+                err_new = abs((J1 - J2) / (2 * eps) - dJh)
                 assert err_new < 0.55**2 * err
                 err = err_new
                 print("err", err)

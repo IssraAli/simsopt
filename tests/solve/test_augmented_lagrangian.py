@@ -3,31 +3,38 @@ Unit tests for src/simsopt/solve/augmented_lagrangian.py.
 
 These tests cover the core functionality of the Augmented Lagrangian implementation, including Jacobian computation, objective and gradient evaluation, progress indication, and the main optimization loop. Mock objects are used for objectives and constraints to ensure fast, isolated tests.
 """
+
 import numpy as np
 import unittest
 from simsopt.solve import augmented_lagrangian as al
 from monty.tempfile import ScratchDir
 from simsopt.field import regularization_circ
 
+
 class MockObjective:
     def __init__(self, x):
         self.x = np.array(x, dtype=float)
+
     def J(self):
-        return np.sum(self.x ** 2)
+        return np.sum(self.x**2)
+
     def dJ(self):
         return 2 * self.x
+
 
 class MockConstraint:
     def __init__(self, x, offset=0.0):
         self.x = np.array(x, dtype=float)
         self.offset = offset
+
     def J(self):
         return np.sum(self.x) + self.offset
+
     def dJ(self):
         return np.ones_like(self.x)
 
-class ALTests(unittest.TestCase):
 
+class ALTests(unittest.TestCase):
     def test_jac_constraint(self):
         """
         Test that jac_constraint returns the correct Jacobian matrix for a list of constraints.
@@ -38,9 +45,12 @@ class ALTests(unittest.TestCase):
         c2 = MockConstraint([4.0, 5.0, 6.0])
         J = al.jac_constraint([c1, c2], dofs)
         assert J.shape == (2, 3)
-        np.testing.assert_array_equal(J[0], np.ones(3), err_msg="J[0] should be all ones")
-        np.testing.assert_array_equal(J[1], np.ones(3), err_msg="J[1] should be all ones")
-
+        np.testing.assert_array_equal(
+            J[0], np.ones(3), err_msg="J[0] should be all ones"
+        )
+        np.testing.assert_array_equal(
+            J[1], np.ones(3), err_msg="J[1] should be all ones"
+        )
 
     def test_augmented_lagrangian_objective(self):
         """
@@ -56,11 +66,10 @@ class ALTests(unittest.TestCase):
         mu = 2.0
         val = al.augmented_lagrangian_objective(dofs, f, [c1], lag_mul, mu)
         # L = f(x) - lag_mul * g(x) + mu/2 * ||g(x)||^2
-        fx = np.sum(dofs ** 2)
+        fx = np.sum(dofs**2)
         gx = np.sum(dofs) + 1.0
-        expected = fx - 0.5 * gx + 1.0 * gx ** 2
+        expected = fx - 0.5 * gx + 1.0 * gx**2
         assert np.isclose(val, expected)
-
 
     def test_grad_augmented_lagrangian(self):
         """
@@ -89,20 +98,27 @@ class ALTests(unittest.TestCase):
         Checks that the optimizer finds x ≈ 2 and the constraint is satisfied to high precision.
         This test is run for a grid of ALM parameters.
         """
+
         class SimpleObjective:
             def __init__(self, x):
                 self.x = np.array(x, dtype=float)
+
             def J(self):
                 return np.sum((self.x - 1.0) ** 2)
+
             def dJ(self):
                 return 2 * (self.x - 1.0)
+
         class EqualityConstraint:
             def __init__(self, x):
                 self.x = np.array(x, dtype=float)
+
             def J(self):
                 return np.sum(self.x - 2.0)
+
             def dJ(self):
                 return np.ones_like(self.x)
+
         x0 = np.array([0.0])
         f = SimpleObjective(x0)
         c = EqualityConstraint(x0)
@@ -120,14 +136,26 @@ class ALTests(unittest.TestCase):
                         for MAXITER in MAXITERs:
                             for argmin_tol in argmin_tols:
                                 for MAXITER_lag in MAXITER_lags:
-                                    print(f"Testing: mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}")
+                                    print(
+                                        f"Testing: mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}"
+                                    )
                                     f = SimpleObjective(x0)
                                     c = EqualityConstraint(x0)
-                                    x_opt, final_L, lag_mul = al.augmented_lagrangian_method(
-                                        f, [c], mu_init=mu_init, grad_tol=grad_tol, c_tol=c_tol, MAXITER=MAXITER, 
-                                        argmin_tol=argmin_tol, MAXITER_lag=MAXITER_lag, tau=tau)
+                                    x_opt, final_L, lag_mul = (
+                                        al.augmented_lagrangian_method(
+                                            f,
+                                            [c],
+                                            mu_init=mu_init,
+                                            grad_tol=grad_tol,
+                                            c_tol=c_tol,
+                                            MAXITER=MAXITER,
+                                            argmin_tol=argmin_tol,
+                                            MAXITER_lag=MAXITER_lag,
+                                            tau=tau,
+                                        )
+                                    )
                                     constraint_val = x_opt - 2.0
-                                    print('Equality:', x_opt)
+                                    print("Equality:", x_opt)
                                     assert np.allclose(x_opt, 2, atol=1e-2)
                                     assert abs(constraint_val) < 1e-2
                                     assert lag_mul.shape == (1,)
@@ -137,19 +165,29 @@ class ALTests(unittest.TestCase):
         Test the augmented Lagrangian optimization loop on a coils problem for a grid of ALM parameters and surface resolutions.
         """
         from pathlib import Path
-        from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
+        from simsopt.geo import (
+            SurfaceRZFourier,
+            create_equally_spaced_curves,
+            curves_to_vtk,
+        )
         from simsopt.field import BiotSavart, Current, coils_via_symmetries
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty
-        from simsopt.geo import CurveSurfaceDistance, LpCurveCurvature, CurveCurveDistance
+        from simsopt.geo import (
+            CurveSurfaceDistance,
+            LpCurveCurvature,
+            CurveCurveDistance,
+        )
         from simsopt.geo import CurveLength, LinkingNumber
         import os
 
         # Define the test directory
-        TEST_DIR = (Path(__file__).parent / ".." / ".." / "tests" / "test_files").resolve()
+        TEST_DIR = (
+            Path(__file__).parent / ".." / ".." / "tests" / "test_files"
+        ).resolve()
 
         # Define the filename
-        filename = TEST_DIR / 'input.LandremanPaul2021_QA_lowres'
+        filename = TEST_DIR / "input.LandremanPaul2021_QA_lowres"
 
         nphis = [8, 16]  # surface resolution
         mu_inits = [2.0, 10.0]
@@ -171,38 +209,64 @@ class ALTests(unittest.TestCase):
             for nphi in nphis:
                 ntheta = nphi
                 s = SurfaceRZFourier.from_vmec_input(
-                    filename,
-                    range="half period",
-                    nphi=nphi,
-                    ntheta=ntheta)                          
+                    filename, range="half period", nphi=nphi, ntheta=ntheta
+                )
                 R0 = s.x[0]
                 R1 = 0.6 * s.x[0]
                 order = 5
                 ncoils = 4
                 curves = create_equally_spaced_curves(
-                    ncoils, s.nfp, stellsym=s.stellsym, R0=R0, R1=R1, order=order, numquadpoints=128)
+                    ncoils,
+                    s.nfp,
+                    stellsym=s.stellsym,
+                    R0=R0,
+                    R1=R1,
+                    order=order,
+                    numquadpoints=128,
+                )
                 base_currents = [Current(1e5) for i in range(ncoils)]
                 base_currents[0].fix_all()
                 base_curves = curves[:ncoils]
                 regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
-                coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym, regularizations=regularizations)
+                coils = coils_via_symmetries(
+                    base_curves,
+                    base_currents,
+                    s.nfp,
+                    s.stellsym,
+                    regularizations=regularizations,
+                )
                 curves = [c.curve for c in coils]
                 bs = BiotSavart(coils)
                 curves_to_vtk(curves, OUT_DIR + "curves_init")
                 bs.set_points(s.gamma().reshape((-1, 3)))
-                pointData = {"B_N/|B|": np.sum(bs.B().reshape((nphi, ntheta, 3)) *
-                                            s.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((nphi, ntheta, 1)),
-                                "modB": bs.AbsB().reshape((nphi, ntheta, 1))}
+                pointData = {
+                    "B_N/|B|": np.sum(
+                        bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2
+                    )[:, :, None]
+                    / bs.AbsB().reshape((nphi, ntheta, 1)),
+                    "modB": bs.AbsB().reshape((nphi, ntheta, 1)),
+                }
                 s.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
                 bs.set_points(s.gamma().reshape((-1, 3)))
                 Jf = SquaredFlux(s, bs, threshold=FLUX_THRESHOLD)
                 dofs_orig = Jf.x.copy()
                 Jls = [CurveLength(c) for c in base_curves]
                 Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
-                Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
-                Jcs = [LpCurveCurvature(c, 10, CURVATURE_THRESHOLD) for c in base_curves]
+                Jccdist = CurveCurveDistance(
+                    curves, CC_THRESHOLD, num_basecurves=ncoils
+                )
+                Jcs = [
+                    LpCurveCurvature(c, 10, CURVATURE_THRESHOLD) for c in base_curves
+                ]
                 Jlink = LinkingNumber(curves, downsample=2)
-                equality_constraints = [Jf, Jccdist,Jcsdist, QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), sum(Jcs), Jlink]
+                equality_constraints = [
+                    Jf,
+                    Jccdist,
+                    Jcsdist,
+                    QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"),
+                    sum(Jcs),
+                    Jlink,
+                ]
                 for mu_init in mu_inits:
                     for tau in taus:
                         for grad_tol in grad_tols:
@@ -211,11 +275,22 @@ class ALTests(unittest.TestCase):
                                     for argmin_tol in argmin_tols:
                                         for MAXITER_lag in MAXITER_lags:
                                             Jf.x = dofs_orig.copy()
-                                            print(f"Testing: nphi={nphi}, mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}")
+                                            print(
+                                                f"Testing: nphi={nphi}, mu_init={mu_init}, grad_tol={grad_tol}, c_tol={c_tol}, MAXITER={MAXITER}, argmin_tol={argmin_tol}, MAXITER_lag={MAXITER_lag}"
+                                            )
                                             # Just check that the optimization runs without error for each parameter set
-                                            x, fnc, lag_mul = augmented_lagrangian_method(
-                                                equality_constraints=equality_constraints, mu_init=mu_init, grad_tol=grad_tol, c_tol=c_tol,
-                                                MAXITER=MAXITER, argmin_tol=argmin_tol, MAXITER_lag=MAXITER_lag, tau=tau)
+                                            x, fnc, lag_mul = (
+                                                augmented_lagrangian_method(
+                                                    equality_constraints=equality_constraints,
+                                                    mu_init=mu_init,
+                                                    grad_tol=grad_tol,
+                                                    c_tol=c_tol,
+                                                    MAXITER=MAXITER,
+                                                    argmin_tol=argmin_tol,
+                                                    MAXITER_lag=MAXITER_lag,
+                                                    tau=tau,
+                                                )
+                                            )
                                             assert x is not None
                                             assert Jf.J() < FLUX_THRESHOLD
                                             assert Jccdist.J() < CC_THRESHOLD
@@ -224,25 +299,40 @@ class ALTests(unittest.TestCase):
                                             assert sum(Jls).J() < LENGTH_TARGET
                                             assert Jlink.J() == 0
 
-
     def test_augmented_lagrangian_method_coils_scan(self):
         """
         Test the augmented Lagrangian optimization loop on a coils problem for a grid of ALM parameters and surface resolutions.
         """
         from pathlib import Path
-        from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves, curves_to_vtk
-        from simsopt.field import BiotSavart, Current, coils_via_symmetries, LpCurveForce, LpCurveTorque
+        from simsopt.geo import (
+            SurfaceRZFourier,
+            create_equally_spaced_curves,
+            curves_to_vtk,
+        )
+        from simsopt.field import (
+            BiotSavart,
+            Current,
+            coils_via_symmetries,
+            LpCurveForce,
+            LpCurveTorque,
+        )
         from simsopt.solve import augmented_lagrangian_method
         from simsopt.objectives import SquaredFlux, QuadraticPenalty
-        from simsopt.geo import CurveSurfaceDistance, LpCurveCurvature, CurveCurveDistance
+        from simsopt.geo import (
+            CurveSurfaceDistance,
+            LpCurveCurvature,
+            CurveCurveDistance,
+        )
         from simsopt.geo import CurveLength, LinkingNumber
         import os
 
         # Define the test directory
-        TEST_DIR = (Path(__file__).parent / ".." / ".." / "tests" / "test_files").resolve()
+        TEST_DIR = (
+            Path(__file__).parent / ".." / ".." / "tests" / "test_files"
+        ).resolve()
 
         # Define the filename
-        filename = TEST_DIR / 'input.LandremanPaul2021_QA_lowres'
+        filename = TEST_DIR / "input.LandremanPaul2021_QA_lowres"
 
         nphi = 8  # surface resolution
         MAXITER = 100
@@ -259,29 +349,44 @@ class ALTests(unittest.TestCase):
             os.makedirs(OUT_DIR, exist_ok=True)
             ntheta = nphi
             s = SurfaceRZFourier.from_vmec_input(
-                filename,
-                range="half period",
-                nphi=nphi,
-                ntheta=ntheta)                          
+                filename, range="half period", nphi=nphi, ntheta=ntheta
+            )
             R0 = s.x[0]
             R1 = 0.6 * s.x[0]
             order = 5
             ncoils = 4
             curves = create_equally_spaced_curves(
-                ncoils, s.nfp, stellsym=s.stellsym, R0=R0, R1=R1, order=order, numquadpoints=128)
+                ncoils,
+                s.nfp,
+                stellsym=s.stellsym,
+                R0=R0,
+                R1=R1,
+                order=order,
+                numquadpoints=128,
+            )
             base_currents = [Current(1e5) for i in range(ncoils)]
             base_currents[0].fix_all()
             base_curves = curves[:ncoils]
             regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
-            coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym, regularizations=regularizations)
+            coils = coils_via_symmetries(
+                base_curves,
+                base_currents,
+                s.nfp,
+                s.stellsym,
+                regularizations=regularizations,
+            )
             curves = [c.curve for c in coils]
             base_coils = coils[:ncoils]
             bs = BiotSavart(coils)
             curves_to_vtk(curves, OUT_DIR + "curves_init")
             bs.set_points(s.gamma().reshape((-1, 3)))
-            pointData = {"B_N/|B|": np.sum(bs.B().reshape((nphi, ntheta, 3)) *
-                                        s.unitnormal(), axis=2)[:, :, None] / bs.AbsB().reshape((nphi, ntheta, 1)),
-                            "modB": bs.AbsB().reshape((nphi, ntheta, 1))}
+            pointData = {
+                "B_N/|B|": np.sum(
+                    bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2
+                )[:, :, None]
+                / bs.AbsB().reshape((nphi, ntheta, 1)),
+                "modB": bs.AbsB().reshape((nphi, ntheta, 1)),
+            }
             s.to_vtk(OUT_DIR + "surf_init", extra_data=pointData)
             bs.set_points(s.gamma().reshape((-1, 3)))
             Jf = SquaredFlux(s, bs)
@@ -294,28 +399,56 @@ class ALTests(unittest.TestCase):
                             for CURVATURE_THRESHOLD in CURVATURE_THRESHOLDS:
                                 for FORCE_THRESHOLD in FORCE_THRESHOLDS:
                                     for TORQUE_THRESHOLD in TORQUE_THRESHOLDS:
-                                        print(f"Testing: nphi={nphi}, FLUX_THRESHOLD={FLUX_THRESHOLD}, LENGTH_TARGET={LENGTH_TARGET}, CC_THRESHOLD={CC_THRESHOLD}, CS_THRESHOLD={CS_THRESHOLD}, CURVATURE_THRESHOLD={CURVATURE_THRESHOLD}, FORCE_THRESHOLD={FORCE_THRESHOLD}, TORQUE_THRESHOLD={TORQUE_THRESHOLD}")
-                                        Jf = SquaredFlux(s, bs, threshold=FLUX_THRESHOLD)
+                                        print(
+                                            f"Testing: nphi={nphi}, FLUX_THRESHOLD={FLUX_THRESHOLD}, LENGTH_TARGET={LENGTH_TARGET}, CC_THRESHOLD={CC_THRESHOLD}, CS_THRESHOLD={CS_THRESHOLD}, CURVATURE_THRESHOLD={CURVATURE_THRESHOLD}, FORCE_THRESHOLD={FORCE_THRESHOLD}, TORQUE_THRESHOLD={TORQUE_THRESHOLD}"
+                                        )
+                                        Jf = SquaredFlux(
+                                            s, bs, threshold=FLUX_THRESHOLD
+                                        )
                                         Jls = [CurveLength(c) for c in base_curves]
-                                        Jcsdist = CurveSurfaceDistance(curves, s, CS_THRESHOLD)
-                                        Jccdist = CurveCurveDistance(curves, CC_THRESHOLD, num_basecurves=ncoils)
-                                        Jcs = [LpCurveCurvature(c, 10, CURVATURE_THRESHOLD) for c in base_curves]
+                                        Jcsdist = CurveSurfaceDistance(
+                                            curves, s, CS_THRESHOLD
+                                        )
+                                        Jccdist = CurveCurveDistance(
+                                            curves, CC_THRESHOLD, num_basecurves=ncoils
+                                        )
+                                        Jcs = [
+                                            LpCurveCurvature(c, 10, CURVATURE_THRESHOLD)
+                                            for c in base_curves
+                                        ]
                                         Jlink = LinkingNumber(curves, downsample=2)
-                                        Jforce = LpCurveForce(base_coils, coils, p=2.0, threshold=FORCE_THRESHOLD)
-                                        Jtorque = LpCurveTorque(base_coils, coils, p=2.0, threshold=TORQUE_THRESHOLD)
-                                        equality_constraints = [Jf, Jccdist,Jcsdist, 
-                                                                QuadraticPenalty(sum(Jls), LENGTH_TARGET, "max"), 
-                                                                sum(Jcs),
-                                                                Jlink,
-                                                                Jforce,
-                                                                Jtorque]
-            
+                                        Jforce = LpCurveForce(
+                                            base_coils,
+                                            coils,
+                                            p=2.0,
+                                            threshold=FORCE_THRESHOLD,
+                                        )
+                                        Jtorque = LpCurveTorque(
+                                            base_coils,
+                                            coils,
+                                            p=2.0,
+                                            threshold=TORQUE_THRESHOLD,
+                                        )
+                                        equality_constraints = [
+                                            Jf,
+                                            Jccdist,
+                                            Jcsdist,
+                                            QuadraticPenalty(
+                                                sum(Jls), LENGTH_TARGET, "max"
+                                            ),
+                                            sum(Jcs),
+                                            Jlink,
+                                            Jforce,
+                                            Jtorque,
+                                        ]
+
                                         # Just check that the optimization runs without error for each parameter set
                                         Jf.x = dofs_orig.copy()
                                         x, _, _ = augmented_lagrangian_method(
-                                            equality_constraints=equality_constraints, 
+                                            equality_constraints=equality_constraints,
                                             MAXITER_lag=20,
-                                            MAXITER=MAXITER)
+                                            MAXITER=MAXITER,
+                                        )
                                         assert x is not None
                                         assert Jf.J() < FLUX_THRESHOLD + eps
                                         assert Jccdist.J() < CC_THRESHOLD + eps
@@ -324,12 +457,39 @@ class ALTests(unittest.TestCase):
                                         assert sum(Jls).J() < LENGTH_TARGET + eps
                                         assert Jlink.J() == 0
                                         print(Jforce.J(), Jtorque.J())
-                                        coil_forces = [c.force(coils) for c in base_coils]
-                                        coil_torques = [c.torque(coils) for c in base_coils]
-                                        print([np.max(np.abs(coil_forces[i])) for i in range(len(coil_forces))])
-                                        print([np.max(np.abs(coil_torques[i])) for i in range(len(coil_torques))])
-                                        assert np.all([np.max(np.abs(coil_forces[i])) < (1 + eps) * FORCE_THRESHOLD * 1e6 for i in range(len(coil_forces))])
-                                        assert np.all([np.max(np.abs(coil_torques[i])) < (1 + eps) * TORQUE_THRESHOLD * 1e6 for i in range(len(coil_torques))])
+                                        coil_forces = [
+                                            c.force(coils) for c in base_coils
+                                        ]
+                                        coil_torques = [
+                                            c.torque(coils) for c in base_coils
+                                        ]
+                                        print(
+                                            [
+                                                np.max(np.abs(coil_forces[i]))
+                                                for i in range(len(coil_forces))
+                                            ]
+                                        )
+                                        print(
+                                            [
+                                                np.max(np.abs(coil_torques[i]))
+                                                for i in range(len(coil_torques))
+                                            ]
+                                        )
+                                        assert np.all(
+                                            [
+                                                np.max(np.abs(coil_forces[i]))
+                                                < (1 + eps) * FORCE_THRESHOLD * 1e6
+                                                for i in range(len(coil_forces))
+                                            ]
+                                        )
+                                        assert np.all(
+                                            [
+                                                np.max(np.abs(coil_torques[i]))
+                                                < (1 + eps) * TORQUE_THRESHOLD * 1e6
+                                                for i in range(len(coil_torques))
+                                            ]
+                                        )
+
 
 if __name__ == "__main__":
     unittest.main()

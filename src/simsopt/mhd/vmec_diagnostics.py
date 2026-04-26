@@ -25,8 +25,16 @@ from ..geo.surfacerzfourier import SurfaceRZFourier
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['QuasisymmetryRatioResidual', 'IotaTargetMetric', 'IotaWeighted',
-           'WellWeighted', 'vmec_splines', 'vmec_compute_geometry', 'vmec_fieldlines', 'VmecGeometryResults']
+__all__ = [
+    "QuasisymmetryRatioResidual",
+    "IotaTargetMetric",
+    "IotaWeighted",
+    "WellWeighted",
+    "vmec_splines",
+    "vmec_compute_geometry",
+    "vmec_fieldlines",
+    "VmecGeometryResults",
+]
 
 
 class QuasisymmetryRatioResidual(Optimizable):
@@ -112,17 +120,19 @@ class QuasisymmetryRatioResidual(Optimizable):
           discretize the flux surface average.
     """
 
-    def __init__(self,
-                 vmec: Vmec,
-                 surfaces: Union[float, RealArray],
-                 helicity_m: int = 1,
-                 helicity_n: int = 0,
-                 weights: Optional[RealArray] = None,
-                 ntheta: int = 63,
-                 nphi: int = 64) -> None:
+    def __init__(
+        self,
+        vmec: Vmec,
+        surfaces: Union[float, RealArray],
+        helicity_m: int = 1,
+        helicity_n: int = 0,
+        weights: Optional[RealArray] = None,
+        ntheta: int = 63,
+        nphi: int = 64,
+    ) -> None:
 
         self.vmec = vmec
-        #self.depends_on = ["vmec"]
+        # self.depends_on = ["vmec"]
         self.ntheta = ntheta
         self.nphi = nphi
         self.helicity_m = helicity_m
@@ -156,9 +166,11 @@ class QuasisymmetryRatioResidual(Optimizable):
         vmec = self.vmec
         vmec.run()
         if vmec.wout.lasym:
-            raise RuntimeError('Quasisymmetry class cannot yet handle non-stellarator-symmetric configs')
+            raise RuntimeError(
+                "Quasisymmetry class cannot yet handle non-stellarator-symmetric configs"
+            )
 
-        logger.debug('Evaluating quasisymmetry residuals')
+        logger.debug("Evaluating quasisymmetry residuals")
         ns = len(self.surfaces)
         ntheta = self.ntheta
         nphi = self.nphi
@@ -167,31 +179,49 @@ class QuasisymmetryRatioResidual(Optimizable):
 
         # First, interpolate in s to get the quantities we need on the surfaces we need.
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.iotas[1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.iotas[1:], fill_value="extrapolate"
+        )
         iota = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.bvco[1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.bvco[1:], fill_value="extrapolate"
+        )
         G = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.buco[1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.buco[1:], fill_value="extrapolate"
+        )
         I = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.gmnc[:, 1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.gmnc[:, 1:], fill_value="extrapolate"
+        )
         gmnc = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.bmnc[:, 1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.bmnc[:, 1:], fill_value="extrapolate"
+        )
         bmnc = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.bsubumnc[:, 1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.bsubumnc[:, 1:], fill_value="extrapolate"
+        )
         bsubumnc = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.bsubvmnc[:, 1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.bsubvmnc[:, 1:], fill_value="extrapolate"
+        )
         bsubvmnc = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.bsupumnc[:, 1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.bsupumnc[:, 1:], fill_value="extrapolate"
+        )
         bsupumnc = interp(self.surfaces)
 
-        interp = interp1d(vmec.s_half_grid, vmec.wout.bsupvmnc[:, 1:], fill_value="extrapolate")
+        interp = interp1d(
+            vmec.s_half_grid, vmec.wout.bsupvmnc[:, 1:], fill_value="extrapolate"
+        )
         bsupvmnc = interp(self.surfaces)
 
         theta1d = np.linspace(0, 2 * np.pi, ntheta, endpoint=False)
@@ -226,20 +256,44 @@ class QuasisymmetryRatioResidual(Optimizable):
             bsupv += np.kron(bsupvmnc[jmn, :].reshape((ns, 1, 1)), cosangle)
 
         B_dot_grad_B = bsupu * d_B_d_theta + bsupv * d_B_d_phi
-        B_cross_grad_B_dot_grad_psi = d_psi_d_s * (bsubu * d_B_d_phi - bsubv * d_B_d_theta) / sqrtg
+        B_cross_grad_B_dot_grad_psi = (
+            d_psi_d_s * (bsubu * d_B_d_phi - bsubv * d_B_d_theta) / sqrtg
+        )
 
         dtheta = theta1d[1] - theta1d[0]
         dphi = phi1d[1] - phi1d[0]
         V_prime = nfp * dtheta * dphi * np.sum(sqrtg, axis=(1, 2))
         # Check that we can evaluate the flux surface average <1> and the result is 1:
-        assert np.sum(np.abs(np.sqrt((1 / V_prime) * nfp * dtheta * dphi * np.sum(sqrtg, axis=(1, 2))) - 1)) < 1e-12
+        assert (
+            np.sum(
+                np.abs(
+                    np.sqrt(
+                        (1 / V_prime) * nfp * dtheta * dphi * np.sum(sqrtg, axis=(1, 2))
+                    )
+                    - 1
+                )
+            )
+            < 1e-12
+        )
 
         nn = self.helicity_n * nfp
         for js in range(ns):
-            residuals3d[js, :, :] = np.sqrt(self.weights[js] * nfp * dtheta * dphi / V_prime[js] * sqrtg[js, :, :]) \
-                * (B_cross_grad_B_dot_grad_psi[js, :, :] * (nn - iota[js] * self.helicity_m)
-                   - B_dot_grad_B[js, :, :] * (self.helicity_m * G[js] + nn * I[js])) \
+            residuals3d[js, :, :] = (
+                np.sqrt(
+                    self.weights[js]
+                    * nfp
+                    * dtheta
+                    * dphi
+                    / V_prime[js]
+                    * sqrtg[js, :, :]
+                )
+                * (
+                    B_cross_grad_B_dot_grad_psi[js, :, :]
+                    * (nn - iota[js] * self.helicity_m)
+                    - B_dot_grad_B[js, :, :] * (self.helicity_m * G[js] + nn * I[js])
+                )
                 / (modB[js, :, :] ** 3)
+            )
 
         residuals1d = residuals3d.reshape((ns * ntheta * nphi,))
         profile = np.sum(residuals3d * residuals3d, axis=(1, 2))
@@ -247,15 +301,43 @@ class QuasisymmetryRatioResidual(Optimizable):
 
         # Form a structure with all the intermediate data as attributes:
         results = Struct()
-        variables = ['ns', 'ntheta', 'nphi', 'dtheta', 'dphi', 'nfp', 'V_prime', 'theta1d', 'phi1d',
-                     'theta2d', 'phi2d', 'theta3d', 'phi3d', 'd_psi_d_s', 'B_dot_grad_B',
-                     'B_cross_grad_B_dot_grad_psi', 'modB', 'd_B_d_theta', 'd_B_d_phi', 'sqrtg',
-                     'bsubu', 'bsubv', 'bsupu', 'bsupv', 'G', 'I', 'iota',
-                     'residuals3d', 'residuals1d', 'profile', 'total']
+        variables = [
+            "ns",
+            "ntheta",
+            "nphi",
+            "dtheta",
+            "dphi",
+            "nfp",
+            "V_prime",
+            "theta1d",
+            "phi1d",
+            "theta2d",
+            "phi2d",
+            "theta3d",
+            "phi3d",
+            "d_psi_d_s",
+            "B_dot_grad_B",
+            "B_cross_grad_B_dot_grad_psi",
+            "modB",
+            "d_B_d_theta",
+            "d_B_d_phi",
+            "sqrtg",
+            "bsubu",
+            "bsubv",
+            "bsupu",
+            "bsupv",
+            "G",
+            "I",
+            "iota",
+            "residuals3d",
+            "residuals1d",
+            "profile",
+            "total",
+        ]
         for v in variables:
             results.__setattr__(v, eval(v))
 
-        logger.debug('Done evaluating quasisymmetry residuals')
+        logger.debug("Done evaluating quasisymmetry residuals")
         return results
 
     def residuals(self):
@@ -288,12 +370,14 @@ class QuasisymmetryRatioResidual(Optimizable):
         return results.total
 
 
-def B_cartesian(vmec,
-                quadpoints_phi=None,
-                quadpoints_theta=None,
-                range=Surface.RANGE_FULL_TORUS,
-                nphi=None,
-                ntheta=None):
+def B_cartesian(
+    vmec,
+    quadpoints_phi=None,
+    quadpoints_theta=None,
+    range=Surface.RANGE_FULL_TORUS,
+    nphi=None,
+    ntheta=None,
+):
     r"""
     Computes Cartesian vector components of the magnetic field on the
     Vmec boundary.  The results are returned on a grid in the Vmec
@@ -326,7 +410,7 @@ def B_cartesian(vmec,
     vmec.run()
     nfp = vmec.wout.nfp
     if vmec.wout.lasym:
-        raise RuntimeError('B_cartesian presently only works for stellarator symmetry')
+        raise RuntimeError("B_cartesian presently only works for stellarator symmetry")
 
     if nphi is None and quadpoints_phi is None:
         phi1D_1 = vmec.boundary.quadpoints_phi
@@ -348,24 +432,39 @@ def B_cartesian(vmec,
     theta, phi = np.meshgrid(theta1D, phi1D)
 
     # Get the tangent vectors using the gammadash1/2 functions from SurfaceRZFourier:
-    surf = SurfaceRZFourier(mpol=vmec.wout.mpol, ntor=vmec.wout.ntor, nfp=vmec.wout.nfp,
-                            quadpoints_phi=phi1D_1, quadpoints_theta=theta1D_1)
+    surf = SurfaceRZFourier(
+        mpol=vmec.wout.mpol,
+        ntor=vmec.wout.ntor,
+        nfp=vmec.wout.nfp,
+        quadpoints_phi=phi1D_1,
+        quadpoints_theta=theta1D_1,
+    )
     for jmn in np.arange(vmec.wout.mnmax):
-        surf.set_rc(int(vmec.wout.xm[jmn]), int(vmec.wout.xn[jmn] / nfp), vmec.wout.rmnc[jmn, -1])
-        surf.set_zs(int(vmec.wout.xm[jmn]), int(vmec.wout.xn[jmn] / nfp), vmec.wout.zmns[jmn, -1])
+        surf.set_rc(
+            int(vmec.wout.xm[jmn]),
+            int(vmec.wout.xn[jmn] / nfp),
+            vmec.wout.rmnc[jmn, -1],
+        )
+        surf.set_zs(
+            int(vmec.wout.xm[jmn]),
+            int(vmec.wout.xn[jmn] / nfp),
+            vmec.wout.zmns[jmn, -1],
+        )
     dgamma1 = surf.gammadash1()
     dgamma2 = surf.gammadash2()
 
     bsupumnc = 1.5 * vmec.wout.bsupumnc[:, -1] - 0.5 * vmec.wout.bsupumnc[:, -2]
     bsupvmnc = 1.5 * vmec.wout.bsupvmnc[:, -1] - 0.5 * vmec.wout.bsupvmnc[:, -2]
-    angle = vmec.wout.xm_nyq[:, None, None] * theta[None, :, :] \
+    angle = (
+        vmec.wout.xm_nyq[:, None, None] * theta[None, :, :]
         - vmec.wout.xn_nyq[:, None, None] * phi[None, :, :]
+    )
     Bsupu = np.sum(bsupumnc[:, None, None] * np.cos(angle), axis=0)
     Bsupv = np.sum(bsupvmnc[:, None, None] * np.cos(angle), axis=0)
 
-    Bx = (Bsupv * dgamma1[:, :, 0] + Bsupu * dgamma2[:, :, 0])/(2*np.pi)
-    By = (Bsupv * dgamma1[:, :, 1] + Bsupu * dgamma2[:, :, 1])/(2*np.pi)
-    Bz = (Bsupv * dgamma1[:, :, 2] + Bsupu * dgamma2[:, :, 2])/(2*np.pi)
+    Bx = (Bsupv * dgamma1[:, :, 0] + Bsupu * dgamma2[:, :, 0]) / (2 * np.pi)
+    By = (Bsupv * dgamma1[:, :, 1] + Bsupu * dgamma2[:, :, 1]) / (2 * np.pi)
+    Bz = (Bsupv * dgamma1[:, :, 2] + Bsupu * dgamma2[:, :, 2]) / (2 * np.pi)
 
     return Bx, By, Bz
 
@@ -393,7 +492,7 @@ class IotaTargetMetric(Optimizable):
             current perturbation required for the adjoint solve.
     """
 
-    def __init__(self, vmec, iota_target, adjoint_epsilon=1.e-1):
+    def __init__(self, vmec, iota_target, adjoint_epsilon=1.0e-1):
         self.vmec = vmec
         self.boundary = vmec.boundary
         self.iota_target = iota_target
@@ -407,8 +506,14 @@ class IotaTargetMetric(Optimizable):
         # if self.vmec.runnable:
         #     self.vmec.need_to_run_code = True
         self.vmec.run()
-        return 0.5 * np.sum((self.vmec.wout.iotas[1::]
-                             - self.iota_target(self.vmec.s_half_grid))**2) * self.vmec.ds
+        return (
+            0.5
+            * np.sum(
+                (self.vmec.wout.iotas[1::] - self.iota_target(self.vmec.s_half_grid))
+                ** 2
+            )
+            * self.vmec.ds
+        )
 
     def dJ(self):
         """
@@ -416,8 +521,8 @@ class IotaTargetMetric(Optimizable):
         parameters using an adjoint method.
         """
         if self.vmec.indata.ncurr != 1:
-            raise RuntimeError('''dJ cannot be computed without
-                running vmec with ncurr = 1''')
+            raise RuntimeError("""dJ cannot be computed without
+                running vmec with ncurr = 1""")
 
         shape_gradient = self.shape_gradient()
         return parameter_derivatives(self.vmec.boundary, shape_gradient)
@@ -444,30 +549,31 @@ class IotaTargetMetric(Optimizable):
 
         Bx0, By0, Bz0 = B_cartesian(vmec)
 
-        mu0 = 4*np.pi*1e-7
-        It_half = vmec.wout.signgs * 2*np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
+        mu0 = 4 * np.pi * 1e-7
+        It_half = vmec.wout.signgs * 2 * np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
         ac_aux_f_prev = np.copy(vmec.indata.ac_aux_f)
         ac_aux_s_prev = np.copy(vmec.indata.ac_aux_s)
         pcurr_type_prev = np.copy(vmec.indata.pcurr_type)
         curtor_prev = np.copy(vmec.indata.curtor)
 
-        perturbation = (vmec.wout.iotas[1::]-self.iota_target(vmec.s_half_grid)) \
-            / (vmec.wout.phi[-1]*vmec.wout.signgs/(2*np.pi))
+        perturbation = (vmec.wout.iotas[1::] - self.iota_target(vmec.s_half_grid)) / (
+            vmec.wout.phi[-1] * vmec.wout.signgs / (2 * np.pi)
+        )
 
         # Perturbed toroidal current profile
-        It_new = It_half + self.adjoint_epsilon*perturbation
-        curtor = 1.5*It_new[-1] - 0.5*It_new[-2]
-        vmec.indata.ac_aux_f = -1.*np.ones_like(vmec.indata.ac_aux_f)
-        vmec.indata.ac_aux_s = -1.*np.ones_like(vmec.indata.ac_aux_s)
-        vmec.indata.ac_aux_f[0:vmec.wout.ns-1] = It_new
-        vmec.indata.ac_aux_s[0:vmec.wout.ns-1] = vmec.s_half_grid
+        It_new = It_half + self.adjoint_epsilon * perturbation
+        curtor = 1.5 * It_new[-1] - 0.5 * It_new[-2]
+        vmec.indata.ac_aux_f = -1.0 * np.ones_like(vmec.indata.ac_aux_f)
+        vmec.indata.ac_aux_s = -1.0 * np.ones_like(vmec.indata.ac_aux_s)
+        vmec.indata.ac_aux_f[0 : vmec.wout.ns - 1] = It_new
+        vmec.indata.ac_aux_s[0 : vmec.wout.ns - 1] = vmec.s_half_grid
         vmec.indata.curtor = curtor
-        vmec.indata.pcurr_type = b'line_segment_I'
+        vmec.indata.pcurr_type = b"line_segment_I"
         vmec.need_to_run_code = True
 
         vmec.run()
 
-        It_half = vmec.wout.signgs * 2*np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
+        It_half = vmec.wout.signgs * 2 * np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
 
         Bx, By, Bz = B_cartesian(vmec)
 
@@ -478,9 +584,11 @@ class IotaTargetMetric(Optimizable):
         vmec.indata.curtor = curtor_prev
         vmec.need_to_run_code = True
 
-        deltaB_dot_B = ((Bx-Bx0)*Bx0 + (By-By0)*By0 + (Bz-Bz0)*Bz0)/self.adjoint_epsilon
+        deltaB_dot_B = (
+            (Bx - Bx0) * Bx0 + (By - By0) * By0 + (Bz - Bz0) * Bz0
+        ) / self.adjoint_epsilon
 
-        return deltaB_dot_B/(2*np.pi*mu0)
+        return deltaB_dot_B / (2 * np.pi * mu0)
 
 
 class IotaWeighted(Optimizable):
@@ -504,7 +612,7 @@ class IotaWeighted(Optimizable):
             current perturbation required for the adjoint solve.
     """
 
-    def __init__(self, vmec, weight_function, adjoint_epsilon=1.e-1):
+    def __init__(self, vmec, weight_function, adjoint_epsilon=1.0e-1):
         self.vmec = vmec
         self.boundary = vmec.boundary
         self.weight_function = weight_function
@@ -517,8 +625,9 @@ class IotaWeighted(Optimizable):
         """
         vmec = self.vmec
         vmec.run()
-        return np.sum(self.weight_function(vmec.s_half_grid) * vmec.wout.iotas[1:]) \
-            / np.sum(self.weight_function(vmec.s_half_grid))
+        return np.sum(
+            self.weight_function(vmec.s_half_grid) * vmec.wout.iotas[1:]
+        ) / np.sum(self.weight_function(vmec.s_half_grid))
 
     def dJ(self):
         """
@@ -526,8 +635,8 @@ class IotaWeighted(Optimizable):
         parameters using an adjoint method.
         """
         if self.vmec.indata.ncurr != 1:
-            raise RuntimeError('''dJ cannot be computed without
-                running vmec with ncurr = 1''')
+            raise RuntimeError("""dJ cannot be computed without
+                running vmec with ncurr = 1""")
 
         shape_gradient = self.shape_gradient()
         return parameter_derivatives(self.vmec.boundary, shape_gradient)
@@ -554,8 +663,8 @@ class IotaWeighted(Optimizable):
 
         Bx0, By0, Bz0 = B_cartesian(vmec)
 
-        mu0 = 4*np.pi*1e-7
-        It_half = vmec.wout.signgs * 2*np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
+        mu0 = 4 * np.pi * 1e-7
+        It_half = vmec.wout.signgs * 2 * np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
         ac_aux_f_prev = np.copy(vmec.indata.ac_aux_f)
         ac_aux_s_prev = np.copy(vmec.indata.ac_aux_s)
         pcurr_type_prev = np.copy(vmec.indata.pcurr_type)
@@ -564,19 +673,19 @@ class IotaWeighted(Optimizable):
         perturbation = self.weight_function(vmec.s_half_grid)
 
         # Perturbed toroidal current profile
-        It_new = It_half + self.adjoint_epsilon*perturbation
-        curtor = 1.5*It_new[-1] - 0.5*It_new[-2]
-        vmec.indata.ac_aux_f = -1.*np.ones_like(vmec.indata.ac_aux_f)
-        vmec.indata.ac_aux_s = -1.*np.ones_like(vmec.indata.ac_aux_s)
-        vmec.indata.ac_aux_f[0:vmec.wout.ns-1] = It_new
-        vmec.indata.ac_aux_s[0:vmec.wout.ns-1] = vmec.s_half_grid
+        It_new = It_half + self.adjoint_epsilon * perturbation
+        curtor = 1.5 * It_new[-1] - 0.5 * It_new[-2]
+        vmec.indata.ac_aux_f = -1.0 * np.ones_like(vmec.indata.ac_aux_f)
+        vmec.indata.ac_aux_s = -1.0 * np.ones_like(vmec.indata.ac_aux_s)
+        vmec.indata.ac_aux_f[0 : vmec.wout.ns - 1] = It_new
+        vmec.indata.ac_aux_s[0 : vmec.wout.ns - 1] = vmec.s_half_grid
         vmec.indata.curtor = curtor
-        vmec.indata.pcurr_type = b'line_segment_I'
+        vmec.indata.pcurr_type = b"line_segment_I"
         vmec.need_to_run_code = True
 
         vmec.run()
 
-        It_half = vmec.wout.signgs * 2*np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
+        It_half = vmec.wout.signgs * 2 * np.pi * vmec.wout.bsubumnc[0, 1::] / mu0
 
         Bx, By, Bz = B_cartesian(vmec)
 
@@ -587,9 +696,17 @@ class IotaWeighted(Optimizable):
         vmec.indata.curtor = curtor_prev
         vmec.need_to_run_code = True
 
-        deltaB_dot_B = ((Bx-Bx0)*Bx0 + (By-By0)*By0 + (Bz-Bz0)*Bz0)/self.adjoint_epsilon
+        deltaB_dot_B = (
+            (Bx - Bx0) * Bx0 + (By - By0) * By0 + (Bz - Bz0) * Bz0
+        ) / self.adjoint_epsilon
 
-        return deltaB_dot_B/(mu0*vmec.ds*vmec.wout.phi[-1]*vmec.wout.signgs*np.sum(self.weight_function(vmec.s_half_grid)))
+        return deltaB_dot_B / (
+            mu0
+            * vmec.ds
+            * vmec.wout.phi[-1]
+            * vmec.wout.signgs
+            * np.sum(self.weight_function(vmec.s_half_grid))
+        )
 
 
 class WellWeighted(Optimizable):
@@ -622,7 +739,9 @@ class WellWeighted(Optimizable):
             current perturbation required for the adjoint solve.
     """
 
-    def __init__(self, vmec, weight_function1, weight_function2, adjoint_epsilon=1.e-1):
+    def __init__(
+        self, vmec, weight_function1, weight_function2, adjoint_epsilon=1.0e-1
+    ):
         self.vmec = vmec
         self.boundary = vmec.boundary
         self.weight_function1 = weight_function1
@@ -637,8 +756,19 @@ class WellWeighted(Optimizable):
         """
         vmec = self.vmec
         vmec.run()
-        return np.sum((self.weight_function1(vmec.s_half_grid)-self.weight_function2(vmec.s_half_grid)) * vmec.wout.vp[1:]) \
-            / np.sum((self.weight_function1(vmec.s_half_grid)+self.weight_function2(vmec.s_half_grid)) * vmec.wout.vp[1:])
+        return np.sum(
+            (
+                self.weight_function1(vmec.s_half_grid)
+                - self.weight_function2(vmec.s_half_grid)
+            )
+            * vmec.wout.vp[1:]
+        ) / np.sum(
+            (
+                self.weight_function1(vmec.s_half_grid)
+                + self.weight_function2(vmec.s_half_grid)
+            )
+            * vmec.wout.vp[1:]
+        )
 
     def dJ(self):
         """
@@ -672,27 +802,33 @@ class WellWeighted(Optimizable):
 
         Bx0, By0, Bz0 = B_cartesian(self.vmec)
 
-        mu0 = 4*np.pi*1e-7
+        mu0 = 4 * np.pi * 1e-7
         am_aux_f_prev = np.copy(vmec.indata.am_aux_f)
         am_aux_s_prev = np.copy(vmec.indata.am_aux_s)
         pmass_type_prev = np.copy(vmec.indata.pmass_type)
 
         pres = vmec.wout.pres[1::]
-        weight1 = self.weight_function1(vmec.s_half_grid) - self.weight_function2(vmec.s_half_grid)
-        weight2 = self.weight_function1(vmec.s_half_grid) + self.weight_function2(vmec.s_half_grid)
+        weight1 = self.weight_function1(vmec.s_half_grid) - self.weight_function2(
+            vmec.s_half_grid
+        )
+        weight2 = self.weight_function1(vmec.s_half_grid) + self.weight_function2(
+            vmec.s_half_grid
+        )
         numerator = np.sum(weight1 * vmec.wout.vp[1::])
         denominator = np.sum(weight2 * vmec.wout.vp[1::])
-        fW = numerator/denominator
-        perturbation = (weight1 - fW * weight2) / (denominator * vmec.ds * 4 * np.pi * np.pi)
+        fW = numerator / denominator
+        perturbation = (weight1 - fW * weight2) / (
+            denominator * vmec.ds * 4 * np.pi * np.pi
+        )
 
         # Perturbed pressure profile
-        pres_new = pres + self.adjoint_epsilon*perturbation
+        pres_new = pres + self.adjoint_epsilon * perturbation
 
-        vmec.indata.am_aux_f = -1.*np.ones_like(vmec.indata.am_aux_f)
-        vmec.indata.am_aux_s = -1.*np.ones_like(vmec.indata.am_aux_s)
-        vmec.indata.am_aux_f[0:vmec.wout.ns-1] = pres_new
-        vmec.indata.am_aux_s[0:vmec.wout.ns-1] = vmec.s_half_grid
-        vmec.indata.pmass_type = b'cubic_spline'
+        vmec.indata.am_aux_f = -1.0 * np.ones_like(vmec.indata.am_aux_f)
+        vmec.indata.am_aux_s = -1.0 * np.ones_like(vmec.indata.am_aux_s)
+        vmec.indata.am_aux_f[0 : vmec.wout.ns - 1] = pres_new
+        vmec.indata.am_aux_s[0 : vmec.wout.ns - 1] = vmec.s_half_grid
+        vmec.indata.pmass_type = b"cubic_spline"
         vmec.need_to_run_code = True
 
         vmec.run()
@@ -705,9 +841,11 @@ class WellWeighted(Optimizable):
         vmec.indata.pmass_type = pmass_type_prev
         vmec.need_to_run_code = True
 
-        deltaB_dot_B = ((Bx-Bx0)*Bx0 + (By-By0)*By0 + (Bz-Bz0)*Bz0)/self.adjoint_epsilon
+        deltaB_dot_B = (
+            (Bx - Bx0) * Bx0 + (By - By0) * By0 + (Bz - Bz0) * Bz0
+        ) / self.adjoint_epsilon
 
-        return deltaB_dot_B/(mu0) + perturbation[-1]
+        return deltaB_dot_B / (mu0) + perturbation[-1]
 
 
 def vmec_splines(vmec):
@@ -739,17 +877,29 @@ def vmec_splines(vmec):
     d_lmnc_d_s = []
 
     for jmn in range(vmec.wout.mnmax):
-        rmnc.append(InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.rmnc[jmn, :]))
-        zmns.append(InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.zmns[jmn, :]))
-        lmns.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.lmns[jmn, 1:]))
+        rmnc.append(
+            InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.rmnc[jmn, :])
+        )
+        zmns.append(
+            InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.zmns[jmn, :])
+        )
+        lmns.append(
+            InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.lmns[jmn, 1:])
+        )
         d_rmnc_d_s.append(rmnc[-1].derivative())
         d_zmns_d_s.append(zmns[-1].derivative())
         d_lmns_d_s.append(lmns[-1].derivative())
         if vmec.wout.lasym:
             # stellarator non-symmetric
-            rmns.append(InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.rmns[jmn, :]))
-            zmnc.append(InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.zmnc[jmn, :]))
-            lmnc.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.lmnc[jmn, 1:]))
+            rmns.append(
+                InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.rmns[jmn, :])
+            )
+            zmnc.append(
+                InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.zmnc[jmn, :])
+            )
+            lmnc.append(
+                InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.lmnc[jmn, 1:])
+            )
         else:
             # if stellarator symmetric, set modes to zero
             rmns.append(InterpolatedUnivariateSpline([0, 1], [0, 0], k=1))
@@ -785,27 +935,65 @@ def vmec_splines(vmec):
     d_bsupvmns_d_s = []
 
     for jmn in range(vmec.wout.mnmax_nyq):
-        gmnc.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.gmnc[jmn, 1:]))
-        bmnc.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bmnc[jmn, 1:]))
-        bsupumnc.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsupumnc[jmn, 1:]))
-        bsupvmnc.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsupvmnc[jmn, 1:]))
+        gmnc.append(
+            InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.gmnc[jmn, 1:])
+        )
+        bmnc.append(
+            InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bmnc[jmn, 1:])
+        )
+        bsupumnc.append(
+            InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsupumnc[jmn, 1:])
+        )
+        bsupvmnc.append(
+            InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsupvmnc[jmn, 1:])
+        )
         # Note that bsubsmns is on the full mesh, unlike the other components:
-        bsubsmns.append(InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.bsubsmns[jmn, :]))
-        bsubumnc.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsubumnc[jmn, 1:]))
-        bsubvmnc.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsubvmnc[jmn, 1:]))
+        bsubsmns.append(
+            InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.bsubsmns[jmn, :])
+        )
+        bsubumnc.append(
+            InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsubumnc[jmn, 1:])
+        )
+        bsubvmnc.append(
+            InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsubvmnc[jmn, 1:])
+        )
         d_bmnc_d_s.append(bmnc[-1].derivative())
         d_bsupumnc_d_s.append(bsupumnc[-1].derivative())
         d_bsupvmnc_d_s.append(bsupvmnc[-1].derivative())
         if vmec.wout.lasym:
             # stellarator non-symmetric
-            gmns.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.gmns[jmn, 1:]))
-            bmns.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bmns[jmn, 1:]))
-            bsupumns.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsupumns[jmn, 1:]))
-            bsupvmns.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsupvmns[jmn, 1:]))
+            gmns.append(
+                InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.gmns[jmn, 1:])
+            )
+            bmns.append(
+                InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bmns[jmn, 1:])
+            )
+            bsupumns.append(
+                InterpolatedUnivariateSpline(
+                    vmec.s_half_grid, vmec.wout.bsupumns[jmn, 1:]
+                )
+            )
+            bsupvmns.append(
+                InterpolatedUnivariateSpline(
+                    vmec.s_half_grid, vmec.wout.bsupvmns[jmn, 1:]
+                )
+            )
             # Note that bsubsmns is on the full mesh, unlike the other components:
-            bsubsmnc.append(InterpolatedUnivariateSpline(vmec.s_full_grid, vmec.wout.bsubsmnc[jmn, :]))
-            bsubumns.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsubumns[jmn, 1:]))
-            bsubvmns.append(InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.bsubvmns[jmn, 1:]))
+            bsubsmnc.append(
+                InterpolatedUnivariateSpline(
+                    vmec.s_full_grid, vmec.wout.bsubsmnc[jmn, :]
+                )
+            )
+            bsubumns.append(
+                InterpolatedUnivariateSpline(
+                    vmec.s_half_grid, vmec.wout.bsubumns[jmn, 1:]
+                )
+            )
+            bsubvmns.append(
+                InterpolatedUnivariateSpline(
+                    vmec.s_half_grid, vmec.wout.bsubvmns[jmn, 1:]
+                )
+            )
         else:
             # if stellarator symmetric, set modes to zero
             gmns.append(InterpolatedUnivariateSpline([0, 1], [0, 0], k=1))
@@ -821,25 +1009,66 @@ def vmec_splines(vmec):
         d_bsupvmns_d_s.append(bsupvmns[-1].derivative())
 
     # Handle 1d profiles:
-    results.pressure = InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.pres[1:])
+    results.pressure = InterpolatedUnivariateSpline(
+        vmec.s_half_grid, vmec.wout.pres[1:]
+    )
     results.d_pressure_d_s = results.pressure.derivative()
     results.iota = InterpolatedUnivariateSpline(vmec.s_half_grid, vmec.wout.iotas[1:])
     results.d_iota_d_s = results.iota.derivative()
 
     # Save other useful quantities:
     results.phiedge = vmec.wout.phi[-1]
-    variables = ['Aminor_p', 'mnmax', 'xm', 'xn', 'mnmax_nyq', 'xm_nyq', 'xn_nyq', 'nfp']
+    variables = [
+        "Aminor_p",
+        "mnmax",
+        "xm",
+        "xn",
+        "mnmax_nyq",
+        "xm_nyq",
+        "xn_nyq",
+        "nfp",
+    ]
     for v in variables:
-        results.__setattr__(v, eval('vmec.wout.' + v))
+        results.__setattr__(v, eval("vmec.wout." + v))
 
-    variables = ['rmnc', 'zmns', 'lmns', 'd_rmnc_d_s', 'd_zmns_d_s', 'd_lmns_d_s',
-                 'gmnc', 'bmnc', 'd_bmnc_d_s', 'bsupumnc', 'bsupvmnc', 'd_bsupumnc_d_s', 'd_bsupvmnc_d_s',
-                 'bsubsmns', 'bsubumnc', 'bsubvmnc', 'stellsym']
+    variables = [
+        "rmnc",
+        "zmns",
+        "lmns",
+        "d_rmnc_d_s",
+        "d_zmns_d_s",
+        "d_lmns_d_s",
+        "gmnc",
+        "bmnc",
+        "d_bmnc_d_s",
+        "bsupumnc",
+        "bsupvmnc",
+        "d_bsupumnc_d_s",
+        "d_bsupvmnc_d_s",
+        "bsubsmns",
+        "bsubumnc",
+        "bsubvmnc",
+        "stellsym",
+    ]
     # stellarator non-symmetric
-    variables = variables + \
-        ['rmns', 'zmnc', 'lmnc', 'd_rmns_d_s', 'd_zmnc_d_s', 'd_lmnc_d_s',
-         'gmns', 'bmns', 'd_bmns_d_s', 'bsupumns', 'bsupvmns', 'd_bsupumns_d_s', 'd_bsupvmns_d_s',
-         'bsubsmnc', 'bsubumns', 'bsubvmns']
+    variables = variables + [
+        "rmns",
+        "zmnc",
+        "lmnc",
+        "d_rmns_d_s",
+        "d_zmnc_d_s",
+        "d_lmnc_d_s",
+        "gmns",
+        "bmns",
+        "d_bmns_d_s",
+        "bsupumns",
+        "bsupvmns",
+        "d_bsupumns_d_s",
+        "d_bsupvmns_d_s",
+        "bsubsmnc",
+        "bsubumns",
+        "bsubvmns",
+    ]
     for v in variables:
         results.__setattr__(v, eval(v))
 
@@ -857,29 +1086,29 @@ class VmecGeometryResults:
     This data class contains geometric quantities computed from VMEC equilibria, including
     magnetic quantities, coordinates, metric tensors, and various geometric coefficients
     used in gyrokinetic simulations.
-    
+
     Most of the arrays have shape ``(ns, ntheta, nphi)``, where ``ns``
     is the number of flux surfaces, ``ntheta`` is the number of grid points
     in VMEC's poloidal angle, and ``nphi`` is the number of grid points in
     the standard toroidal angle. Note that all angles in this object have
     period :math:`2\\pi`, not period 1.
-    
+
     The value(s) of ``s`` provided as input need not coincide with the
     full grid or half grid in VMEC, as spline interpolation will be
     used radially.
 
     The field line label coordinate :math:`\\alpha` is defined by:
-    
+
     .. math::
         \\alpha = \\theta_{\\text{pest}} - \\iota (\\phi - \\phi_{\\text{center}})
-    
+
     The toroidal flux coordinate :math:`\\psi` is the toroidal flux divided by :math:`2\\pi`, so:
-    
+
     .. math::
         \\vec{B} = \\nabla\\psi\\times\\nabla\\theta_{\\text{pest}} + \\iota\\nabla\\phi\\times\\nabla\\psi = \\nabla\\psi\\times\\nabla\\alpha
-    
+
     **Gyrokinetic Codes:**
-    
+
     This class includes normalized quantities for gyrokinetic codes (``stella``, ``gs2``, ``GX``):
     ``bmag``, ``gbdrift``, ``gbdrift0``, ``cvdrift``, ``cvdrift0``, ``gds2``, ``gds21``, ``gds22``,
     ``gradpar_theta_pest``, and ``gradpar_phi``, along with normalization constants
@@ -895,7 +1124,6 @@ class VmecGeometryResults:
     """Number of grid points in the poloidal direction."""
     nphi: int
     """Number of grid points in the toroidal direction."""
-
 
     ### Coordinates
     s: np.ndarray
@@ -915,7 +1143,7 @@ class VmecGeometryResults:
     r"""VMEC's poloidal angle :math:`\theta_{vmec}`."""
     theta_pest: np.ndarray
     r"""The straight-field-line angle :math:`\theta_{pest}` associated with :math:`\phi`."""
-    
+
     ### Stream Function (Lambda)
     d_lambda_d_s: np.ndarray
     """Derivative of the stream function lambda with respect to s."""
@@ -929,7 +1157,7 @@ class VmecGeometryResults:
     """The Jacobian of the transformation from (s, theta_vmec, phi) to Cartesian."""
     sqrt_g_vmec_alt: np.ndarray
     """Alternate calculation of the Jacobian."""
-    
+
     ### Magnetic Field Strength
     modB: np.ndarray
     """The magnetic field magnitude :math:`|B|`"""
@@ -1008,14 +1236,14 @@ class VmecGeometryResults:
     r"""Derivative of R with respect to theta_vmec. :math:`\partial R / \partial \theta_{\text{vmec}}`"""
     d_R_d_phi: np.ndarray
     r"""Derivative of R with respect to phi. :math:`\partial R / \partial \phi`"""
-    
+
     X: np.ndarray
     """Cartesian :math:`X` coordinate."""
     Y: np.ndarray
     """Cartesian :math:`Y` coordinate."""
     Z: np.ndarray
     """Cartesian :math:`Z` coordinate."""
-    
+
     d_Z_d_s: np.ndarray
     r""":math:`\partial Z / \partial s`"""
     d_Z_d_theta_vmec: np.ndarray
@@ -1042,28 +1270,28 @@ class VmecGeometryResults:
     r"""Y-component of grad s. :math:`\nabla s_Y`"""
     grad_s_Z: np.ndarray
     r"""Z-component of grad s. :math:`\nabla s_Z`"""
-    
+
     grad_theta_vmec_X: np.ndarray
     r"""X-component of grad theta_vmec. :math:`\nabla \theta_{\text{vmec},X}`"""
     grad_theta_vmec_Y: np.ndarray
     r"""Y-component of grad theta_vmec. :math:`\nabla \theta_{\text{vmec},Y}`"""
     grad_theta_vmec_Z: np.ndarray
     r"""Z-component of grad theta_vmec. :math:`\nabla \theta_{\text{vmec},Z}`"""
-    
+
     grad_phi_X: np.ndarray
     r"""X-component of grad phi (toroidal angle). :math:`\nabla \phi_X`"""
     grad_phi_Y: np.ndarray
     r"""Y-component of grad phi (toroidal angle). :math:`\nabla \phi_Y`"""
     grad_phi_Z: np.ndarray
     r"""Z-component of grad phi (toroidal angle). :math:`\nabla \phi_Z`"""
-    
+
     grad_psi_X: np.ndarray
     r"""X-component of grad psi (poloidal flux). :math:`\nabla \psi_X`"""
     grad_psi_Y: np.ndarray
     r"""Y-component of grad psi (poloidal flux). :math:`\nabla \psi_Y`"""
     grad_psi_Z: np.ndarray
     r"""Z-component of grad psi (poloidal flux). :math:`\nabla \psi_Z`"""
-    
+
     grad_alpha_X: np.ndarray
     r"""X-component of grad alpha (field line label).
     :math:`\nabla \alpha = \nabla (\theta_{vmec} + \lambda - \iota * \phi)`
@@ -1076,7 +1304,7 @@ class VmecGeometryResults:
     r"""Z-component of grad alpha (field line label).
     :math:`\nabla \alpha = \nabla (\theta_{vmec} + \lambda - \iota * \phi)`
     """
-    
+
     grad_B_X: np.ndarray
     r""":math:`\nabla |B|_X`"""
     grad_B_Y: np.ndarray
@@ -1108,13 +1336,13 @@ class VmecGeometryResults:
     B_cross_kappa_dot_grad_alpha: np.ndarray
     r""":math:`\vec{B}\times\vec{\kappa}\cdot\nabla\alpha` where
     :math:`\vec{\kappa}=\vec{b}\cdot\nabla\vec{b}` is the curvature and :math:`\vec{b}=|B|^{-1}\vec{B}`"""
-    
+
     grad_alpha_dot_grad_alpha: np.ndarray
     r"""Norm squared of grad alpha.  :math:`|\nabla\alpha|^2 = \nabla\alpha\cdot\nabla\alpha`."""
-    
+
     grad_alpha_dot_grad_psi: np.ndarray
     r"""Dot product of grad alpha and grad psi.  :math:`\nabla\alpha\cdot\nabla\psi`."""
-    
+
     grad_psi_dot_grad_psi: np.ndarray
     r"""Norm squared of grad psi.   :math:`|\nabla\psi|^2 = \nabla\psi\cdot\nabla\psi`."""
 
@@ -1129,31 +1357,31 @@ class VmecGeometryResults:
     # --- Gyrokinetic / Stability Terms ---
     bmag: np.ndarray
     r"""Normalized magnetic field strength :math:`|B| / B_{\text{ref}}`."""
-    
+
     gradpar_theta_pest: np.ndarray
     r"""Parallel gradient operator acting on theta_pest :math:`\nabla_{\parallel} \theta_{pest}`."""
-    
+
     gradpar_phi: np.ndarray
     r"""Parallel gradient operator acting on phi :math:`\nabla_{\parallel} \phi`."""
-    
+
     gds2: np.ndarray
     r"""Geometric coefficient :math:`|\nabla s|^2` (normalized)."""
-    
+
     gds21: np.ndarray
     r"""Geometric coefficient :math:`\nabla s \cdot \nabla \alpha` (normalized)."""
-    
+
     gds22: np.ndarray
     r"""Geometric coefficient :math:`|\nabla \alpha|^2` (normalized)."""
-    
+
     gbdrift: np.ndarray
     r"""Grad-B drift coefficient :math:`2 B_{\text{ref}} L_{\text{ref}}^2 (\vec{B} \times \nabla |B|) \cdot \nabla \alpha / |B|^3`."""
-    
+
     gbdrift0: np.ndarray
     r"""Alternate grad-B drift coefficient (used by certain gyrokinetic codes)."""
-    
+
     cvdrift: np.ndarray
     r"""Curvature drift coefficient :math:`2 B_{\text{ref}} L_{\text{ref}}^2 (\vec{B} \times \vec{\kappa}) \cdot \nabla \alpha / |B|^3`."""
-    
+
     cvdrift0: np.ndarray
     r"""Alternate curvature drift coefficient (used by certain gyrokinetic codes)."""
 
@@ -1180,7 +1408,7 @@ class VmecGeometryResults:
     r""":math:`\partial B_Z / \partial Y`"""
     grad_B__ZZ: np.ndarray
     r""":math:`\partial B_Z / \partial Z`"""
-    
+
     grad_B_double_dot_grad_B: np.ndarray
     r"""Double contraction of grad B tensor :math:`\sum_{ij} (\partial B_i / \partial x_j)^2`."""
     norm_grad_B: np.ndarray
@@ -1193,7 +1421,7 @@ class VmecGeometryResults:
     """Number of field line labels alpha. Only present if object was computed via field line tracing."""
     nl: Optional[int] = None
     """Number of points along each field line. Only present if object was computed via field line tracing."""
-    
+
     alpha: Optional[np.ndarray] = None
     """Field line label alpha values."""
     theta1d: Optional[np.ndarray] = None
@@ -1205,7 +1433,9 @@ class VmecGeometryResults:
 VmecGeometryResults.__signature__ = inspect.Signature()
 
 
-def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_center:float=0.0)->VmecGeometryResults:
+def vmec_compute_geometry(
+    vs, s: RealArray, theta: RealArray, phi: RealArray, phi_center: float = 0.0
+) -> VmecGeometryResults:
     r"""
     Compute many geometric quantities of interest from a vmec configuration.
 
@@ -1283,7 +1513,7 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
     # If given a Vmec object, convert it to vmec_splines:
     if isinstance(vs, Vmec):
         vs = vmec_splines(vs)
-    
+
     # Make sure s is an array:
     try:
         ns = len(s)
@@ -1354,8 +1584,7 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
     d_rmns_d_s = np.zeros((ns, mnmax))
     d_zmnc_d_s = np.zeros((ns, mnmax))
     d_lmnc_d_s = np.zeros((ns, mnmax))
-    
-    
+
     for jmn in range(mnmax):
         rmnc[:, jmn] = vs.rmnc[jmn](s)
         zmns[:, jmn] = vs.zmns[jmn](s)
@@ -1370,9 +1599,7 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
             d_rmns_d_s[:, jmn] = vs.d_rmns_d_s[jmn](s)
             d_zmnc_d_s[:, jmn] = vs.d_zmnc_d_s[jmn](s)
             d_lmnc_d_s[:, jmn] = vs.d_lmnc_d_s[jmn](s)
-        
 
-        
     gmnc = np.zeros((ns, mnmax_nyq))
     bmnc = np.zeros((ns, mnmax_nyq))
     d_bmnc_d_s = np.zeros((ns, mnmax_nyq))
@@ -1417,51 +1644,100 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
             d_bsupumns_d_s[:, jmn] = vs.d_bsupumns_d_s[jmn](s)
             d_bsupvmns_d_s[:, jmn] = vs.d_bsupvmns_d_s[jmn](s)
 
-        
     # Now that we know theta_vmec, compute all the geometric quantities
-    angle = xm[:, None, None, None] * theta_vmec[None, :, :, :] - xn[:, None, None, None] * phi[None, :, :, :]
+    angle = (
+        xm[:, None, None, None] * theta_vmec[None, :, :, :]
+        - xn[:, None, None, None] * phi[None, :, :, :]
+    )
     cosangle = np.cos(angle)
     sinangle = np.sin(angle)
     mcosangle = xm[:, None, None, None] * cosangle
     ncosangle = xn[:, None, None, None] * cosangle
     mncosangle = xm[:, None, None, None] * xn[:, None, None, None] * cosangle
-    m2cosangle = xm[:, None, None, None]**2 * cosangle
-    n2cosangle = xn[:, None, None, None]**2 * cosangle
+    m2cosangle = xm[:, None, None, None] ** 2 * cosangle
+    n2cosangle = xn[:, None, None, None] ** 2 * cosangle
     msinangle = xm[:, None, None, None] * sinangle
     nsinangle = xn[:, None, None, None] * sinangle
     mnsinangle = xm[:, None, None, None] * xn[:, None, None, None] * sinangle
-    m2sinangle = xm[:, None, None, None]**2 * sinangle
-    n2sinangle = xn[:, None, None, None]**2 * sinangle
+    m2sinangle = xm[:, None, None, None] ** 2 * sinangle
+    n2sinangle = xn[:, None, None, None] ** 2 * sinangle
     # Order of indices in cosangle and sinangle: mn, s, theta, phi
     # Order of indices in rmnc, bmnc, etc: s, mn
-    R = np.einsum('ij,jikl->ikl', rmnc, cosangle) + np.einsum('ij,jikl->ikl', rmns, sinangle)
-    d_R_d_s = np.einsum('ij,jikl->ikl', d_rmnc_d_s, cosangle) + np.einsum('ij,jikl->ikl', d_rmns_d_s, sinangle)
-    d_R_d_theta_vmec = np.einsum('ij,jikl->ikl', -rmnc, msinangle) + np.einsum('ij,jikl->ikl', rmns, mcosangle)
-    d_R_d_phi = np.einsum('ij,jikl->ikl', rmnc, nsinangle) + np.einsum('ij,jikl->ikl', -rmns, ncosangle)
-    d2_R_d_phi2 = np.einsum('ij,jikl->ikl', -rmnc, n2cosangle) + np.einsum('ij,jikl->ikl', -rmns, n2sinangle)
-    d2_R_d_theta_vmec2 = np.einsum('ij,jikl->ikl', -rmnc, m2cosangle) + np.einsum('ij,jikl->ikl', -rmns, m2sinangle)
-    d2_R_d_theta_vmec_d_phi = np.einsum('ij,jikl->ikl', rmnc, mncosangle) + np.einsum('ij,jikl->ikl', rmns, mnsinangle)
-    d2_R_d_s_d_theta_vmec = np.einsum('ij,jikl->ikl', -d_rmnc_d_s, msinangle) + np.einsum('ij,jikl->ikl', d_rmns_d_s, mcosangle)
-    d2_R_d_s_d_phi = np.einsum('ij,jikl->ikl', d_rmnc_d_s, nsinangle) + np.einsum('ij,jikl->ikl', -d_rmns_d_s, ncosangle)
+    R = np.einsum("ij,jikl->ikl", rmnc, cosangle) + np.einsum(
+        "ij,jikl->ikl", rmns, sinangle
+    )
+    d_R_d_s = np.einsum("ij,jikl->ikl", d_rmnc_d_s, cosangle) + np.einsum(
+        "ij,jikl->ikl", d_rmns_d_s, sinangle
+    )
+    d_R_d_theta_vmec = np.einsum("ij,jikl->ikl", -rmnc, msinangle) + np.einsum(
+        "ij,jikl->ikl", rmns, mcosangle
+    )
+    d_R_d_phi = np.einsum("ij,jikl->ikl", rmnc, nsinangle) + np.einsum(
+        "ij,jikl->ikl", -rmns, ncosangle
+    )
+    d2_R_d_phi2 = np.einsum("ij,jikl->ikl", -rmnc, n2cosangle) + np.einsum(
+        "ij,jikl->ikl", -rmns, n2sinangle
+    )
+    d2_R_d_theta_vmec2 = np.einsum("ij,jikl->ikl", -rmnc, m2cosangle) + np.einsum(
+        "ij,jikl->ikl", -rmns, m2sinangle
+    )
+    d2_R_d_theta_vmec_d_phi = np.einsum("ij,jikl->ikl", rmnc, mncosangle) + np.einsum(
+        "ij,jikl->ikl", rmns, mnsinangle
+    )
+    d2_R_d_s_d_theta_vmec = np.einsum(
+        "ij,jikl->ikl", -d_rmnc_d_s, msinangle
+    ) + np.einsum("ij,jikl->ikl", d_rmns_d_s, mcosangle)
+    d2_R_d_s_d_phi = np.einsum("ij,jikl->ikl", d_rmnc_d_s, nsinangle) + np.einsum(
+        "ij,jikl->ikl", -d_rmns_d_s, ncosangle
+    )
 
-    Z = np.einsum('ij,jikl->ikl', zmns, sinangle) + np.einsum('ij,jikl->ikl', zmnc, cosangle)
-    d_Z_d_s = np.einsum('ij,jikl->ikl', d_zmns_d_s, sinangle) + np.einsum('ij,jikl->ikl', d_zmnc_d_s, cosangle)
-    d_Z_d_theta_vmec = np.einsum('ij,jikl->ikl', zmns, mcosangle) + np.einsum('ij,jikl->ikl', -zmnc, msinangle)
-    d_Z_d_phi = np.einsum('ij,jikl->ikl', -zmns, ncosangle) + np.einsum('ij,jikl->ikl', zmnc, nsinangle)
-    d2_Z_d_phi2 = np.einsum('ij,jikl->ikl', -zmns, n2sinangle) + np.einsum('ij,jikl->ikl', -zmnc, n2cosangle)
-    d2_Z_d_theta_vmec2 = np.einsum('ij,jikl->ikl', -zmns, m2sinangle) + np.einsum('ij,jikl->ikl', -zmnc, m2cosangle)
-    d2_Z_d_theta_vmec_d_phi = np.einsum('ij,jikl->ikl', zmns, mnsinangle) + np.einsum('ij,jikl->ikl', zmnc, mncosangle)
-    d2_Z_d_s_d_theta_vmec = np.einsum('ij,jikl->ikl', d_zmns_d_s, mcosangle) + np.einsum('ij,jikl->ikl', -d_zmnc_d_s, msinangle)
-    d2_Z_d_s_d_phi = np.einsum('ij,jikl->ikl', -d_zmns_d_s, ncosangle) + np.einsum('ij,jikl->ikl', d_zmnc_d_s, nsinangle)
+    Z = np.einsum("ij,jikl->ikl", zmns, sinangle) + np.einsum(
+        "ij,jikl->ikl", zmnc, cosangle
+    )
+    d_Z_d_s = np.einsum("ij,jikl->ikl", d_zmns_d_s, sinangle) + np.einsum(
+        "ij,jikl->ikl", d_zmnc_d_s, cosangle
+    )
+    d_Z_d_theta_vmec = np.einsum("ij,jikl->ikl", zmns, mcosangle) + np.einsum(
+        "ij,jikl->ikl", -zmnc, msinangle
+    )
+    d_Z_d_phi = np.einsum("ij,jikl->ikl", -zmns, ncosangle) + np.einsum(
+        "ij,jikl->ikl", zmnc, nsinangle
+    )
+    d2_Z_d_phi2 = np.einsum("ij,jikl->ikl", -zmns, n2sinangle) + np.einsum(
+        "ij,jikl->ikl", -zmnc, n2cosangle
+    )
+    d2_Z_d_theta_vmec2 = np.einsum("ij,jikl->ikl", -zmns, m2sinangle) + np.einsum(
+        "ij,jikl->ikl", -zmnc, m2cosangle
+    )
+    d2_Z_d_theta_vmec_d_phi = np.einsum("ij,jikl->ikl", zmns, mnsinangle) + np.einsum(
+        "ij,jikl->ikl", zmnc, mncosangle
+    )
+    d2_Z_d_s_d_theta_vmec = np.einsum(
+        "ij,jikl->ikl", d_zmns_d_s, mcosangle
+    ) + np.einsum("ij,jikl->ikl", -d_zmnc_d_s, msinangle)
+    d2_Z_d_s_d_phi = np.einsum("ij,jikl->ikl", -d_zmns_d_s, ncosangle) + np.einsum(
+        "ij,jikl->ikl", d_zmnc_d_s, nsinangle
+    )
 
-    lambd = np.einsum('ij,jikl->ikl', lmns, sinangle) + np.einsum('ij,jikl->ikl', lmnc, cosangle)
-    d_lambda_d_s = np.einsum('ij,jikl->ikl', d_lmns_d_s, sinangle) +  np.einsum('ij,jikl->ikl', d_lmnc_d_s, cosangle)
-    d_lambda_d_theta_vmec = np.einsum('ij,jikl->ikl', lmns, mcosangle) +  + np.einsum('ij,jikl->ikl', -lmnc, msinangle)
-    d_lambda_d_phi = np.einsum('ij,jikl->ikl', -lmns, ncosangle) + np.einsum('ij,jikl->ikl', lmnc, nsinangle)
+    lambd = np.einsum("ij,jikl->ikl", lmns, sinangle) + np.einsum(
+        "ij,jikl->ikl", lmnc, cosangle
+    )
+    d_lambda_d_s = np.einsum("ij,jikl->ikl", d_lmns_d_s, sinangle) + np.einsum(
+        "ij,jikl->ikl", d_lmnc_d_s, cosangle
+    )
+    d_lambda_d_theta_vmec = np.einsum("ij,jikl->ikl", lmns, mcosangle) + +np.einsum(
+        "ij,jikl->ikl", -lmnc, msinangle
+    )
+    d_lambda_d_phi = np.einsum("ij,jikl->ikl", -lmns, ncosangle) + np.einsum(
+        "ij,jikl->ikl", lmnc, nsinangle
+    )
     theta_pest = theta_vmec + lambd
 
     # Now handle the Nyquist quantities:
-    angle = xm_nyq[:, None, None, None] * theta_vmec[None, :, :, :] - xn_nyq[:, None, None, None] * phi[None, :, :, :]
+    angle = (
+        xm_nyq[:, None, None, None] * theta_vmec[None, :, :, :]
+        - xn_nyq[:, None, None, None] * phi[None, :, :, :]
+    )
     cosangle = np.cos(angle)
     sinangle = np.sin(angle)
     mcosangle = xm_nyq[:, None, None, None] * cosangle
@@ -1469,24 +1745,56 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
     msinangle = xm_nyq[:, None, None, None] * sinangle
     nsinangle = xn_nyq[:, None, None, None] * sinangle
 
-    sqrt_g_vmec = np.einsum('ij,jikl->ikl', gmnc, cosangle) + np.einsum('ij,jikl->ikl', gmns, sinangle)
-    modB = np.einsum('ij,jikl->ikl', bmnc, cosangle) + np.einsum('ij,jikl->ikl', bmns, sinangle)
-    d_B_d_s = np.einsum('ij,jikl->ikl', d_bmnc_d_s, cosangle) +  np.einsum('ij,jikl->ikl', d_bmns_d_s, sinangle)
-    d_B_d_theta_vmec = np.einsum('ij,jikl->ikl', -bmnc, msinangle) + np.einsum('ij,jikl->ikl', bmns, mcosangle)
-    d_B_d_phi = np.einsum('ij,jikl->ikl', bmnc, nsinangle) + np.einsum('ij,jikl->ikl', -bmns, ncosangle)
+    sqrt_g_vmec = np.einsum("ij,jikl->ikl", gmnc, cosangle) + np.einsum(
+        "ij,jikl->ikl", gmns, sinangle
+    )
+    modB = np.einsum("ij,jikl->ikl", bmnc, cosangle) + np.einsum(
+        "ij,jikl->ikl", bmns, sinangle
+    )
+    d_B_d_s = np.einsum("ij,jikl->ikl", d_bmnc_d_s, cosangle) + np.einsum(
+        "ij,jikl->ikl", d_bmns_d_s, sinangle
+    )
+    d_B_d_theta_vmec = np.einsum("ij,jikl->ikl", -bmnc, msinangle) + np.einsum(
+        "ij,jikl->ikl", bmns, mcosangle
+    )
+    d_B_d_phi = np.einsum("ij,jikl->ikl", bmnc, nsinangle) + np.einsum(
+        "ij,jikl->ikl", -bmns, ncosangle
+    )
 
-    B_sup_theta_vmec = np.einsum('ij,jikl->ikl', bsupumnc, cosangle) + np.einsum('ij,jikl->ikl', bsupumns, sinangle)
-    B_sup_phi = np.einsum('ij,jikl->ikl', bsupvmnc, cosangle) + np.einsum('ij,jikl->ikl', bsupvmns, sinangle)
-    B_sub_s = np.einsum('ij,jikl->ikl', bsubsmns, sinangle) +  np.einsum('ij,jikl->ikl', bsubsmnc, cosangle)
-    B_sub_theta_vmec = np.einsum('ij,jikl->ikl', bsubumnc, cosangle) + np.einsum('ij,jikl->ikl', bsubumns, sinangle)
-    B_sub_phi = np.einsum('ij,jikl->ikl', bsubvmnc, cosangle) + np.einsum('ij,jikl->ikl', bsubvmns, sinangle)
+    B_sup_theta_vmec = np.einsum("ij,jikl->ikl", bsupumnc, cosangle) + np.einsum(
+        "ij,jikl->ikl", bsupumns, sinangle
+    )
+    B_sup_phi = np.einsum("ij,jikl->ikl", bsupvmnc, cosangle) + np.einsum(
+        "ij,jikl->ikl", bsupvmns, sinangle
+    )
+    B_sub_s = np.einsum("ij,jikl->ikl", bsubsmns, sinangle) + np.einsum(
+        "ij,jikl->ikl", bsubsmnc, cosangle
+    )
+    B_sub_theta_vmec = np.einsum("ij,jikl->ikl", bsubumnc, cosangle) + np.einsum(
+        "ij,jikl->ikl", bsubumns, sinangle
+    )
+    B_sub_phi = np.einsum("ij,jikl->ikl", bsubvmnc, cosangle) + np.einsum(
+        "ij,jikl->ikl", bsubvmns, sinangle
+    )
     B_sup_theta_pest = iota[:, None, None] * B_sup_phi
-    d_B_sup_phi_d_theta_vmec = np.einsum('ij,jikl->ikl', -bsupvmnc, msinangle) + np.einsum('ij,jikl->ikl', bsupvmns, mcosangle)
-    d_B_sup_phi_d_phi = np.einsum('ij,jikl->ikl', bsupvmnc, nsinangle) + np.einsum('ij,jikl->ikl', -bsupvmns, ncosangle)
-    d_B_sup_theta_vmec_d_theta_vmec = np.einsum('ij,jikl->ikl', -bsupumnc, msinangle) + np.einsum('ij,jikl->ikl', bsupumns, mcosangle)
-    d_B_sup_theta_vmec_d_phi = np.einsum('ij,jikl->ikl', bsupumnc, nsinangle) + np.einsum('ij,jikl->ikl', -bsupumns, ncosangle)
-    d_B_sup_theta_vmec_d_s = np.einsum('ij,jikl->ikl', d_bsupumnc_d_s, cosangle) + np.einsum('ij,jikl->ikl', d_bsupumns_d_s, sinangle)
-    d_B_sup_phi_d_s = np.einsum('ij,jikl->ikl', d_bsupvmnc_d_s, cosangle) + np.einsum('ij,jikl->ikl', d_bsupvmns_d_s, sinangle)
+    d_B_sup_phi_d_theta_vmec = np.einsum(
+        "ij,jikl->ikl", -bsupvmnc, msinangle
+    ) + np.einsum("ij,jikl->ikl", bsupvmns, mcosangle)
+    d_B_sup_phi_d_phi = np.einsum("ij,jikl->ikl", bsupvmnc, nsinangle) + np.einsum(
+        "ij,jikl->ikl", -bsupvmns, ncosangle
+    )
+    d_B_sup_theta_vmec_d_theta_vmec = np.einsum(
+        "ij,jikl->ikl", -bsupumnc, msinangle
+    ) + np.einsum("ij,jikl->ikl", bsupumns, mcosangle)
+    d_B_sup_theta_vmec_d_phi = np.einsum(
+        "ij,jikl->ikl", bsupumnc, nsinangle
+    ) + np.einsum("ij,jikl->ikl", -bsupumns, ncosangle)
+    d_B_sup_theta_vmec_d_s = np.einsum(
+        "ij,jikl->ikl", d_bsupumnc_d_s, cosangle
+    ) + np.einsum("ij,jikl->ikl", d_bsupumns_d_s, sinangle)
+    d_B_sup_phi_d_s = np.einsum("ij,jikl->ikl", d_bsupvmnc_d_s, cosangle) + np.einsum(
+        "ij,jikl->ikl", d_bsupvmns_d_s, sinangle
+    )
 
     sqrt_g_vmec_alt = R * (d_Z_d_s * d_R_d_theta_vmec - d_R_d_s * d_Z_d_theta_vmec)
 
@@ -1509,9 +1817,15 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
     d_Y_d_s = d_R_d_s * sinphi
 
     # Now use the dual relations to get the Cartesian components of grad s, grad theta_vmec, and grad phi:
-    grad_s_X = (d_Y_d_theta_vmec * d_Z_d_phi - d_Z_d_theta_vmec * d_Y_d_phi) / sqrt_g_vmec
-    grad_s_Y = (d_Z_d_theta_vmec * d_X_d_phi - d_X_d_theta_vmec * d_Z_d_phi) / sqrt_g_vmec
-    grad_s_Z = (d_X_d_theta_vmec * d_Y_d_phi - d_Y_d_theta_vmec * d_X_d_phi) / sqrt_g_vmec
+    grad_s_X = (
+        d_Y_d_theta_vmec * d_Z_d_phi - d_Z_d_theta_vmec * d_Y_d_phi
+    ) / sqrt_g_vmec
+    grad_s_Y = (
+        d_Z_d_theta_vmec * d_X_d_phi - d_X_d_theta_vmec * d_Z_d_phi
+    ) / sqrt_g_vmec
+    grad_s_Z = (
+        d_X_d_theta_vmec * d_Y_d_phi - d_Y_d_theta_vmec * d_X_d_phi
+    ) / sqrt_g_vmec
 
     grad_theta_vmec_X = (d_Y_d_phi * d_Z_d_s - d_Z_d_phi * d_Y_d_s) / sqrt_g_vmec
     grad_theta_vmec_Y = (d_Z_d_phi * d_X_d_s - d_X_d_phi * d_Z_d_s) / sqrt_g_vmec
@@ -1531,21 +1845,66 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
     grad_psi_Z = grad_s_Z * edge_toroidal_flux_over_2pi
 
     # Form grad alpha = grad (theta_vmec + lambda - iota * phi)
-    grad_alpha_X = (d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None]) * grad_s_X
-    grad_alpha_Y = (d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None]) * grad_s_Y
-    grad_alpha_Z = (d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None]) * grad_s_Z
+    grad_alpha_X = (
+        d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None]
+    ) * grad_s_X
+    grad_alpha_Y = (
+        d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None]
+    ) * grad_s_Y
+    grad_alpha_Z = (
+        d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None]
+    ) * grad_s_Z
 
-    grad_alpha_X += (1 + d_lambda_d_theta_vmec) * grad_theta_vmec_X + (-iota[:, None, None] + d_lambda_d_phi) * grad_phi_X
-    grad_alpha_Y += (1 + d_lambda_d_theta_vmec) * grad_theta_vmec_Y + (-iota[:, None, None] + d_lambda_d_phi) * grad_phi_Y
-    grad_alpha_Z += (1 + d_lambda_d_theta_vmec) * grad_theta_vmec_Z + (-iota[:, None, None] + d_lambda_d_phi) * grad_phi_Z
+    grad_alpha_X += (1 + d_lambda_d_theta_vmec) * grad_theta_vmec_X + (
+        -iota[:, None, None] + d_lambda_d_phi
+    ) * grad_phi_X
+    grad_alpha_Y += (1 + d_lambda_d_theta_vmec) * grad_theta_vmec_Y + (
+        -iota[:, None, None] + d_lambda_d_phi
+    ) * grad_phi_Y
+    grad_alpha_Z += (1 + d_lambda_d_theta_vmec) * grad_theta_vmec_Z + (
+        -iota[:, None, None] + d_lambda_d_phi
+    ) * grad_phi_Z
 
-    grad_B_X = d_B_d_s * grad_s_X + d_B_d_theta_vmec * grad_theta_vmec_X + d_B_d_phi * grad_phi_X
-    grad_B_Y = d_B_d_s * grad_s_Y + d_B_d_theta_vmec * grad_theta_vmec_Y + d_B_d_phi * grad_phi_Y
-    grad_B_Z = d_B_d_s * grad_s_Z + d_B_d_theta_vmec * grad_theta_vmec_Z + d_B_d_phi * grad_phi_Z
+    grad_B_X = (
+        d_B_d_s * grad_s_X
+        + d_B_d_theta_vmec * grad_theta_vmec_X
+        + d_B_d_phi * grad_phi_X
+    )
+    grad_B_Y = (
+        d_B_d_s * grad_s_Y
+        + d_B_d_theta_vmec * grad_theta_vmec_Y
+        + d_B_d_phi * grad_phi_Y
+    )
+    grad_B_Z = (
+        d_B_d_s * grad_s_Z
+        + d_B_d_theta_vmec * grad_theta_vmec_Z
+        + d_B_d_phi * grad_phi_Z
+    )
 
-    B_X = edge_toroidal_flux_over_2pi * ((1 + d_lambda_d_theta_vmec) * d_X_d_phi + (iota[:, None, None] - d_lambda_d_phi) * d_X_d_theta_vmec) / sqrt_g_vmec
-    B_Y = edge_toroidal_flux_over_2pi * ((1 + d_lambda_d_theta_vmec) * d_Y_d_phi + (iota[:, None, None] - d_lambda_d_phi) * d_Y_d_theta_vmec) / sqrt_g_vmec
-    B_Z = edge_toroidal_flux_over_2pi * ((1 + d_lambda_d_theta_vmec) * d_Z_d_phi + (iota[:, None, None] - d_lambda_d_phi) * d_Z_d_theta_vmec) / sqrt_g_vmec
+    B_X = (
+        edge_toroidal_flux_over_2pi
+        * (
+            (1 + d_lambda_d_theta_vmec) * d_X_d_phi
+            + (iota[:, None, None] - d_lambda_d_phi) * d_X_d_theta_vmec
+        )
+        / sqrt_g_vmec
+    )
+    B_Y = (
+        edge_toroidal_flux_over_2pi
+        * (
+            (1 + d_lambda_d_theta_vmec) * d_Y_d_phi
+            + (iota[:, None, None] - d_lambda_d_phi) * d_Y_d_theta_vmec
+        )
+        / sqrt_g_vmec
+    )
+    B_Z = (
+        edge_toroidal_flux_over_2pi
+        * (
+            (1 + d_lambda_d_theta_vmec) * d_Z_d_phi
+            + (iota[:, None, None] - d_lambda_d_phi) * d_Z_d_theta_vmec
+        )
+        / sqrt_g_vmec
+    )
 
     # *********************************************************************
     # For gbdrift, we need \vect{B} cross grad |B| dot grad alpha.
@@ -1554,47 +1913,79 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
     # approaches give the same answer (within some tolerance).
     # *********************************************************************
 
-    B_cross_grad_s_dot_grad_alpha = (B_sub_phi * (1 + d_lambda_d_theta_vmec)
-                                     - B_sub_theta_vmec * (d_lambda_d_phi - iota[:, None, None])) / sqrt_g_vmec
+    B_cross_grad_s_dot_grad_alpha = (
+        B_sub_phi * (1 + d_lambda_d_theta_vmec)
+        - B_sub_theta_vmec * (d_lambda_d_phi - iota[:, None, None])
+    ) / sqrt_g_vmec
 
-    B_cross_grad_s_dot_grad_alpha_alternate = 0 \
-        + B_X * grad_s_Y * grad_alpha_Z \
-        + B_Y * grad_s_Z * grad_alpha_X \
-        + B_Z * grad_s_X * grad_alpha_Y \
-        - B_Z * grad_s_Y * grad_alpha_X \
-        - B_X * grad_s_Z * grad_alpha_Y \
+    B_cross_grad_s_dot_grad_alpha_alternate = (
+        0
+        + B_X * grad_s_Y * grad_alpha_Z
+        + B_Y * grad_s_Z * grad_alpha_X
+        + B_Z * grad_s_X * grad_alpha_Y
+        - B_Z * grad_s_Y * grad_alpha_X
+        - B_X * grad_s_Z * grad_alpha_Y
         - B_Y * grad_s_X * grad_alpha_Z
+    )
 
-    B_cross_grad_B_dot_grad_alpha = 0 \
-        + (B_sub_s * d_B_d_theta_vmec * (d_lambda_d_phi - iota[:, None, None])
-           + B_sub_theta_vmec * d_B_d_phi * (d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None])
-           + B_sub_phi * d_B_d_s * (1 + d_lambda_d_theta_vmec)
-           - B_sub_phi * d_B_d_theta_vmec * (d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None])
-           - B_sub_theta_vmec * d_B_d_s * (d_lambda_d_phi - iota[:, None, None])
-           - B_sub_s * d_B_d_phi * (1 + d_lambda_d_theta_vmec)) / sqrt_g_vmec
+    B_cross_grad_B_dot_grad_alpha = (
+        0
+        + (
+            B_sub_s * d_B_d_theta_vmec * (d_lambda_d_phi - iota[:, None, None])
+            + B_sub_theta_vmec
+            * d_B_d_phi
+            * (d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None])
+            + B_sub_phi * d_B_d_s * (1 + d_lambda_d_theta_vmec)
+            - B_sub_phi
+            * d_B_d_theta_vmec
+            * (d_lambda_d_s - (phi - phi_center) * d_iota_d_s[:, None, None])
+            - B_sub_theta_vmec * d_B_d_s * (d_lambda_d_phi - iota[:, None, None])
+            - B_sub_s * d_B_d_phi * (1 + d_lambda_d_theta_vmec)
+        )
+        / sqrt_g_vmec
+    )
 
-    B_cross_grad_B_dot_grad_alpha_alternate = 0 \
-        + B_X * grad_B_Y * grad_alpha_Z \
-        + B_Y * grad_B_Z * grad_alpha_X \
-        + B_Z * grad_B_X * grad_alpha_Y \
-        - B_Z * grad_B_Y * grad_alpha_X \
-        - B_X * grad_B_Z * grad_alpha_Y \
+    B_cross_grad_B_dot_grad_alpha_alternate = (
+        0
+        + B_X * grad_B_Y * grad_alpha_Z
+        + B_Y * grad_B_Z * grad_alpha_X
+        + B_Z * grad_B_X * grad_alpha_Y
+        - B_Z * grad_B_Y * grad_alpha_X
+        - B_X * grad_B_Z * grad_alpha_Y
         - B_Y * grad_B_X * grad_alpha_Z
+    )
 
-    grad_alpha_dot_grad_alpha = grad_alpha_X * grad_alpha_X + grad_alpha_Y * grad_alpha_Y + grad_alpha_Z * grad_alpha_Z
+    grad_alpha_dot_grad_alpha = (
+        grad_alpha_X * grad_alpha_X
+        + grad_alpha_Y * grad_alpha_Y
+        + grad_alpha_Z * grad_alpha_Z
+    )
 
-    grad_alpha_dot_grad_psi = grad_alpha_X * grad_psi_X + grad_alpha_Y * grad_psi_Y + grad_alpha_Z * grad_psi_Z
+    grad_alpha_dot_grad_psi = (
+        grad_alpha_X * grad_psi_X
+        + grad_alpha_Y * grad_psi_Y
+        + grad_alpha_Z * grad_psi_Z
+    )
 
-    grad_psi_dot_grad_psi = grad_psi_X * grad_psi_X + grad_psi_Y * grad_psi_Y + grad_psi_Z * grad_psi_Z
+    grad_psi_dot_grad_psi = (
+        grad_psi_X * grad_psi_X + grad_psi_Y * grad_psi_Y + grad_psi_Z * grad_psi_Z
+    )
 
     grad_s_dot_grad_s = grad_s_X * grad_s_X + grad_s_Y * grad_s_Y + grad_s_Z * grad_s_Z
 
-    B_cross_grad_B_dot_grad_psi = (B_sub_theta_vmec * d_B_d_phi - B_sub_phi * d_B_d_theta_vmec) / sqrt_g_vmec * edge_toroidal_flux_over_2pi
+    B_cross_grad_B_dot_grad_psi = (
+        (B_sub_theta_vmec * d_B_d_phi - B_sub_phi * d_B_d_theta_vmec)
+        / sqrt_g_vmec
+        * edge_toroidal_flux_over_2pi
+    )
 
     B_cross_kappa_dot_grad_psi = B_cross_grad_B_dot_grad_psi / modB
 
     mu_0 = 4 * np.pi * (1.0e-7)
-    B_cross_kappa_dot_grad_alpha = B_cross_grad_B_dot_grad_alpha / modB + mu_0 * d_pressure_d_s[:, None, None] / edge_toroidal_flux_over_2pi
+    B_cross_kappa_dot_grad_alpha = (
+        B_cross_grad_B_dot_grad_alpha / modB
+        + mu_0 * d_pressure_d_s[:, None, None] / edge_toroidal_flux_over_2pi
+    )
 
     # stella / gs2 / gx quantities:
 
@@ -1613,15 +2004,40 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
 
     gds21 = grad_alpha_dot_grad_psi * shat[:, None, None] / B_reference
 
-    gds22 = grad_psi_dot_grad_psi * shat[:, None, None] * shat[:, None, None] / (L_reference * L_reference * B_reference * B_reference * s[:, None, None])
+    gds22 = (
+        grad_psi_dot_grad_psi
+        * shat[:, None, None]
+        * shat[:, None, None]
+        / (L_reference * L_reference * B_reference * B_reference * s[:, None, None])
+    )
 
     # temporary fix. Please see issue #238 and the discussion therein
-    gbdrift = -1 * 2 * B_reference * L_reference * L_reference * sqrt_s[:, None, None] * B_cross_grad_B_dot_grad_alpha / (modB * modB * modB) * toroidal_flux_sign
+    gbdrift = (
+        -1
+        * 2
+        * B_reference
+        * L_reference
+        * L_reference
+        * sqrt_s[:, None, None]
+        * B_cross_grad_B_dot_grad_alpha
+        / (modB * modB * modB)
+        * toroidal_flux_sign
+    )
 
-    gbdrift0 = B_cross_grad_B_dot_grad_psi * 2 * shat[:, None, None] / (modB * modB * modB * sqrt_s[:, None, None]) * toroidal_flux_sign
+    gbdrift0 = (
+        B_cross_grad_B_dot_grad_psi
+        * 2
+        * shat[:, None, None]
+        / (modB * modB * modB * sqrt_s[:, None, None])
+        * toroidal_flux_sign
+    )
 
     # temporary fix. Please see issue #238 and the discussion therein
-    cvdrift = gbdrift - 2 * B_reference * L_reference * L_reference * sqrt_s[:, None, None] * mu_0 * d_pressure_d_s[:, None, None] * toroidal_flux_sign / (edge_toroidal_flux_over_2pi * modB * modB)
+    cvdrift = gbdrift - 2 * B_reference * L_reference * L_reference * sqrt_s[
+        :, None, None
+    ] * mu_0 * d_pressure_d_s[:, None, None] * toroidal_flux_sign / (
+        edge_toroidal_flux_over_2pi * modB * modB
+    )
 
     cvdrift0 = gbdrift0
 
@@ -1712,17 +2128,53 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
         + B_sup_phi * d2_Z_d_phi2
     )
 
-    grad_B__XX = d_B_X_d_s * grad_s_X + d_B_X_d_theta * grad_theta_vmec_X + d_B_X_d_phi * grad_phi_X
-    grad_B__XY = d_B_X_d_s * grad_s_Y + d_B_X_d_theta * grad_theta_vmec_Y + d_B_X_d_phi * grad_phi_Y
-    grad_B__XZ = d_B_X_d_s * grad_s_Z + d_B_X_d_theta * grad_theta_vmec_Z + d_B_X_d_phi * grad_phi_Z
+    grad_B__XX = (
+        d_B_X_d_s * grad_s_X
+        + d_B_X_d_theta * grad_theta_vmec_X
+        + d_B_X_d_phi * grad_phi_X
+    )
+    grad_B__XY = (
+        d_B_X_d_s * grad_s_Y
+        + d_B_X_d_theta * grad_theta_vmec_Y
+        + d_B_X_d_phi * grad_phi_Y
+    )
+    grad_B__XZ = (
+        d_B_X_d_s * grad_s_Z
+        + d_B_X_d_theta * grad_theta_vmec_Z
+        + d_B_X_d_phi * grad_phi_Z
+    )
 
-    grad_B__YX = d_B_Y_d_s * grad_s_X + d_B_Y_d_theta * grad_theta_vmec_X + d_B_Y_d_phi * grad_phi_X
-    grad_B__YY = d_B_Y_d_s * grad_s_Y + d_B_Y_d_theta * grad_theta_vmec_Y + d_B_Y_d_phi * grad_phi_Y
-    grad_B__YZ = d_B_Y_d_s * grad_s_Z + d_B_Y_d_theta * grad_theta_vmec_Z + d_B_Y_d_phi * grad_phi_Z
+    grad_B__YX = (
+        d_B_Y_d_s * grad_s_X
+        + d_B_Y_d_theta * grad_theta_vmec_X
+        + d_B_Y_d_phi * grad_phi_X
+    )
+    grad_B__YY = (
+        d_B_Y_d_s * grad_s_Y
+        + d_B_Y_d_theta * grad_theta_vmec_Y
+        + d_B_Y_d_phi * grad_phi_Y
+    )
+    grad_B__YZ = (
+        d_B_Y_d_s * grad_s_Z
+        + d_B_Y_d_theta * grad_theta_vmec_Z
+        + d_B_Y_d_phi * grad_phi_Z
+    )
 
-    grad_B__ZX = d_B_Z_d_s * grad_s_X + d_B_Z_d_theta * grad_theta_vmec_X + d_B_Z_d_phi * grad_phi_X
-    grad_B__ZY = d_B_Z_d_s * grad_s_Y + d_B_Z_d_theta * grad_theta_vmec_Y + d_B_Z_d_phi * grad_phi_Y
-    grad_B__ZZ = d_B_Z_d_s * grad_s_Z + d_B_Z_d_theta * grad_theta_vmec_Z + d_B_Z_d_phi * grad_phi_Z
+    grad_B__ZX = (
+        d_B_Z_d_s * grad_s_X
+        + d_B_Z_d_theta * grad_theta_vmec_X
+        + d_B_Z_d_phi * grad_phi_X
+    )
+    grad_B__ZY = (
+        d_B_Z_d_s * grad_s_Y
+        + d_B_Z_d_theta * grad_theta_vmec_Y
+        + d_B_Z_d_phi * grad_phi_Y
+    )
+    grad_B__ZZ = (
+        d_B_Z_d_s * grad_s_Z
+        + d_B_Z_d_theta * grad_theta_vmec_Z
+        + d_B_Z_d_phi * grad_phi_Z
+    )
 
     grad_B_double_dot_grad_B = (
         grad_B__XX * grad_B__XX
@@ -1739,42 +2191,139 @@ def vmec_compute_geometry(vs, s:RealArray, theta:RealArray, phi:RealArray, phi_c
     L_grad_B = modB * np.sqrt(2 / grad_B_double_dot_grad_B)
 
     results = VmecGeometryResults(
-        ns=ns, ntheta=ntheta, nphi=nphi, s=s, iota=iota, d_iota_d_s=d_iota_d_s, d_pressure_d_s=d_pressure_d_s, shat=shat,
-        theta_vmec=theta_vmec, phi=phi, theta_pest=theta_pest,
-        d_lambda_d_s=d_lambda_d_s, d_lambda_d_theta_vmec=d_lambda_d_theta_vmec, d_lambda_d_phi=d_lambda_d_phi, sqrt_g_vmec=sqrt_g_vmec, sqrt_g_vmec_alt=sqrt_g_vmec_alt,
-        modB=modB, d_B_d_s=d_B_d_s, d_B_d_theta_vmec=d_B_d_theta_vmec, d_B_d_phi=d_B_d_phi, B_sup_theta_vmec=B_sup_theta_vmec, B_sup_theta_pest=B_sup_theta_pest, B_sup_phi=B_sup_phi,
-        B_sub_s=B_sub_s, B_sub_theta_vmec=B_sub_theta_vmec, B_sub_phi=B_sub_phi, edge_toroidal_flux_over_2pi=edge_toroidal_flux_over_2pi, sinphi=sinphi, cosphi=cosphi,
-        d2_R_d_phi2=d2_R_d_phi2, d2_R_d_theta_vmec2=d2_R_d_theta_vmec2, d2_R_d_theta_vmec_d_phi=d2_R_d_theta_vmec_d_phi, d2_R_d_s_d_theta_vmec=d2_R_d_s_d_theta_vmec, d2_R_d_s_d_phi=d2_R_d_s_d_phi,
-        d2_Z_d_theta_vmec2=d2_Z_d_theta_vmec2, d2_Z_d_phi2=d2_Z_d_phi2, d2_Z_d_theta_vmec_d_phi=d2_Z_d_theta_vmec_d_phi, d2_Z_d_s_d_theta_vmec=d2_Z_d_s_d_theta_vmec, d2_Z_d_s_d_phi=d2_Z_d_s_d_phi,
-        d_B_sup_phi_d_theta_vmec=d_B_sup_phi_d_theta_vmec, d_B_sup_phi_d_phi=d_B_sup_phi_d_phi, d_B_sup_theta_vmec_d_theta_vmec=d_B_sup_theta_vmec_d_theta_vmec,
-        d_B_sup_theta_vmec_d_phi=d_B_sup_theta_vmec_d_phi, d_B_sup_theta_vmec_d_s=d_B_sup_theta_vmec_d_s, d_B_sup_phi_d_s=d_B_sup_phi_d_s,
-        R=R, d_R_d_s=d_R_d_s, d_R_d_theta_vmec=d_R_d_theta_vmec, d_R_d_phi=d_R_d_phi, X=X, Y=Y, Z=Z, d_Z_d_s=d_Z_d_s, d_Z_d_theta_vmec=d_Z_d_theta_vmec, d_Z_d_phi=d_Z_d_phi,
-        d_X_d_theta_vmec=d_X_d_theta_vmec, d_X_d_phi=d_X_d_phi, d_X_d_s=d_X_d_s, d_Y_d_theta_vmec=d_Y_d_theta_vmec, d_Y_d_phi=d_Y_d_phi, d_Y_d_s=d_Y_d_s,
-        grad_s_X=grad_s_X, grad_s_Y=grad_s_Y, grad_s_Z=grad_s_Z, grad_theta_vmec_X=grad_theta_vmec_X, grad_theta_vmec_Y=grad_theta_vmec_Y, grad_theta_vmec_Z=grad_theta_vmec_Z,
-        grad_phi_X=grad_phi_X, grad_phi_Y=grad_phi_Y, grad_phi_Z=grad_phi_Z, grad_psi_X=grad_psi_X, grad_psi_Y=grad_psi_Y, grad_psi_Z=grad_psi_Z,
-        grad_alpha_X=grad_alpha_X, grad_alpha_Y=grad_alpha_Y, grad_alpha_Z=grad_alpha_Z, grad_B_X=grad_B_X, grad_B_Y=grad_B_Y, grad_B_Z=grad_B_Z,
-        B_X=B_X, B_Y=B_Y, B_Z=B_Z, grad_s_dot_grad_s=grad_s_dot_grad_s,
-        B_cross_grad_s_dot_grad_alpha=B_cross_grad_s_dot_grad_alpha, B_cross_grad_s_dot_grad_alpha_alternate=B_cross_grad_s_dot_grad_alpha_alternate,
-        B_cross_grad_B_dot_grad_alpha=B_cross_grad_B_dot_grad_alpha, B_cross_grad_B_dot_grad_alpha_alternate=B_cross_grad_B_dot_grad_alpha_alternate,
-        B_cross_grad_B_dot_grad_psi=B_cross_grad_B_dot_grad_psi, B_cross_kappa_dot_grad_psi=B_cross_kappa_dot_grad_psi, B_cross_kappa_dot_grad_alpha=B_cross_kappa_dot_grad_alpha,
-        grad_alpha_dot_grad_alpha=grad_alpha_dot_grad_alpha, grad_alpha_dot_grad_psi=grad_alpha_dot_grad_psi, grad_psi_dot_grad_psi=grad_psi_dot_grad_psi,
-        L_reference=L_reference, B_reference=B_reference, toroidal_flux_sign=toroidal_flux_sign,
-        bmag=bmag, gradpar_theta_pest=gradpar_theta_pest, gradpar_phi=gradpar_phi, gds2=gds2, gds21=gds21, gds22=gds22, gbdrift=gbdrift, gbdrift0=gbdrift0, cvdrift=cvdrift, cvdrift0=cvdrift0,
-        grad_B__XX=grad_B__XX, grad_B__XY=grad_B__XY, grad_B__XZ=grad_B__XZ, grad_B__YX=grad_B__YX, grad_B__YY=grad_B__YY, grad_B__YZ=grad_B__YZ, grad_B__ZX=grad_B__ZX, grad_B__ZY=grad_B__ZY, grad_B__ZZ=grad_B__ZZ,
-        grad_B_double_dot_grad_B=grad_B_double_dot_grad_B, norm_grad_B=norm_grad_B, L_grad_B=L_grad_B,
+        ns=ns,
+        ntheta=ntheta,
+        nphi=nphi,
+        s=s,
+        iota=iota,
+        d_iota_d_s=d_iota_d_s,
+        d_pressure_d_s=d_pressure_d_s,
+        shat=shat,
+        theta_vmec=theta_vmec,
+        phi=phi,
+        theta_pest=theta_pest,
+        d_lambda_d_s=d_lambda_d_s,
+        d_lambda_d_theta_vmec=d_lambda_d_theta_vmec,
+        d_lambda_d_phi=d_lambda_d_phi,
+        sqrt_g_vmec=sqrt_g_vmec,
+        sqrt_g_vmec_alt=sqrt_g_vmec_alt,
+        modB=modB,
+        d_B_d_s=d_B_d_s,
+        d_B_d_theta_vmec=d_B_d_theta_vmec,
+        d_B_d_phi=d_B_d_phi,
+        B_sup_theta_vmec=B_sup_theta_vmec,
+        B_sup_theta_pest=B_sup_theta_pest,
+        B_sup_phi=B_sup_phi,
+        B_sub_s=B_sub_s,
+        B_sub_theta_vmec=B_sub_theta_vmec,
+        B_sub_phi=B_sub_phi,
+        edge_toroidal_flux_over_2pi=edge_toroidal_flux_over_2pi,
+        sinphi=sinphi,
+        cosphi=cosphi,
+        d2_R_d_phi2=d2_R_d_phi2,
+        d2_R_d_theta_vmec2=d2_R_d_theta_vmec2,
+        d2_R_d_theta_vmec_d_phi=d2_R_d_theta_vmec_d_phi,
+        d2_R_d_s_d_theta_vmec=d2_R_d_s_d_theta_vmec,
+        d2_R_d_s_d_phi=d2_R_d_s_d_phi,
+        d2_Z_d_theta_vmec2=d2_Z_d_theta_vmec2,
+        d2_Z_d_phi2=d2_Z_d_phi2,
+        d2_Z_d_theta_vmec_d_phi=d2_Z_d_theta_vmec_d_phi,
+        d2_Z_d_s_d_theta_vmec=d2_Z_d_s_d_theta_vmec,
+        d2_Z_d_s_d_phi=d2_Z_d_s_d_phi,
+        d_B_sup_phi_d_theta_vmec=d_B_sup_phi_d_theta_vmec,
+        d_B_sup_phi_d_phi=d_B_sup_phi_d_phi,
+        d_B_sup_theta_vmec_d_theta_vmec=d_B_sup_theta_vmec_d_theta_vmec,
+        d_B_sup_theta_vmec_d_phi=d_B_sup_theta_vmec_d_phi,
+        d_B_sup_theta_vmec_d_s=d_B_sup_theta_vmec_d_s,
+        d_B_sup_phi_d_s=d_B_sup_phi_d_s,
+        R=R,
+        d_R_d_s=d_R_d_s,
+        d_R_d_theta_vmec=d_R_d_theta_vmec,
+        d_R_d_phi=d_R_d_phi,
+        X=X,
+        Y=Y,
+        Z=Z,
+        d_Z_d_s=d_Z_d_s,
+        d_Z_d_theta_vmec=d_Z_d_theta_vmec,
+        d_Z_d_phi=d_Z_d_phi,
+        d_X_d_theta_vmec=d_X_d_theta_vmec,
+        d_X_d_phi=d_X_d_phi,
+        d_X_d_s=d_X_d_s,
+        d_Y_d_theta_vmec=d_Y_d_theta_vmec,
+        d_Y_d_phi=d_Y_d_phi,
+        d_Y_d_s=d_Y_d_s,
+        grad_s_X=grad_s_X,
+        grad_s_Y=grad_s_Y,
+        grad_s_Z=grad_s_Z,
+        grad_theta_vmec_X=grad_theta_vmec_X,
+        grad_theta_vmec_Y=grad_theta_vmec_Y,
+        grad_theta_vmec_Z=grad_theta_vmec_Z,
+        grad_phi_X=grad_phi_X,
+        grad_phi_Y=grad_phi_Y,
+        grad_phi_Z=grad_phi_Z,
+        grad_psi_X=grad_psi_X,
+        grad_psi_Y=grad_psi_Y,
+        grad_psi_Z=grad_psi_Z,
+        grad_alpha_X=grad_alpha_X,
+        grad_alpha_Y=grad_alpha_Y,
+        grad_alpha_Z=grad_alpha_Z,
+        grad_B_X=grad_B_X,
+        grad_B_Y=grad_B_Y,
+        grad_B_Z=grad_B_Z,
+        B_X=B_X,
+        B_Y=B_Y,
+        B_Z=B_Z,
+        grad_s_dot_grad_s=grad_s_dot_grad_s,
+        B_cross_grad_s_dot_grad_alpha=B_cross_grad_s_dot_grad_alpha,
+        B_cross_grad_s_dot_grad_alpha_alternate=B_cross_grad_s_dot_grad_alpha_alternate,
+        B_cross_grad_B_dot_grad_alpha=B_cross_grad_B_dot_grad_alpha,
+        B_cross_grad_B_dot_grad_alpha_alternate=B_cross_grad_B_dot_grad_alpha_alternate,
+        B_cross_grad_B_dot_grad_psi=B_cross_grad_B_dot_grad_psi,
+        B_cross_kappa_dot_grad_psi=B_cross_kappa_dot_grad_psi,
+        B_cross_kappa_dot_grad_alpha=B_cross_kappa_dot_grad_alpha,
+        grad_alpha_dot_grad_alpha=grad_alpha_dot_grad_alpha,
+        grad_alpha_dot_grad_psi=grad_alpha_dot_grad_psi,
+        grad_psi_dot_grad_psi=grad_psi_dot_grad_psi,
+        L_reference=L_reference,
+        B_reference=B_reference,
+        toroidal_flux_sign=toroidal_flux_sign,
+        bmag=bmag,
+        gradpar_theta_pest=gradpar_theta_pest,
+        gradpar_phi=gradpar_phi,
+        gds2=gds2,
+        gds21=gds21,
+        gds22=gds22,
+        gbdrift=gbdrift,
+        gbdrift0=gbdrift0,
+        cvdrift=cvdrift,
+        cvdrift0=cvdrift0,
+        grad_B__XX=grad_B__XX,
+        grad_B__XY=grad_B__XY,
+        grad_B__XZ=grad_B__XZ,
+        grad_B__YX=grad_B__YX,
+        grad_B__YY=grad_B__YY,
+        grad_B__YZ=grad_B__YZ,
+        grad_B__ZX=grad_B__ZX,
+        grad_B__ZY=grad_B__ZY,
+        grad_B__ZZ=grad_B__ZZ,
+        grad_B_double_dot_grad_B=grad_B_double_dot_grad_B,
+        norm_grad_B=norm_grad_B,
+        L_grad_B=L_grad_B,
     )
 
     return results
 
 
-def vmec_fieldlines(vs,
-                    s:Union[float,RealArray],
-                    alpha:Union[float,RealArray],
-                    theta1d:Optional[RealArray]=None,
-                    phi1d:Optional[RealArray]=None,
-                    phi_center:float=0.0,
-                    plot:bool=False,
-                    show:bool=True)-> VmecGeometryResults:
+def vmec_fieldlines(
+    vs,
+    s: Union[float, RealArray],
+    alpha: Union[float, RealArray],
+    theta1d: Optional[RealArray] = None,
+    phi1d: Optional[RealArray] = None,
+    phi_center: float = 0.0,
+    plot: bool = False,
+    show: bool = True,
+) -> VmecGeometryResults:
     r"""
     Compute field lines in a VMEC configuration and evaluate geometric quantities along them.
 
@@ -1854,9 +2403,9 @@ def vmec_fieldlines(vs,
     nalpha = len(alpha)
 
     if (theta1d is not None) and (phi1d is not None):
-        raise ValueError('You cannot specify both theta and phi')
+        raise ValueError("You cannot specify both theta and phi")
     if (theta1d is None) and (phi1d is None):
-        raise ValueError('You must specify either theta or phi')
+        raise ValueError("You must specify either theta or phi")
     if theta1d is None:
         nl = len(phi1d)
     else:
@@ -1880,7 +2429,9 @@ def vmec_fieldlines(vs,
         # We are given phi. Compute theta_pest:
         for js in range(ns):
             phi[js, :, :] = phi1d[None, :]
-            theta_pest[js, :, :] = alpha[:, None] + iota[js] * (phi1d[None, :] - phi_center)
+            theta_pest[js, :, :] = alpha[:, None] + iota[js] * (
+                phi1d[None, :] - phi_center
+            )
     else:
         # We are given theta_pest. Compute phi:
         for js in range(ns):
@@ -1892,7 +2443,14 @@ def vmec_fieldlines(vs,
         This function is used for computing an array of values of theta_vmec that
         give a desired theta_pest array.
         """
-        return theta_p_target - (theta_v + np.sum(lmns[jradius, :, None] * np.sin(xm[:, None] * theta_v - xn[:, None] * phi0), axis=0))
+        return theta_p_target - (
+            theta_v
+            + np.sum(
+                lmns[jradius, :, None]
+                * np.sin(xm[:, None] * theta_v - xn[:, None] * phi0),
+                axis=0,
+            )
+        )
 
     theta_vmec = np.zeros((ns, nalpha, nl))
     for js in range(ns):
@@ -1917,20 +2475,39 @@ def vmec_fieldlines(vs,
 
     if plot:
         import matplotlib.pyplot as plt
+
         plt.figure(figsize=(13, 7))
         nrows = 4
         ncols = 5
-        variables = ['modB', 'B_sup_theta_pest', 'B_sup_phi', 'B_cross_grad_B_dot_grad_alpha', 'B_cross_grad_B_dot_grad_psi',
-                     'B_cross_kappa_dot_grad_alpha', 'B_cross_kappa_dot_grad_psi',
-                     'grad_alpha_dot_grad_alpha', 'grad_alpha_dot_grad_psi', 'grad_psi_dot_grad_psi',
-                     'bmag', 'gradpar_theta_pest', 'gradpar_phi', 'gbdrift', 'gbdrift0', 'cvdrift', 'cvdrift0', 'gds2', 'gds21', 'gds22']
+        variables = [
+            "modB",
+            "B_sup_theta_pest",
+            "B_sup_phi",
+            "B_cross_grad_B_dot_grad_alpha",
+            "B_cross_grad_B_dot_grad_psi",
+            "B_cross_kappa_dot_grad_alpha",
+            "B_cross_kappa_dot_grad_psi",
+            "grad_alpha_dot_grad_alpha",
+            "grad_alpha_dot_grad_psi",
+            "grad_psi_dot_grad_psi",
+            "bmag",
+            "gradpar_theta_pest",
+            "gradpar_phi",
+            "gbdrift",
+            "gbdrift0",
+            "cvdrift",
+            "cvdrift0",
+            "gds2",
+            "gds21",
+            "gds22",
+        ]
         for j, variable in enumerate(variables):
             plt.subplot(nrows, ncols, j + 1)
-            plt.plot(phi[0, 0, :], eval("results." + variable + '[0, 0, :]'))
-            plt.xlabel(r'Standard toroidal angle $\phi$')
+            plt.plot(phi[0, 0, :], eval("results." + variable + "[0, 0, :]"))
+            plt.xlabel(r"Standard toroidal angle $\phi$")
             plt.title(variable)
 
-        plt.figtext(0.5, 0.995, f's={s[0]}, alpha={alpha[0]}', ha='center', va='top')
+        plt.figtext(0.5, 0.995, f"s={s[0]}, alpha={alpha[0]}", ha="center", va="top")
         plt.tight_layout()
         if show:
             plt.show()

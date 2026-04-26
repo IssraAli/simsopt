@@ -9,7 +9,7 @@ from monty.tempfile import ScratchDir
 from simsopt._core.json import GSONEncoder, GSONDecoder, SIMSON
 from simsopt.geo.surfacehenneberg import SurfaceHenneberg
 
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 try:
@@ -31,7 +31,6 @@ TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
 
 
 class SurfaceHennebergTests(unittest.TestCase):
-
     def test_repr(self):
         s = SurfaceHenneberg(nfp=1, alpha_fac=1, mmax=2, nmax=1)
         s_str = repr(s)
@@ -46,12 +45,20 @@ class SurfaceHennebergTests(unittest.TestCase):
         Check that the names of the dofs are set correctly.
         """
         surf = SurfaceHenneberg(nfp=1, alpha_fac=1, mmax=2, nmax=1)
-        names_correct = ['R0nH(0)', 'R0nH(1)',
-                         'Z0nH(1)',
-                         'bn(0)', 'bn(1)',
-                         'rhomn(0,1)',
-                         'rhomn(1,-1)', 'rhomn(1,0)', 'rhomn(1,1)',
-                         'rhomn(2,-1)', 'rhomn(2,0)', 'rhomn(2,1)']
+        names_correct = [
+            "R0nH(0)",
+            "R0nH(1)",
+            "Z0nH(1)",
+            "bn(0)",
+            "bn(1)",
+            "rhomn(0,1)",
+            "rhomn(1,-1)",
+            "rhomn(1,0)",
+            "rhomn(1,1)",
+            "rhomn(2,-1)",
+            "rhomn(2,0)",
+            "rhomn(2,1)",
+        ]
         self.assertEqual(surf.local_dof_names, names_correct)
 
     def test_set_get_dofs(self):
@@ -69,11 +76,7 @@ class SurfaceHennebergTests(unittest.TestCase):
                 # bn has nmax + 1
                 # rhomn for m=0 has nmax
                 # rhomn for m>0 has 2 * nmax + 1
-                nvals = nmax + 1 \
-                    + nmax \
-                    + nmax + 1 \
-                    + nmax \
-                    + mmax * (2 * nmax + 1)
+                nvals = nmax + 1 + nmax + nmax + 1 + nmax + mmax * (2 * nmax + 1)
                 vals = np.random.rand(nvals) - 0.5
                 surf.set_dofs(vals)
                 np.testing.assert_allclose(surf.get_dofs(), vals)
@@ -102,30 +105,61 @@ class SurfaceHennebergTests(unittest.TestCase):
         surf = SurfaceHenneberg(nfp=1, alpha_fac=1, mmax=2, nmax=1)
         # Order of elements:
         surf.fixed_range(20, 20, True)
-        np.testing.assert_equal(surf.local_dofs_free_status, [False]*12)
+        np.testing.assert_equal(surf.local_dofs_free_status, [False] * 12)
         surf.fixed_range(20, 20, False)
-        np.testing.assert_equal(surf.local_dofs_free_status, [True]*12)
+        np.testing.assert_equal(surf.local_dofs_free_status, [True] * 12)
         surf.fixed_range(0, 0, True)
-        np.testing.assert_equal(surf.local_dofs_free_status,
-                                [False, True, True, True, True, True,
-                                 True, True, True, True, True, True])
+        np.testing.assert_equal(
+            surf.local_dofs_free_status,
+            [False, True, True, True, True, True, True, True, True, True, True, True],
+        )
         surf.fixed_range(1, 0, True)
-        np.testing.assert_equal(surf.local_dofs_free_status,
-                                [False, True, True, False, True, True,
-                                 True, False, True, True, True, True])
+        np.testing.assert_equal(
+            surf.local_dofs_free_status,
+            [False, True, True, False, True, True, True, False, True, True, True, True],
+        )
         surf.fixed_range(2, 0, True)
-        np.testing.assert_equal(surf.local_dofs_free_status,
-                                [False, True, True, False, True, True,
-                                 True, False, True, True, False, True])
+        np.testing.assert_equal(
+            surf.local_dofs_free_status,
+            [
+                False,
+                True,
+                True,
+                False,
+                True,
+                True,
+                True,
+                False,
+                True,
+                True,
+                False,
+                True,
+            ],
+        )
         surf.local_fix_all()
         surf.fixed_range(0, 1, False)
-        np.testing.assert_equal(surf.local_dofs_free_status,
-                                [True, True, True, False, False, True,
-                                 False, False, False, False, False, False])
+        np.testing.assert_equal(
+            surf.local_dofs_free_status,
+            [
+                True,
+                True,
+                True,
+                False,
+                False,
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+            ],
+        )
         surf.fixed_range(1, 1, False)
-        np.testing.assert_equal(surf.local_dofs_free_status,
-                                [True, True, True, True, True, True,
-                                 True, True, True, False, False, False])
+        np.testing.assert_equal(
+            surf.local_dofs_free_status,
+            [True, True, True, True, True, True, True, True, True, False, False, False],
+        )
 
     def test_indexing(self):
         """
@@ -149,19 +183,64 @@ class SurfaceHennebergTests(unittest.TestCase):
         x = surf.get_dofs()
         np.testing.assert_allclose(
             x,
-            [1.000e+03, 1.001e+03, 1.002e+03, 3.001e+03, 3.002e+03, 2.000e+03,
-             2.001e+03, 2.002e+03, 1.000e+00, 2.000e+00, 9.800e+01, 9.900e+01,
-             1.000e+02, 1.010e+02, 1.020e+02, 1.980e+02, 1.990e+02, 2.000e+02,
-             2.010e+02, 2.020e+02, 2.980e+02, 2.990e+02, 3.000e+02, 3.010e+02,
-             3.020e+02])
+            [
+                1.000e03,
+                1.001e03,
+                1.002e03,
+                3.001e03,
+                3.002e03,
+                2.000e03,
+                2.001e03,
+                2.002e03,
+                1.000e00,
+                2.000e00,
+                9.800e01,
+                9.900e01,
+                1.000e02,
+                1.010e02,
+                1.020e02,
+                1.980e02,
+                1.990e02,
+                2.000e02,
+                2.010e02,
+                2.020e02,
+                2.980e02,
+                2.990e02,
+                3.000e02,
+                3.010e02,
+                3.020e02,
+            ],
+        )
         self.assertListEqual(
             surf.local_dof_names,
-            ['R0nH(0)', 'R0nH(1)', 'R0nH(2)', 'Z0nH(1)', 'Z0nH(2)', 'bn(0)',
-             'bn(1)', 'bn(2)', 'rhomn(0,1)', 'rhomn(0,2)', 'rhomn(1,-2)',
-             'rhomn(1,-1)', 'rhomn(1,0)', 'rhomn(1,1)', 'rhomn(1,2)',
-             'rhomn(2,-2)', 'rhomn(2,-1)', 'rhomn(2,0)', 'rhomn(2,1)',
-             'rhomn(2,2)', 'rhomn(3,-2)', 'rhomn(3,-1)', 'rhomn(3,0)',
-             'rhomn(3,1)', 'rhomn(3,2)'])
+            [
+                "R0nH(0)",
+                "R0nH(1)",
+                "R0nH(2)",
+                "Z0nH(1)",
+                "Z0nH(2)",
+                "bn(0)",
+                "bn(1)",
+                "bn(2)",
+                "rhomn(0,1)",
+                "rhomn(0,2)",
+                "rhomn(1,-2)",
+                "rhomn(1,-1)",
+                "rhomn(1,0)",
+                "rhomn(1,1)",
+                "rhomn(1,2)",
+                "rhomn(2,-2)",
+                "rhomn(2,-1)",
+                "rhomn(2,0)",
+                "rhomn(2,1)",
+                "rhomn(2,2)",
+                "rhomn(3,-2)",
+                "rhomn(3,-1)",
+                "rhomn(3,0)",
+                "rhomn(3,1)",
+                "rhomn(3,2)",
+            ],
+        )
 
     def test_axisymm(self):
         """
@@ -174,8 +253,9 @@ class SurfaceHennebergTests(unittest.TestCase):
             for alpha_fac in [-1, 0, 1]:
                 for mmax in range(1, 3):
                     for nmax in range(3):
-                        surfH = SurfaceHenneberg(nfp=nfp, alpha_fac=alpha_fac,
-                                                 mmax=mmax, nmax=nmax)
+                        surfH = SurfaceHenneberg(
+                            nfp=nfp, alpha_fac=alpha_fac, mmax=mmax, nmax=nmax
+                        )
                         self.assertEqual(surfH.num_dofs(), len(surfH.get_dofs()))
                         surfH.R0nH[0] = R0
                         surfH.bn[0] = a
@@ -207,10 +287,14 @@ class SurfaceHennebergTests(unittest.TestCase):
         # Prepare some arbitrary points for testing gamma_lin:
         nlist = 15
         theta_list = np.linspace(-0.2, 0.8, nlist)
-        phi_list = theta_list ** 2 - 0.5
+        phi_list = theta_list**2 - 0.5
 
         # Try a QI, QA, and a QH:
-        files = ['input.W7-X_standard_configuration', 'input.cfqs_2b40', 'input.NuhrenbergZille_1988_QHS']
+        files = [
+            "input.W7-X_standard_configuration",
+            "input.cfqs_2b40",
+            "input.NuhrenbergZille_1988_QHS",
+        ]
         alpha_facs = [1, 1, -1]
 
         with ScratchDir("."):
@@ -235,18 +319,40 @@ class SurfaceHennebergTests(unittest.TestCase):
                 np.testing.assert_allclose(gamma2, gamma3, atol=1e-13, rtol=1e-13)
 
                 # Test other surface functions:
-                np.testing.assert_allclose(surf2.gamma(), surf3.gamma(), atol=1e-13, rtol=1e-13)
-                np.testing.assert_allclose(surf2.gammadash2(), surf3.gammadash2(), atol=1e-12, rtol=1e-12)
-                np.testing.assert_allclose(surf2.gammadash1(), surf3.gammadash1(), atol=1e-11, rtol=1e-11)
-                np.testing.assert_allclose(surf1.volume(), surf2.volume(), atol=0, rtol=1e-3)
-                np.testing.assert_allclose(surf1.volume(), surf3.volume(), atol=0, rtol=1e-3)
-                np.testing.assert_allclose(surf1.area(), surf2.area(), atol=0, rtol=1e-3)
-                np.testing.assert_allclose(surf1.area(), surf3.area(), atol=0, rtol=1e-3)
-                surf4 = SurfaceHenneberg.from_RZFourier(surf3, alpha_fac, mmax=surf2.mmax, nmax=surf2.nmax)
-                np.testing.assert_allclose(surf2.R0nH, surf4.R0nH, atol=1e-10, rtol=1e-4)
-                np.testing.assert_allclose(surf2.Z0nH, surf4.Z0nH, atol=1e-12, rtol=1e-4)
+                np.testing.assert_allclose(
+                    surf2.gamma(), surf3.gamma(), atol=1e-13, rtol=1e-13
+                )
+                np.testing.assert_allclose(
+                    surf2.gammadash2(), surf3.gammadash2(), atol=1e-12, rtol=1e-12
+                )
+                np.testing.assert_allclose(
+                    surf2.gammadash1(), surf3.gammadash1(), atol=1e-11, rtol=1e-11
+                )
+                np.testing.assert_allclose(
+                    surf1.volume(), surf2.volume(), atol=0, rtol=1e-3
+                )
+                np.testing.assert_allclose(
+                    surf1.volume(), surf3.volume(), atol=0, rtol=1e-3
+                )
+                np.testing.assert_allclose(
+                    surf1.area(), surf2.area(), atol=0, rtol=1e-3
+                )
+                np.testing.assert_allclose(
+                    surf1.area(), surf3.area(), atol=0, rtol=1e-3
+                )
+                surf4 = SurfaceHenneberg.from_RZFourier(
+                    surf3, alpha_fac, mmax=surf2.mmax, nmax=surf2.nmax
+                )
+                np.testing.assert_allclose(
+                    surf2.R0nH, surf4.R0nH, atol=1e-10, rtol=1e-4
+                )
+                np.testing.assert_allclose(
+                    surf2.Z0nH, surf4.Z0nH, atol=1e-12, rtol=1e-4
+                )
                 np.testing.assert_allclose(surf2.bn, surf4.bn, atol=1e-12, rtol=1e-4)
-                np.testing.assert_allclose(surf2.rhomn, surf4.rhomn, atol=1e-8, rtol=1e-4)
+                np.testing.assert_allclose(
+                    surf2.rhomn, surf4.rhomn, atol=1e-8, rtol=1e-4
+                )
 
     @unittest.skipIf(Vmec is None, "Valid Python interface to VMEC not found")
     def test_vmec(self):
@@ -257,7 +363,7 @@ class SurfaceHennebergTests(unittest.TestCase):
         identical.
         """
         with ScratchDir("."):
-            vmec = Vmec(os.path.join(TEST_DIR, 'input.cfqs_2b40'))
+            vmec = Vmec(os.path.join(TEST_DIR, "input.cfqs_2b40"))
             vmec.run()
             iota1 = vmec.wout.iotaf
 
@@ -266,9 +372,9 @@ class SurfaceHennebergTests(unittest.TestCase):
             vmec.run()
             iota2 = vmec.wout.iotaf
 
-            logger.info(f'iota1: {iota1}')
-            logger.info(f'iota2: {iota2}')
-            logger.info(f'diff: {iota1 - iota2}')
+            logger.info(f"iota1: {iota1}")
+            logger.info(f"iota2: {iota2}")
+            logger.info(f"diff: {iota1 - iota2}")
             np.testing.assert_allclose(iota1, iota2, atol=1e-3, rtol=1e-3)
             # But if the 2 iota profiles are _exactly_ the same, vmec must
             # not have actually used the converted boundary.
@@ -281,18 +387,21 @@ class SurfaceHennebergTests(unittest.TestCase):
             for alpha_fac in [-1, 0, 1]:
                 for mmax in range(1, 3):
                     for nmax in range(3):
-                        surfH = SurfaceHenneberg(nfp=nfp, alpha_fac=alpha_fac,
-                                                 mmax=mmax, nmax=nmax)
+                        surfH = SurfaceHenneberg(
+                            nfp=nfp, alpha_fac=alpha_fac, mmax=mmax, nmax=nmax
+                        )
                         surfH.R0nH[0] = R0
                         surfH.bn[0] = a
                         surfH.set_rhomn(1, 0, a)
                         surfH.local_full_x = surfH.get_dofs()
                         surf_str = json.dumps(SIMSON(surfH), cls=GSONEncoder)
                         surfH_regen = json.loads(surf_str, cls=GSONDecoder)
-                        self.assertAlmostEqual(surfH.area(), surfH_regen.area(),
-                                               places=4)
-                        self.assertAlmostEqual(surfH.volume(), surfH_regen.volume(),
-                                               places=3)
+                        self.assertAlmostEqual(
+                            surfH.area(), surfH_regen.area(), places=4
+                        )
+                        self.assertAlmostEqual(
+                            surfH.volume(), surfH_regen.volume(), places=3
+                        )
 
 
 if __name__ == "__main__":

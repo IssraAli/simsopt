@@ -16,7 +16,8 @@ class Tests(unittest.TestCase):
         # Flip the sign of current so B points towards +phi. Otherwise
         # fieldline_tracing traces towards -phi.
         coils = [
-            Coil(curve, -1*current) for curve, current in zip(base_curves, base_currents)
+            Coil(curve, -1 * current)
+            for curve, current in zip(base_curves, base_currents)
         ]
         field = BiotSavart(coils)
 

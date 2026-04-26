@@ -3240,6 +3240,110 @@ def test_vjp_reduced_free_dof_pair_row_chunk_env(
     )
 
 
+def test_reduced_free_dof_eval_chunk_env_matches_monolithic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``SIMSOPT_PSC_BS_EVAL_CHUNK`` chunking preserves free-DOF B and VJP."""
+    pts = np.array(
+        [
+            [1.0, 0.05, 0.35],
+            [0.90, 0.10, 0.08],
+            [1.08, -0.02, 0.22],
+            [0.82, 0.18, -0.03],
+        ],
+        dtype=float,
+    )
+    monkeypatch.setenv("SIMSOPT_PSC_BS_EVAL_CHUNK", "0")
+    psc_a = _make_symmetry_validation_array(
+        nfp=2, stellsym=True, n_base=2, eval_pts=pts
+    )
+    monkeypatch.setenv("SIMSOPT_PSC_BS_EVAL_CHUNK", "2")
+    psc_b = _make_symmetry_validation_array(
+        nfp=2, stellsym=True, n_base=2, eval_pts=pts
+    )
+    for p in (psc_a, psc_b):
+        _unfix_all_puck_orientations(p)
+        p.recompute_currents()
+
+    B_a = psc_a.B_at_points(pts)
+    B_b = psc_b.B_at_points(pts)
+    np.testing.assert_allclose(B_a, B_b, rtol=1e-9, atol=1e-11)
+
+    v = np.random.default_rng(2).standard_normal(pts.shape)
+    d_a = psc_a.vjp_setup_B(v, pts)
+    d_b = psc_b.vjp_setup_B(v, pts)
+    np.testing.assert_allclose(
+        np.asarray(d_a(psc_a)),
+        np.asarray(d_b(psc_b)),
+        rtol=1e-9,
+        atol=1e-11,
+    )
+
+
+def test_reduced_free_quaternion_only_vjp_matches_full_geometry_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quaternion-only reduced VJP matches the full center+quaternion tape."""
+    psc_quat = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc_full = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    _unfix_all_puck_orientations(psc_quat)
+    _unfix_all_puck_orientations(psc_full)
+    for psc in (psc_quat, psc_full):
+        psc.recompute_currents()
+
+    pts = psc_quat.eval_points
+    v = np.random.default_rng(3).standard_normal(pts.reshape(-1, 3).shape)
+    d_quat = np.asarray(psc_quat.vjp_setup_B(v, pts)(psc_quat))
+    monkeypatch.setenv("SIMSOPT_PSC_FREE_VJP_GEOMETRY", "full")
+    d_full = np.asarray(psc_full.vjp_setup_B(v, pts)(psc_full))
+
+    np.testing.assert_allclose(d_quat, d_full, rtol=1e-9, atol=1e-11)
+
+
+def test_free_vjp_probe_modes_are_finite(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop-gradient VJP attribution probes compile and return finite gradients."""
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    _unfix_all_puck_orientations(psc)
+    psc.recompute_currents()
+    pts = psc.eval_points
+    v = np.random.default_rng(4).standard_normal(pts.reshape(-1, 3).shape)
+
+    for mode in ("full", "stop_l", "stop_bn", "stop_solve", "shell_only", "beta_only"):
+        monkeypatch.setenv("SIMSOPT_PSC_FREE_VJP_PROBE", mode)
+        deriv = psc.vjp_setup_B(v, pts)
+        grad = np.asarray(deriv(psc))
+        assert np.all(np.isfinite(grad))
+
+
+def test_implicit_solve_vjp_and_cached_pullback_match_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opt-in implicit solve VJP and cached pullback preserve small-case gradients."""
+    psc_default = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc_implicit = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    for psc in (psc_default, psc_implicit):
+        _unfix_all_puck_orientations(psc)
+        psc.recompute_currents()
+
+    pts = psc_default.eval_points
+    v = np.random.default_rng(5).standard_normal(pts.reshape(-1, 3).shape)
+    grad_default = np.asarray(psc_default.vjp_setup_B(v, pts)(psc_default))
+
+    monkeypatch.setenv("SIMSOPT_PSC_FREE_SOLVE_VJP", "implicit")
+    grad_implicit = np.asarray(psc_implicit.vjp_setup_B(v, pts)(psc_implicit))
+    np.testing.assert_allclose(grad_implicit, grad_default, rtol=1e-6, atol=1e-8)
+
+    monkeypatch.setenv("SIMSOPT_PSC_CACHE_FREE_VJP", "1")
+    psc_cached = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    _unfix_all_puck_orientations(psc_cached)
+    psc_cached.recompute_currents()
+    np.testing.assert_allclose(
+        psc_cached.B_at_points(pts), psc_default.B_at_points(pts)
+    )
+    grad_cached = np.asarray(psc_cached.vjp_setup_B(v, pts)(psc_cached))
+    np.testing.assert_allclose(grad_cached, grad_implicit, rtol=1e-9, atol=1e-11)
+
+
 def test_lcache_not_used_when_puck_dofs_free(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

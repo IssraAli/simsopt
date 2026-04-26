@@ -1,25 +1,34 @@
 """
-This module contains the a number of useful functions for using 
+This module contains the a number of useful functions for using
 the permanent magnets functionality in the SIMSOPT code.
 """
-__all__ = ['read_focus_coils', 'coil_optimization',
-           'trace_fieldlines', 'make_qfm', 'vacuum_stage_II_optimization',
-           'calculate_modB_on_major_radius', 'initial_vacuum_stage_II_optimizations',
-           'continuation_vacuum_stage_II_optimizations', 'make_stage_II_pareto_plots',
-           'build_stage_II_data_array', 'initialize_coils_simple',
-           'optimize_coils_simple',
-           ]
+
+__all__ = [
+    "read_focus_coils",
+    "coil_optimization",
+    "trace_fieldlines",
+    "make_qfm",
+    "vacuum_stage_II_optimization",
+    "calculate_modB_on_major_radius",
+    "initial_vacuum_stage_II_optimizations",
+    "continuation_vacuum_stage_II_optimizations",
+    "make_stage_II_pareto_plots",
+    "build_stage_II_data_array",
+    "initialize_coils_simple",
+    "optimize_coils_simple",
+]
 
 import numpy as np
 from scipy.optimize import minimize
 from pathlib import Path
 
-# Necessary imports for the pareto scans 
+# Necessary imports for the pareto scans
 import matplotlib.pyplot as plt
 import glob
 import json
 import os
 import time
+
 
 def read_focus_coils(filename):
     """
@@ -27,7 +36,7 @@ def read_focus_coils(filename):
     used for loading in the MUSE phased TF coils.
 
     Args:
-        filename: String denoting the name of the coils file. 
+        filename: String denoting the name of the coils file.
 
     Returns:
         coils: List of CurveXYZFourier class objects.
@@ -48,13 +57,27 @@ def read_focus_coils(filename):
     zs = np.zeros((ncoils, order + 1))
     # load in coil currents and fourier representations of (x, y, z)
     for i in range(ncoils):
-        coilcurrents[i] = np.loadtxt(filename, skiprows=6 + 14 * i, max_rows=1, usecols=1)
-        xc[i, :] = np.loadtxt(filename, skiprows=10 + 14 * i, max_rows=1, usecols=range(order + 1))
-        xs[i, :] = np.loadtxt(filename, skiprows=11 + 14 * i, max_rows=1, usecols=range(order + 1))
-        yc[i, :] = np.loadtxt(filename, skiprows=12 + 14 * i, max_rows=1, usecols=range(order + 1))
-        ys[i, :] = np.loadtxt(filename, skiprows=13 + 14 * i, max_rows=1, usecols=range(order + 1))
-        zc[i, :] = np.loadtxt(filename, skiprows=14 + 14 * i, max_rows=1, usecols=range(order + 1))
-        zs[i, :] = np.loadtxt(filename, skiprows=15 + 14 * i, max_rows=1, usecols=range(order + 1))
+        coilcurrents[i] = np.loadtxt(
+            filename, skiprows=6 + 14 * i, max_rows=1, usecols=1
+        )
+        xc[i, :] = np.loadtxt(
+            filename, skiprows=10 + 14 * i, max_rows=1, usecols=range(order + 1)
+        )
+        xs[i, :] = np.loadtxt(
+            filename, skiprows=11 + 14 * i, max_rows=1, usecols=range(order + 1)
+        )
+        yc[i, :] = np.loadtxt(
+            filename, skiprows=12 + 14 * i, max_rows=1, usecols=range(order + 1)
+        )
+        ys[i, :] = np.loadtxt(
+            filename, skiprows=13 + 14 * i, max_rows=1, usecols=range(order + 1)
+        )
+        zc[i, :] = np.loadtxt(
+            filename, skiprows=14 + 14 * i, max_rows=1, usecols=range(order + 1)
+        )
+        zs[i, :] = np.loadtxt(
+            filename, skiprows=15 + 14 * i, max_rows=1, usecols=range(order + 1)
+        )
 
     # CurveXYZFourier wants data in order sin_x, cos_x, sin_y, cos_y, ...
     coil_data = np.zeros((order + 1, ncoils * 6))
@@ -69,27 +92,29 @@ def read_focus_coils(filename):
     # Set the degrees of freedom in the coil objects
     base_currents = [Current(coilcurrents[i]) for i in range(ncoils)]
     ppp = 20
-    coils = [CurveXYZFourier(order*ppp, order) for i in range(ncoils)]
+    coils = [CurveXYZFourier(order * ppp, order) for i in range(ncoils)]
     for ic in range(ncoils):
         dofs = coils[ic].dofs_matrix
-        dofs[0][0] = coil_data[0, 6*ic + 1]
-        dofs[1][0] = coil_data[0, 6*ic + 3]
-        dofs[2][0] = coil_data[0, 6*ic + 5]
-        for io in range(0, min(order, coil_data.shape[0]-1)):
-            dofs[0][2*io+1] = coil_data[io+1, 6*ic + 0]
-            dofs[0][2*io+2] = coil_data[io+1, 6*ic + 1]
-            dofs[1][2*io+1] = coil_data[io+1, 6*ic + 2]
-            dofs[1][2*io+2] = coil_data[io+1, 6*ic + 3]
-            dofs[2][2*io+1] = coil_data[io+1, 6*ic + 4]
-            dofs[2][2*io+2] = coil_data[io+1, 6*ic + 5]
+        dofs[0][0] = coil_data[0, 6 * ic + 1]
+        dofs[1][0] = coil_data[0, 6 * ic + 3]
+        dofs[2][0] = coil_data[0, 6 * ic + 5]
+        for io in range(0, min(order, coil_data.shape[0] - 1)):
+            dofs[0][2 * io + 1] = coil_data[io + 1, 6 * ic + 0]
+            dofs[0][2 * io + 2] = coil_data[io + 1, 6 * ic + 1]
+            dofs[1][2 * io + 1] = coil_data[io + 1, 6 * ic + 2]
+            dofs[1][2 * io + 2] = coil_data[io + 1, 6 * ic + 3]
+            dofs[2][2 * io + 1] = coil_data[io + 1, 6 * ic + 4]
+            dofs[2][2 * io + 2] = coil_data[io + 1, 6 * ic + 5]
         coils[ic].local_x = np.concatenate(dofs)
     return coils, base_currents, ncoils
 
 
-def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, regularization=None):
+def initialize_coils_simple(
+    s, out_dir="", target_B=5.7, ncoils=4, order=16, regularization=None
+):
     """
-    Initializes four coils with order=16 and total current set to produce 
-    a target B-field on-axis. The coil centers and radii are scaled by 
+    Initializes four coils with order=16 and total current set to produce
+    a target B-field on-axis. The coil centers and radii are scaled by
     the plasma surface major radius. The function iteratively adjusts the
     total current until the field strength along the major radius averages
     to the target value.
@@ -104,7 +129,9 @@ def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, reg
     from simsopt.geo import create_equally_spaced_curves
     from simsopt.field import Current, coils_via_symmetries, BiotSavart
     from simsopt.field.coil import coils_to_vtk
-    from simsopt.util.coil_optimization_helper_functions import calculate_modB_on_major_radius
+    from simsopt.util.coil_optimization_helper_functions import (
+        calculate_modB_on_major_radius,
+    )
 
     out_dir = Path(out_dir)
 
@@ -115,68 +142,87 @@ def initialize_coils_simple(s, out_dir='', target_B=5.7, ncoils=4, order=16, reg
     # Get the major radius from the surface and scale coil parameters
     R0 = s.get_rc(0, 0)  # Major radius
     R1 = s.get_rc(1, 0) * 2.5  # Scale the minor radius component
-    
+
     # Initial guess for total current (using QH configuration as reference)
     total_current = 5e7  # 50 MA initial guess is not bad for reactor-scale
-    
+
     # Create equally spaced curves with the specified parameters
     base_curves = create_equally_spaced_curves(
-        ncoils, s.nfp, stellsym=True,
-        R0=R0, R1=R1, order=order, numquadpoints=256)
-    
+        ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order, numquadpoints=256
+    )
+
     # print(f"Target B-field: {target_B} T")
     # print(f"Major radius: {R0:.3f} m")
     # print(f"Minor radius component: {s.get_rc(1, 0):.3f} m")
     # print(f"NFP: {s.nfp}")
-    
+
     # Iterative current adjustment
     max_iterations = 20
     tolerance = 1e-2
     for iteration in range(max_iterations):
         # print(f"Iteration {iteration + 1}/{max_iterations}")
         # print(f"  Current total current: {total_current:.0f} A")
-        
+
         # Distribute current among coils
-        base_currents = [(Current(total_current / ncoils * 1e-7) * 1e7) for _ in range(ncoils - 1)]
+        base_currents = [
+            (Current(total_current / ncoils * 1e-7) * 1e7) for _ in range(ncoils - 1)
+        ]
         total_current_obj = Current(total_current)
         total_current_obj.fix_all()
         base_currents += [total_current_obj - sum(base_currents)]
-        
+
         # Create coils using symmetries
-        coils = coils_via_symmetries(base_curves, base_currents, s.nfp, s.stellsym, regularizations=regularizations)
-        
+        coils = coils_via_symmetries(
+            base_curves,
+            base_currents,
+            s.nfp,
+            s.stellsym,
+            regularizations=regularizations,
+        )
+
         # Create BiotSavart object to evaluate field
         bs = BiotSavart(coils)
-        
+
         # Calculate field strength along major radius
         B_avg = calculate_modB_on_major_radius(bs, s)
-        
+
         # print(f"  Achieved B-field: {B_avg:.3f} T")
         # print(f"  Difference: {B_avg - target_B:.3f} T")
-        
+
         # Check convergence
         if abs(B_avg - target_B) / target_B < tolerance:
             # print(f"  ✓ Converged! B-field within {tolerance*100:.1f}% of target")
             break
-        
+
         # Adjust current based on field difference
         # Use simple linear scaling: new_current = current * (target_B / achieved_B)
         current_scale_factor = target_B / B_avg
         total_current *= current_scale_factor
-        
+
         # print(f"  New total current: {total_current:.0f} A")
-    
+
     else:
         print(f"  ⚠ Warning: Did not converge within {max_iterations} iterations")
         print(f"  Final B-field: {B_avg:.3f} T (target: {target_B} T)")
-    
+
     # Save final coils to VTK
-    coils_to_vtk(coils, out_dir / "coils_init")    
+    coils_to_vtk(coils, out_dir / "coils_init")
     return coils
 
 
-def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_iter_lag=50, 
-                         ncoils=4, order=16, nphi=32, ntheta=32, verbose=False, **kwargs):
+def optimize_coils_simple(
+    s,
+    target_B=5.7,
+    out_dir="",
+    max_iterations=1500,
+    max_iter_lag=50,
+    ncoils=4,
+    order=16,
+    nphi=32,
+    ntheta=32,
+    verbose=False,
+    **kwargs,
+):
     """
     Performs complete coil optimization including initialization and optimization.
     This function initializes coils with the target B-field and then optimizes
@@ -215,15 +261,15 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     # Set default constraint thresholds if not provided
     # Defaults here are reasonable for 10 m major radius
     #  reactor-scale device with 5.7 T target B-field
-    length_target = kwargs.get('length_target', 210.0)
-    flux_threshold = kwargs.get('flux_threshold', 1e-8)
-    cc_threshold = kwargs.get('cc_threshold', 1.0)
-    cs_threshold = kwargs.get('cs_threshold', 1.5)
-    msc_threshold = kwargs.get('msc_threshold', 1.0)
-    curvature_threshold = kwargs.get('curvature_threshold', 1.0)
-    regularization = kwargs.get('regularization', None)
-    force_threshold = kwargs.get('force_threshold', 1.0)
-    torque_threshold = kwargs.get('torque_threshold', 1.0)
+    length_target = kwargs.get("length_target", 210.0)
+    flux_threshold = kwargs.get("flux_threshold", 1e-8)
+    cc_threshold = kwargs.get("cc_threshold", 1.0)
+    cs_threshold = kwargs.get("cs_threshold", 1.5)
+    msc_threshold = kwargs.get("msc_threshold", 1.0)
+    curvature_threshold = kwargs.get("curvature_threshold", 1.0)
+    regularization = kwargs.get("regularization", None)
+    force_threshold = kwargs.get("force_threshold", 1.0)
+    torque_threshold = kwargs.get("torque_threshold", 1.0)
 
     # Rescale all the length thresholds by the plasma major radius
     # divided by the 10m assumption for the major radius
@@ -231,7 +277,7 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     length_target /= R0
     length_target *= (ncoils / 7.0) ** 0.5
     cc_threshold /= R0
-    cs_threshold /= R0 
+    cs_threshold /= R0
     curvature_threshold *= R0
     msc_threshold *= R0
 
@@ -243,18 +289,33 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
 
     # Step 1: Initialize coils with target B-field
     # print("Step 1: Initializing coils with target B-field...")
-    coils = initialize_coils_simple(s, out_dir=out_dir, target_B=target_B, ncoils=ncoils, order=order, regularization=regularization)
+    coils = initialize_coils_simple(
+        s,
+        out_dir=out_dir,
+        target_B=target_B,
+        ncoils=ncoils,
+        order=order,
+        regularization=regularization,
+    )
 
     # Rescale force_threshold
-    total_current = sum([c.current.get_value() for c in coils[:ncoils]]) / (s.stellsym + 1) / s.nfp
-    coils_backup = initialize_coils_simple(s, out_dir=out_dir, ncoils=ncoils, order=order, regularization=regularization)
-    total_current_reactor_scale = sum([c.current.get_value() for c in coils_backup[:ncoils]]) / (s.stellsym + 1) / s.nfp
+    total_current = (
+        sum([c.current.get_value() for c in coils[:ncoils]]) / (s.stellsym + 1) / s.nfp
+    )
+    coils_backup = initialize_coils_simple(
+        s, out_dir=out_dir, ncoils=ncoils, order=order, regularization=regularization
+    )
+    total_current_reactor_scale = (
+        sum([c.current.get_value() for c in coils_backup[:ncoils]])
+        / (s.stellsym + 1)
+        / s.nfp
+    )
     force_threshold *= (total_current / total_current_reactor_scale) ** 2
     torque_threshold *= (total_current / total_current_reactor_scale) ** 2
 
     # Extract base curves and currents from the initialized coils
     base_curves = [coil.curve for coil in coils[:ncoils]]
-    
+
     # print(f"Initialized {len(coils)} coils (including symmetries)")
 
     # Step 2: Create plotting surface for visualization
@@ -263,17 +324,17 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     qtheta = 4 * ntheta
     quadpoints_phi = np.linspace(0, 1, qphi)
     quadpoints_theta = np.linspace(0, 1, qtheta)
-    
+
     # Create a plotting surface (full torus)
     # Handle case where surface was created manually (no filename)
-    if hasattr(s, 'filename') and s.filename is not None:
+    if hasattr(s, "filename") and s.filename is not None:
         s_plot = SurfaceRZFourier.from_vmec_input(
             s.filename,
             range="full torus",
             quadpoints_phi=quadpoints_phi,
             quadpoints_theta=quadpoints_theta,
             nfp=s.nfp,
-            stellsym=s.stellsym
+            stellsym=s.stellsym,
         )
     else:
         # Create surface manually with same parameters
@@ -283,9 +344,9 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
             mpol=s.mpol,
             ntor=s.ntor,
             quadpoints_phi=quadpoints_phi,
-            quadpoints_theta=quadpoints_theta
+            quadpoints_theta=quadpoints_theta,
         )
-    
+
     # Copy the surface coefficients
     for m in range(s.mpol + 1):
         for n in range(-s.ntor, s.ntor + 1):
@@ -302,32 +363,33 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     print(f"  B-field averaged along major radius: {B_avg:.3f} T")
     print(f"  Number of coils: {len(coils)}")
     curves = [c.curve for c in coils]
-    
+
     # Save initial coils
     coils_to_vtk(coils, out_dir / "coils_initial")
-    
+
     # Calculate and display initial B-field
     bs.set_points(s_plot.gamma().reshape((-1, 3)))
     B_initial = calculate_modB_on_major_radius(bs, s_plot)
     # print(f"Initial B-field on-axis: {B_initial:.3f} T")
-    
+
     # Save initial surface data
     bs.set_points(s_plot.gamma().reshape((-1, 3)))
     pointData = {
-        "B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
-                          s_plot.unitnormal(), axis=2)[:, :, None] / 
-                    bs.AbsB().reshape((qphi, qtheta, 1)),
-        "modB": bs.AbsB().reshape((qphi, qtheta, 1))
+        "B_N/|B|": np.sum(
+            bs.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2
+        )[:, :, None]
+        / bs.AbsB().reshape((qphi, qtheta, 1)),
+        "modB": bs.AbsB().reshape((qphi, qtheta, 1)),
     }
     s_plot.to_vtk(out_dir / "surface_initial", extra_data=pointData)
 
     # Step 4: Define objective function and constraints
     # print("Step 4: Setting up optimization objectives and constraints...")
     bs.set_points(s.gamma().reshape((-1, 3)))
-    
+
     # Main objective: Squared flux
     Jf = SquaredFlux(s, bs, definition="normalized", threshold=flux_threshold)
-    
+
     # Constraint terms
     Jls = [CurveLength(c) for c in base_curves]
     Jl = sum(QuadraticPenalty(jj, length_target, "max") for jj in Jls)
@@ -335,8 +397,12 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     Jcsdist = CurveSurfaceDistance(curves, s, cs_threshold)
     Jcs = [LpCurveCurvature(c, 2, curvature_threshold) for c in base_curves]
     Jlink = LinkingNumber(curves, downsample=2)
-    Jforce = LpCurveForce(coils[:ncoils], coils, p=2.0, threshold=force_threshold, downsample=2)
-    Jtorque = LpCurveTorque(coils[:ncoils], coils, p=2.0, threshold=torque_threshold, downsample=2)
+    Jforce = LpCurveForce(
+        coils[:ncoils], coils, p=2.0, threshold=force_threshold, downsample=2
+    )
+    Jtorque = LpCurveTorque(
+        coils[:ncoils], coils, p=2.0, threshold=torque_threshold, downsample=2
+    )
     Jmscs = [MeanSquaredCurvature(c) for c in base_curves]
 
     # Print initial constraint values
@@ -353,20 +419,21 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
     # Step 5: Run optimization
     # print("Step 5: Running optimization...")
     start_time = time.time()
-    
+
     # Constraint list for augmented Lagrangian method
     c_list = [
         Jf,
         Jccdist,
-        Weight(1e3) * Jcsdist,  # Special attention to avoiding coil-surface intersections
+        Weight(1e3)
+        * Jcsdist,  # Special attention to avoiding coil-surface intersections
         QuadraticPenalty(sum(Jls), length_target, "max"),
         sum(QuadraticPenalty(J, msc_threshold, "max") for J in Jmscs),
         sum(Jcs),
         Jlink,
         Jforce,
-        Jtorque
+        Jtorque,
     ]
-    
+
     # Run optimization
     _, _, lag_mul = augmented_lagrangian_method(
         f=None,  # No main objective function
@@ -375,96 +442,114 @@ def optimize_coils_simple(s, target_B=5.7, out_dir='', max_iterations=1500, max_
         MAXITER_lag=max_iter_lag,
         verbose=verbose,
     )
-    
+
     end_time = time.time()
     print(f"Optimization completed in {end_time - start_time:.1f} seconds")
 
     # Step 6: Save results and final state
     # print("Step 6: Saving results and final state...")
-    
+
     # Save optimized coils
     coils_to_vtk(coils, out_dir / "coils_optimized")
     bs.save(out_dir / "biot_savart_optimized.json")
-    
+
     # Calculate and display final B-field
     bs.set_points(s_plot.gamma().reshape((-1, 3)))
     B_final = calculate_modB_on_major_radius(bs, s_plot)
     print(f"Final B-field on-axis: {B_final:.3f} T")
-    
+
     # Save final surface data
     bs.set_points(s_plot.gamma().reshape((-1, 3)))
     pointData = {
-        "B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
-                     s_plot.unitnormal(), axis=2)[:, :, None],
-        "B_N/|B|": np.sum(bs.B().reshape((qphi, qtheta, 3)) *
-                         s_plot.unitnormal(), axis=2)[:, :, None] /
-                   bs.AbsB().reshape((qphi, qtheta, 1)),
-        "modB": bs.AbsB().reshape((qphi, qtheta, 1))
+        "B_N": np.sum(bs.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2)[
+            :, :, None
+        ],
+        "B_N/|B|": np.sum(
+            bs.B().reshape((qphi, qtheta, 3)) * s_plot.unitnormal(), axis=2
+        )[:, :, None]
+        / bs.AbsB().reshape((qphi, qtheta, 1)),
+        "modB": bs.AbsB().reshape((qphi, qtheta, 1)),
     }
     s_plot.to_vtk(out_dir / "surface_optimized", extra_data=pointData)
-    
+
     # Print final constraint values
     bs.set_points(s.gamma().reshape((-1, 3)))
     print("Final constraint values:")
     print(f"  Normalized flux: {Jf.J():.2e}")
-    print(f"  CS separation: {Jcsdist.J():.2e} (min distance: {Jcsdist.shortest_distance():.3f})")
-    print(f"  CC separation: {Jccdist.J():.2e} (min distance: {Jccdist.shortest_distance():.3f})")
+    print(
+        f"  CS separation: {Jcsdist.J():.2e} (min distance: {Jcsdist.shortest_distance():.3f})"
+    )
+    print(
+        f"  CC separation: {Jccdist.J():.2e} (min distance: {Jccdist.shortest_distance():.3f})"
+    )
     print(f"  Length constraint: {Jl.J():.2e}")
     print(f"  Curvature constraint: {sum(Jcs).J():.2e}")
     print(f"  Linking number: {Jlink.J():.2e}")
     print(f"  Force constraint: {Jforce.J():.2e}")
     print(f"  Max curvatures: {[np.max(c.kappa()) for c in base_curves]}")
     print(f"  Lengths: {[CurveLength(c).J() for c in base_curves]}")
-    
+
     # Calculate final forces
     max_force = [np.max(np.linalg.norm(c.force(coils), axis=1)) for c in coils[:ncoils]]
-    max_torque = [np.max(np.linalg.norm(c.torque(coils), axis=1)) for c in coils[:ncoils]]
+    max_torque = [
+        np.max(np.linalg.norm(c.torque(coils), axis=1)) for c in coils[:ncoils]
+    ]
     print(f"  Max forces on each coil: {[f'{f:.2e}' for f in max_force]}")
-    
+
     # Calculate final B_N metrics
     bs.set_points(s.gamma().reshape((-1, 3)))
     nphi_s = len(s.quadpoints_phi)
     ntheta_s = len(s.quadpoints_theta)
-    BdotN = np.mean(np.abs(np.sum(bs.B().reshape((nphi_s, ntheta_s, 3)) * s.unitnormal(), axis=2)))
+    BdotN = np.mean(
+        np.abs(np.sum(bs.B().reshape((nphi_s, ntheta_s, 3)) * s.unitnormal(), axis=2))
+    )
     avg_BdotN_over_B = BdotN / bs.AbsB().mean()
-    
+
     bs.set_points(s_plot.gamma().reshape((-1, 3)))
     nphi_plot = len(s_plot.quadpoints_phi)
     ntheta_plot = len(s_plot.quadpoints_theta)
-    max_BdotN_overB = np.max(np.abs(np.sum(bs.B().reshape((nphi_plot, ntheta_plot, 3)) *
-                                          s_plot.unitnormal(), axis=2)) /
-                            bs.AbsB().reshape((nphi_plot, ntheta_plot, 1)))
-    
+    max_BdotN_overB = np.max(
+        np.abs(
+            np.sum(
+                bs.B().reshape((nphi_plot, ntheta_plot, 3)) * s_plot.unitnormal(),
+                axis=2,
+            )
+        )
+        / bs.AbsB().reshape((nphi_plot, ntheta_plot, 1))
+    )
+
     print(f"  <B_N>/<|B|> = {avg_BdotN_over_B:.2e}")
-    print(f"  Max |B_N|/|B| = {max_BdotN_overB:.2e}")    
+    print(f"  Max |B_N|/|B| = {max_BdotN_overB:.2e}")
     print("Optimization completed successfully!")
     print(f"Results saved to: {out_dir}")
-    
+
     # Prepare results dictionary
     bs.set_points(s.gamma().reshape((-1, 3)))
     results = {
-        'initial_B_field': B_initial,
-        'final_B_field': B_final,
-        'target_B_field': target_B,
-        'optimization_time': end_time - start_time,
-        'final_normalized_squared_flux': Jf.J(),
-        'final_min_cs_separation': Jcsdist.shortest_distance(),
-        'final_min_cc_separation': Jccdist.shortest_distance(),
-        'final_total_length': sum(CurveLength(c).J() for c in base_curves),
-        'final_max_curvature': max(np.max(c.kappa()) for c in base_curves),
-        'final_average_curvature': np.mean([c.kappa() for c in base_curves]),
-        'final_mean_squared_curvature': np.max([np.mean(c.kappa() ** 2) for c in base_curves]),
-        'final_linking_number': Jlink.J(),
-        'final_max_max_coil_force': np.max(max_force),
-        'final_avg_max_coil_force': np.mean(max_force),
-        'final_max_max_coil_torque': np.max(max_torque),
-        'final_avg_max_coil_torque': np.mean(max_torque),
-        'avg_BdotN_over_B': avg_BdotN_over_B,
-        'max_BdotN_over_B': max_BdotN_overB,
-        'lagrange_multipliers': lag_mul,
-        'output_directory': str(out_dir)
+        "initial_B_field": B_initial,
+        "final_B_field": B_final,
+        "target_B_field": target_B,
+        "optimization_time": end_time - start_time,
+        "final_normalized_squared_flux": Jf.J(),
+        "final_min_cs_separation": Jcsdist.shortest_distance(),
+        "final_min_cc_separation": Jccdist.shortest_distance(),
+        "final_total_length": sum(CurveLength(c).J() for c in base_curves),
+        "final_max_curvature": max(np.max(c.kappa()) for c in base_curves),
+        "final_average_curvature": np.mean([c.kappa() for c in base_curves]),
+        "final_mean_squared_curvature": np.max(
+            [np.mean(c.kappa() ** 2) for c in base_curves]
+        ),
+        "final_linking_number": Jlink.J(),
+        "final_max_max_coil_force": np.max(max_force),
+        "final_avg_max_coil_force": np.mean(max_force),
+        "final_max_max_coil_torque": np.max(max_torque),
+        "final_avg_max_coil_torque": np.mean(max_torque),
+        "avg_BdotN_over_B": avg_BdotN_over_B,
+        "max_BdotN_over_B": max_BdotN_overB,
+        "lagrange_multipliers": lag_mul,
+        "output_directory": str(out_dir),
     }
-    
+
     return coils, results
 
 
@@ -509,9 +594,14 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
           OPTIMIZED magnetic fields generated by the coils.
     """
 
-    from simsopt.geo import CurveLength, CurveCurveDistance, \
-        MeanSquaredCurvature, LpCurveCurvature, CurveSurfaceDistance, \
-        LinkingNumber
+    from simsopt.geo import (
+        CurveLength,
+        CurveCurveDistance,
+        MeanSquaredCurvature,
+        LpCurveCurvature,
+        CurveSurfaceDistance,
+        LinkingNumber,
+    )
     from simsopt.objectives import QuadraticPenalty, SquaredFlux
     from simsopt.field.force import LpCurveForce
     from simsopt.field.selffield import regularization_circ
@@ -522,35 +612,35 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
     R0 = s.get_rc(0, 0)  # rescale all the thresholds by major radius of the plasma
 
     # Weight on the curve lengths in the objective function:
-    LENGTH_WEIGHT = kwargs.get('LENGTH_WEIGHT', 1)
-    LENGTH_THRESHOLD = kwargs.get('LENGTH_THRESHOLD', 18.0 * R0)
+    LENGTH_WEIGHT = kwargs.get("LENGTH_WEIGHT", 1)
+    LENGTH_THRESHOLD = kwargs.get("LENGTH_THRESHOLD", 18.0 * R0)
 
     # Threshold and weight for the coil-to-coil distance penalty in the objective function:
-    CC_THRESHOLD = kwargs.get('CC_THRESHOLD', 0.1 * R0)
-    CC_WEIGHT = kwargs.get('CC_WEIGHT', 1)
+    CC_THRESHOLD = kwargs.get("CC_THRESHOLD", 0.1 * R0)
+    CC_WEIGHT = kwargs.get("CC_WEIGHT", 1)
 
     # Threshold and weight for the coil-to-surface distance penalty in the objective function:
-    CS_THRESHOLD = kwargs.get('CS_THRESHOLD', 0.15 * R0)
-    CS_WEIGHT = kwargs.get('CS_WEIGHT', 1e-2)
+    CS_THRESHOLD = kwargs.get("CS_THRESHOLD", 0.15 * R0)
+    CS_WEIGHT = kwargs.get("CS_WEIGHT", 1e-2)
 
     # Threshold and weight for the curvature penalty in the objective function:
-    CURVATURE_THRESHOLD = kwargs.get('CURVATURE_THRESHOLD', 0.1 * R0)
-    CURVATURE_WEIGHT = kwargs.get('CURVATURE_WEIGHT', 1e-6)
+    CURVATURE_THRESHOLD = kwargs.get("CURVATURE_THRESHOLD", 0.1 * R0)
+    CURVATURE_WEIGHT = kwargs.get("CURVATURE_WEIGHT", 1e-6)
 
     # Threshold and weight for the mean squared curvature penalty in the objective function:
-    MSC_THRESHOLD = kwargs.get('MSC_THRESHOLD', 0.1 * R0)
-    MSC_WEIGHT = kwargs.get('MSC_WEIGHT', 1e-6)
+    MSC_THRESHOLD = kwargs.get("MSC_THRESHOLD", 0.1 * R0)
+    MSC_WEIGHT = kwargs.get("MSC_WEIGHT", 1e-6)
 
     # Linking number penalty in the objective function:
-    LINKING_NUMBER_WEIGHT = kwargs.get('LINKING_NUMBER_WEIGHT', 0)
+    LINKING_NUMBER_WEIGHT = kwargs.get("LINKING_NUMBER_WEIGHT", 0)
 
     # Force penalty in the objective function:
-    FORCE_WEIGHT = kwargs.get('FORCE_WEIGHT', 0)
-    FORCE_THRESHOLD = kwargs.get('FORCE_THRESHOLD', 0)
+    FORCE_WEIGHT = kwargs.get("FORCE_WEIGHT", 0)
+    FORCE_THRESHOLD = kwargs.get("FORCE_THRESHOLD", 0)
     coils = bs.coils
     base_coils = [coils[i] for i, c in enumerate(base_curves)]
 
-    MAXITER = kwargs.get('MAXITER', 500)  # number of iterations for minimize
+    MAXITER = kwargs.get("MAXITER", 500)  # number of iterations for minimize
 
     # Define the objective function:
     Jf = SquaredFlux(s, bs)
@@ -563,30 +653,51 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
     # Hard-coded finite widths below -- 3 cm width for 1m device, ~ 30 cm width for 10m device
     # Convert coils to RegularizedCoil objects for force calculation if FORCE_WEIGHT > 0
     if FORCE_WEIGHT > 0:
-        reg_base_coils = [RegularizedCoil(c.curve, c.current, regularization_circ(0.03 * R0)) if not isinstance(c, RegularizedCoil) else c for c in base_coils]
-        reg_coils = [RegularizedCoil(c.curve, c.current, regularization_circ(0.03 * R0)) if not isinstance(c, RegularizedCoil) else c for c in coils]
-        Jforce = sum([LpCurveForce([reg_base_coils[i]], reg_coils, p=2, threshold=FORCE_THRESHOLD) for i in range(len(reg_base_coils))])
+        reg_base_coils = [
+            RegularizedCoil(c.curve, c.current, regularization_circ(0.03 * R0))
+            if not isinstance(c, RegularizedCoil)
+            else c
+            for c in base_coils
+        ]
+        reg_coils = [
+            RegularizedCoil(c.curve, c.current, regularization_circ(0.03 * R0))
+            if not isinstance(c, RegularizedCoil)
+            else c
+            for c in coils
+        ]
+        Jforce = sum(
+            [
+                LpCurveForce(
+                    [reg_base_coils[i]], reg_coils, p=2, threshold=FORCE_THRESHOLD
+                )
+                for i in range(len(reg_base_coils))
+            ]
+        )
     else:
         Jforce = None
 
     # Form the total objective function.
-    JF = Jf \
-        + LENGTH_WEIGHT * QuadraticPenalty(sum(Jls), LENGTH_THRESHOLD, "max") \
-        + CC_WEIGHT * Jccdist \
-        + CS_WEIGHT * Jcsdist \
-        + CURVATURE_WEIGHT * sum(Jcs) \
-        + MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD) for J in Jmscs) \
+    JF = (
+        Jf
+        + LENGTH_WEIGHT * QuadraticPenalty(sum(Jls), LENGTH_THRESHOLD, "max")
+        + CC_WEIGHT * Jccdist
+        + CS_WEIGHT * Jcsdist
+        + CURVATURE_WEIGHT * sum(Jcs)
+        + MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD) for J in Jmscs)
         + LINKING_NUMBER_WEIGHT * linking_number
+    )
     if FORCE_WEIGHT > 0:
         JF = JF + FORCE_WEIGHT * Jforce
 
     def fun(dofs):
-        """ Function for coil optimization grabbed from stage_two_optimization.py """
+        """Function for coil optimization grabbed from stage_two_optimization.py"""
         JF.x = dofs
         J = JF.J()
         grad = JF.dJ()
         jf = Jf.J()
-        BdotN = np.mean(np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
+        BdotN = np.mean(
+            np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2))
+        )
         outstr = f"J={J:.1e}, Jf={jf:.1e}, ⟨B·n⟩={BdotN:.1e}"
         cl_string = ", ".join([f"{J.J():.1f}" for J in Jls])
         kap_string = ", ".join(f"{np.max(c.kappa()):.1f}" for c in base_curves)
@@ -604,19 +715,30 @@ def coil_optimization(s, bs, base_curves, curves, **kwargs):
         valuestr += f", csObj={CS_WEIGHT * Jcsdist.J():.2e}"
         valuestr += f", curvatureObj={CURVATURE_WEIGHT * sum(Jcs).J():.2e}"
         valuestr += f", mscObj={MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD) for J in Jmscs).J():.2e}"
-        valuestr += f", linkingNumberObj={LINKING_NUMBER_WEIGHT * linking_number.J():.2e}"
+        valuestr += (
+            f", linkingNumberObj={LINKING_NUMBER_WEIGHT * linking_number.J():.2e}"
+        )
         if Jforce is not None:
             valuestr += f", forceObj={FORCE_WEIGHT * Jforce.J():.2e}"
         print(valuestr)
         return J, grad
 
     dofs = JF.x
-    minimize(fun, dofs, jac=True, method='L-BFGS-B', options={'maxiter': MAXITER, 'maxcor': 300}, tol=1e-15)
+    minimize(
+        fun,
+        dofs,
+        jac=True,
+        method="L-BFGS-B",
+        options={"maxiter": MAXITER, "maxcor": 300},
+        tol=1e-15,
+    )
     bs.set_points(s.gamma().reshape((-1, 3)))
     return bs
 
 
-def trace_fieldlines(bfield, label, s, comm, out_dir='', nfieldlines=4, tmax_fl=10000, num_iters=20000):
+def trace_fieldlines(
+    bfield, label, s, comm, out_dir="", nfieldlines=4, tmax_fl=10000, num_iters=20000
+):
     """
     Make Poincare plots on a surface as in the trace_fieldlines
     example in the examples/1_Simple/ directory.
@@ -631,9 +753,11 @@ def trace_fieldlines(bfield, label, s, comm, out_dir='', nfieldlines=4, tmax_fl=
         tmax_fl (float): Maximum time to trace the fieldlines.
         num_iters (int): Maximum number of iterations for the fieldline tracing.
     """
-    from simsopt.field.tracing import compute_fieldlines, \
-        plot_poincare_data, \
-        IterationStoppingCriterion
+    from simsopt.field.tracing import (
+        compute_fieldlines,
+        plot_poincare_data,
+        IterationStoppingCriterion,
+    )
 
     out_dir = Path(out_dir)
 
@@ -642,13 +766,25 @@ def trace_fieldlines(bfield, label, s, comm, out_dir='', nfieldlines=4, tmax_fl=
     phis = [(i / 4) * (2 * np.pi / s.nfp) for i in range(4)]
 
     fieldlines_tys, fieldlines_phi_hits = compute_fieldlines(
-        bfield, R0, Z0, tmax=tmax_fl, tol=1e-16, comm=comm,
+        bfield,
+        R0,
+        Z0,
+        tmax=tmax_fl,
+        tol=1e-16,
+        comm=comm,
         phis=phis,
-        stopping_criteria=[IterationStoppingCriterion(num_iters)])
+        stopping_criteria=[IterationStoppingCriterion(num_iters)],
+    )
 
     # make the poincare plots
     if comm is None or comm.rank == 0:
-        plot_poincare_data(fieldlines_phi_hits, phis, out_dir / f'poincare_fieldline_{label}.png', dpi=100, surf=s)
+        plot_poincare_data(
+            fieldlines_phi_hits,
+            phis,
+            out_dir / f"poincare_fieldline_{label}.png",
+            dpi=100,
+            surf=s,
+        )
 
 
 def make_qfm(s, Bfield, n_iters=200):
@@ -678,15 +814,21 @@ def make_qfm(s, Bfield, n_iters=200):
     vol_target = vol.J()
     qfm_surface = QfmSurface(Bfield, s, vol, vol_target)
 
-    qfm_surface.minimize_qfm_penalty_constraints_LBFGS(tol=1e-15, maxiter=n_iters,
-                                                       constraint_weight=constraint_weight)
-    print(f"||vol constraint||={0.5*(s.volume()-vol_target)**2:.8e}, ||residual||={np.linalg.norm(qfm.J()):.8e}")
+    qfm_surface.minimize_qfm_penalty_constraints_LBFGS(
+        tol=1e-15, maxiter=n_iters, constraint_weight=constraint_weight
+    )
+    print(
+        f"||vol constraint||={0.5 * (s.volume() - vol_target) ** 2:.8e}, ||residual||={np.linalg.norm(qfm.J()):.8e}"
+    )
 
     constraint_weight = 1e-4
     # repeat the optimization for further convergence
-    qfm_surface.minimize_qfm_penalty_constraints_LBFGS(tol=1e-15, maxiter=n_iters,
-                                                       constraint_weight=constraint_weight)
-    print(f"||vol constraint||={0.5*(s.volume()-vol_target)**2:.8e}, ||residual||={np.linalg.norm(qfm.J()):.8e}")
+    qfm_surface.minimize_qfm_penalty_constraints_LBFGS(
+        tol=1e-15, maxiter=n_iters, constraint_weight=constraint_weight
+    )
+    print(
+        f"||vol constraint||={0.5 * (s.volume() - vol_target) ** 2:.8e}, ||residual||={np.linalg.norm(qfm.J()):.8e}"
+    )
     return qfm_surface
 
 
@@ -702,7 +844,7 @@ def calculate_modB_on_major_radius(bs, s):
         s (SurfaceRZFourier): plasma boundary surface.
 
     Returns:
-        B0avg (float): Average magnetic field strength along 
+        B0avg (float): Average magnetic field strength along
           the major radius (m=n=0 mode of a SurfaceRZFourier object) of the device.
     """
     nphi = len(s.quadpoints_phi)
@@ -713,16 +855,14 @@ def calculate_modB_on_major_radius(bs, s):
 
     R0 = s.get_rc(0, 0)
     for i in range(nphi):
-        bspoints[i] = np.array([R0 * np.cos(phi[i]),
-                                R0 * np.sin(phi[i]),
-                                0.0]
-                               )
+        bspoints[i] = np.array([R0 * np.cos(phi[i]), R0 * np.sin(phi[i]), 0.0])
     bs.set_points(bspoints)
     B0 = np.linalg.norm(bs.B(), axis=-1)
     B0avg = np.mean(np.linalg.norm(bs.B(), axis=-1))
     print("Bmag at R = ", R0, ", Z = 0: ", B0)
     print("toroidally averaged Bmag at R = ", R0, ", Z = 0: ", B0avg)
     return B0avg
+
 
 """
 Following functions provide tools for large-scale parameter scans and optimization 
@@ -740,17 +880,21 @@ Functions:
 
 Intended for advanced users automating coil optimization studies and data generation for analysis or machine learning.
 """
+
+
 def continuation_vacuum_stage_II_optimizations(
-    N=10000, dx=0.05,
+    N=10000,
+    dx=0.05,
     config="QA",
     INPUT_DIR=None,
     OUTPUT_DIR=None,
     INPUT_FILE=None,
     FORCE_OBJ=None,
     debug=False,
-    MAXITER=14000):
+    MAXITER=14000,
+):
     """
-    Perform a continuation method on a set of previous vacuum stage II optimizations, 
+    Perform a continuation method on a set of previous vacuum stage II optimizations,
     perturbing parameters and rerunning optimizations.
 
     Parameters
@@ -775,7 +919,9 @@ def continuation_vacuum_stage_II_optimizations(
             OUTPUT_DIR = "./output/QA/optimizations/continuation/"
         if INPUT_FILE is None:
             # Default to test files directory
-            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            test_dir = (
+                Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            )
             INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QA")
     elif config == "QH":
         if INPUT_DIR is None:
@@ -784,7 +930,9 @@ def continuation_vacuum_stage_II_optimizations(
             OUTPUT_DIR = "./output/QH/optimizations/continuation/"
         if INPUT_FILE is None:
             # Default to test files directory
-            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            test_dir = (
+                Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            )
             INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QH_magwell_R0=1")
     else:
         raise ValueError(f"Invalid configuration: {config}")
@@ -799,11 +947,11 @@ def continuation_vacuum_stage_II_optimizations(
     for results_file in results:
         with open(results_file, "r") as f:
             data = json.load(f)
-        
+
         # Check if the corresponding directory and biot_savart.json exist
         uuid_from_path = os.path.basename(os.path.dirname(results_file))
         biot_savart_path = os.path.join(INPUT_DIR, uuid_from_path, "biot_savart.json")
-        
+
         # Only include results that have both results.json and biot_savart.json
         if os.path.exists(biot_savart_path):
             # Wrap lists in another list
@@ -819,7 +967,7 @@ def continuation_vacuum_stage_II_optimizations(
         val = init[parameter]
         if isinstance(val, list):
             val = val[0]
-        return np.random.uniform(1-dx, 1+dx) * val
+        return np.random.uniform(1 - dx, 1 + dx) * val
 
     for i in range(N):
         if len(df) == 0:
@@ -829,46 +977,54 @@ def continuation_vacuum_stage_II_optimizations(
 
         # FIXED PARAMETERS
         ARCLENGTH_WEIGHT = 0.01
-        UUID_init_from = init['UUID'] if not isinstance(init['UUID'], list) else init['UUID'][0]
-        ncoils = init['ncoils'] if not isinstance(init['ncoils'], list) else init['ncoils'][0]
-        order = init['order'] if not isinstance(init['order'], list) else init['order'][0]
-        R1 = init['R1'] if not isinstance(init['R1'], list) else init['R1'][0]
+        UUID_init_from = (
+            init["UUID"] if not isinstance(init["UUID"], list) else init["UUID"][0]
+        )
+        ncoils = (
+            init["ncoils"]
+            if not isinstance(init["ncoils"], list)
+            else init["ncoils"][0]
+        )
+        order = (
+            init["order"] if not isinstance(init["order"], list) else init["order"][0]
+        )
+        R1 = init["R1"] if not isinstance(init["R1"], list) else init["R1"][0]
 
         # RANDOM PARAMETERS
-        CURVATURE_THRESHOLD = perturb(init, 'max_κ_threshold')
-        MSC_THRESHOLD = perturb(init, 'msc_threshold')
-        CS_THRESHOLD = perturb(init, 'cs_threshold')
-        CC_THRESHOLD = perturb(init, 'cc_threshold')
-        FORCE_THRESHOLD = perturb(init, 'force_threshold')
-        LENGTH_TARGET = perturb(init, 'length_target')
+        CURVATURE_THRESHOLD = perturb(init, "max_κ_threshold")
+        MSC_THRESHOLD = perturb(init, "msc_threshold")
+        CS_THRESHOLD = perturb(init, "cs_threshold")
+        CC_THRESHOLD = perturb(init, "cc_threshold")
+        FORCE_THRESHOLD = perturb(init, "force_threshold")
+        LENGTH_TARGET = perturb(init, "length_target")
 
-        LENGTH_WEIGHT = perturb(init, 'length_weight')
-        CURVATURE_WEIGHT = perturb(init, 'max_κ_weight')
-        MSC_WEIGHT = perturb(init, 'msc_weight')
-        CS_WEIGHT = perturb(init, 'cs_weight')
-        CC_WEIGHT = perturb(init, 'cc_weight')
-        FORCE_WEIGHT = perturb(init, 'force_weight')
+        LENGTH_WEIGHT = perturb(init, "length_weight")
+        CURVATURE_WEIGHT = perturb(init, "max_κ_weight")
+        MSC_WEIGHT = perturb(init, "msc_weight")
+        CS_WEIGHT = perturb(init, "cs_weight")
+        CC_WEIGHT = perturb(init, "cc_weight")
+        FORCE_WEIGHT = perturb(init, "force_weight")
 
         kwargs = {}
-        kwargs['CURVATURE_THRESHOLD'] = CURVATURE_THRESHOLD
-        kwargs['MSC_THRESHOLD'] = MSC_THRESHOLD
-        kwargs['CS_THRESHOLD'] = CS_THRESHOLD
-        kwargs['CC_THRESHOLD'] = CC_THRESHOLD
-        kwargs['FORCE_THRESHOLD'] = FORCE_THRESHOLD
-        kwargs['LENGTH_TARGET'] = LENGTH_TARGET
-        kwargs['LENGTH_WEIGHT'] = LENGTH_WEIGHT
-        kwargs['CURVATURE_WEIGHT'] = CURVATURE_WEIGHT
-        kwargs['MSC_WEIGHT'] = MSC_WEIGHT
-        kwargs['CS_WEIGHT'] = CS_WEIGHT
-        kwargs['CC_WEIGHT'] = CC_WEIGHT
-        kwargs['FORCE_WEIGHT'] = FORCE_WEIGHT
-        kwargs['ARCLENGTH_WEIGHT'] = ARCLENGTH_WEIGHT
-        kwargs['with_force'] = with_force
-        kwargs['dx'] = dx
-        kwargs['MAXITER'] = MAXITER
-        kwargs['FORCE_OBJ'] = FORCE_OBJ
-        kwargs['dx'] = dx
-        kwargs['debug'] = debug
+        kwargs["CURVATURE_THRESHOLD"] = CURVATURE_THRESHOLD
+        kwargs["MSC_THRESHOLD"] = MSC_THRESHOLD
+        kwargs["CS_THRESHOLD"] = CS_THRESHOLD
+        kwargs["CC_THRESHOLD"] = CC_THRESHOLD
+        kwargs["FORCE_THRESHOLD"] = FORCE_THRESHOLD
+        kwargs["LENGTH_TARGET"] = LENGTH_TARGET
+        kwargs["LENGTH_WEIGHT"] = LENGTH_WEIGHT
+        kwargs["CURVATURE_WEIGHT"] = CURVATURE_WEIGHT
+        kwargs["MSC_WEIGHT"] = MSC_WEIGHT
+        kwargs["CS_WEIGHT"] = CS_WEIGHT
+        kwargs["CC_WEIGHT"] = CC_WEIGHT
+        kwargs["FORCE_WEIGHT"] = FORCE_WEIGHT
+        kwargs["ARCLENGTH_WEIGHT"] = ARCLENGTH_WEIGHT
+        kwargs["with_force"] = with_force
+        kwargs["dx"] = dx
+        kwargs["MAXITER"] = MAXITER
+        kwargs["FORCE_OBJ"] = FORCE_OBJ
+        kwargs["dx"] = dx
+        kwargs["debug"] = debug
 
         # RUNNING THE JOBS
         results = vacuum_stage_II_optimization(
@@ -879,20 +1035,23 @@ def continuation_vacuum_stage_II_optimizations(
             order=order,
             ncoils=ncoils,
             UUID_init_from=UUID_init_from,
-            **kwargs)
+            **kwargs,
+        )
 
-        print(f"Job {i+1} completed with UUID={results['UUID']}")
+        print(f"Job {i + 1} completed with UUID={results['UUID']}")
 
 
-def initial_vacuum_stage_II_optimizations(N=10000,
-        FORCE_OBJ=None,
-        with_force=False,
-        debug=False,
-        MAXITER=14000,
-        config="QA",
-        OUTPUT_DIR=None,
-        INPUT_FILE=None,
-        ncoils=5):
+def initial_vacuum_stage_II_optimizations(
+    N=10000,
+    FORCE_OBJ=None,
+    with_force=False,
+    debug=False,
+    MAXITER=14000,
+    config="QA",
+    OUTPUT_DIR=None,
+    INPUT_FILE=None,
+    ncoils=5,
+):
     """
     Perform a batch of initial random parameter optimizations for coil design for the
     Landreman-Paul 2021 QA or QH configurations.
@@ -917,23 +1076,27 @@ def initial_vacuum_stage_II_optimizations(N=10000,
             OUTPUT_DIR = "./output/QA/optimizations/"
         if INPUT_FILE is None:
             # Default to test files directory
-            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            test_dir = (
+                Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            )
             INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QA")
     elif config == "QH":
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QH/optimizations/"
         if INPUT_FILE is None:
             # Default to test files directory
-            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            test_dir = (
+                Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            )
             INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QH_magwell_R0=1")
     else:
         raise ValueError(f"Invalid configuration: {config}")
 
     kwargs = {}
-    kwargs['FORCE_OBJ'] = FORCE_OBJ
-    kwargs['debug'] = debug
-    kwargs['MAXITER'] = MAXITER
-    kwargs['with_force'] = with_force
+    kwargs["FORCE_OBJ"] = FORCE_OBJ
+    kwargs["debug"] = debug
+    kwargs["MAXITER"] = MAXITER
+    kwargs["with_force"] = with_force
 
     for i in range(N):
         # FIXED PARAMETERS
@@ -949,7 +1112,7 @@ def initial_vacuum_stage_II_optimizations(N=10000,
         CC_THRESHOLD = np.random.uniform(0.083, 0.120)
         # FORCE_THRESHOLD is now in MN/m or MN (previously was in N/m or N)
         # Convert from old range [0, 5e+04] N/m to [0, 5e-2] MN/m
-        FORCE_THRESHOLD = np.random.uniform(0, 5e+04 / 1e6)  # Convert to MN/m or MN
+        FORCE_THRESHOLD = np.random.uniform(0, 5e04 / 1e6)  # Convert to MN/m or MN
         LENGTH_TARGET = np.random.uniform(4.9, 5.0)
         CURVATURE_WEIGHT = 10.0 ** np.random.uniform(-9, -5)
         CS_WEIGHT = 10.0 ** np.random.uniform(-1, 4)
@@ -968,23 +1131,25 @@ def initial_vacuum_stage_II_optimizations(N=10000,
             # For LpCurveForce/LpCurveTorque with p=2 or SquaredMeanForce/SquaredMeanTorque:
             #   multiply old weights by 1e12 (since (1e6)^2 = 1e12)
             # Old range was 10^(-14) to 10^(-8), scaled becomes 10^(-2) to 10^(4)
-            FORCE_WEIGHT = 10.0 ** np.random.uniform(-14, -8) * 1e12  # Scale for (MN/m)^2 or (MN)^2 units
+            FORCE_WEIGHT = (
+                10.0 ** np.random.uniform(-14, -8) * 1e12
+            )  # Scale for (MN/m)^2 or (MN)^2 units
         else:
             FORCE_WEIGHT = 0
 
-        kwargs['LENGTH_WEIGHT'] = LENGTH_WEIGHT
-        kwargs['MSC_WEIGHT'] = MSC_WEIGHT
-        kwargs['CS_WEIGHT'] = CS_WEIGHT
-        kwargs['CC_WEIGHT'] = CC_WEIGHT
-        kwargs['FORCE_WEIGHT'] = FORCE_WEIGHT
-        kwargs['ARCLENGTH_WEIGHT'] = ARCLENGTH_WEIGHT
-        kwargs['CURVATURE_THRESHOLD'] = CURVATURE_THRESHOLD
-        kwargs['MSC_THRESHOLD'] = MSC_THRESHOLD
-        kwargs['CS_THRESHOLD'] = CS_THRESHOLD
-        kwargs['CC_THRESHOLD'] = CC_THRESHOLD
-        kwargs['FORCE_THRESHOLD'] = FORCE_THRESHOLD
-        kwargs['LENGTH_TARGET'] = LENGTH_TARGET
-        kwargs['CURVATURE_WEIGHT'] = CURVATURE_WEIGHT
+        kwargs["LENGTH_WEIGHT"] = LENGTH_WEIGHT
+        kwargs["MSC_WEIGHT"] = MSC_WEIGHT
+        kwargs["CS_WEIGHT"] = CS_WEIGHT
+        kwargs["CC_WEIGHT"] = CC_WEIGHT
+        kwargs["FORCE_WEIGHT"] = FORCE_WEIGHT
+        kwargs["ARCLENGTH_WEIGHT"] = ARCLENGTH_WEIGHT
+        kwargs["CURVATURE_THRESHOLD"] = CURVATURE_THRESHOLD
+        kwargs["MSC_THRESHOLD"] = MSC_THRESHOLD
+        kwargs["CS_THRESHOLD"] = CS_THRESHOLD
+        kwargs["CC_THRESHOLD"] = CC_THRESHOLD
+        kwargs["FORCE_THRESHOLD"] = FORCE_THRESHOLD
+        kwargs["LENGTH_TARGET"] = LENGTH_TARGET
+        kwargs["CURVATURE_WEIGHT"] = CURVATURE_WEIGHT
 
         # RUNNING THE JOBS
         results = vacuum_stage_II_optimization(
@@ -995,19 +1160,22 @@ def initial_vacuum_stage_II_optimizations(N=10000,
             order=order,
             ncoils=ncoils,
             UUID_init_from=UUID_init_from,
-            **kwargs)
+            **kwargs,
+        )
 
-        print(f"Job {i+1} completed with UUID={results['UUID']}")
+        print(f"Job {i + 1} completed with UUID={results['UUID']}")
+
 
 def vacuum_stage_II_optimization(
-        config="QA",
-        OUTPUT_DIR=None,
-        INPUT_FILE=None,
-        R1=0.5,
-        order=5,
-        ncoils=5,
-        UUID_init_from=None,
-        **kwargs):
+    config="QA",
+    OUTPUT_DIR=None,
+    INPUT_FILE=None,
+    R1=0.5,
+    order=5,
+    ncoils=5,
+    UUID_init_from=None,
+    **kwargs,
+):
     """
     Perform a vacuum stage II force-based coil optimization with specified parameters and objectives.
 
@@ -1019,7 +1187,7 @@ def vacuum_stage_II_optimization(
     order (int): Number of Fourier modes for coil parameterization.
     ncoils (int): Number of unique coil shapes.
     UUID_init_from (str or None):
-        Universally Unique Identifiers (UUIDs) are standardized 128-bit identifiers that 
+        Universally Unique Identifiers (UUIDs) are standardized 128-bit identifiers that
         provide a practical way to ensure uniqueness across systems and time.
         UUID of previous optimization to initialize from, or None for random.
     **kwargs (dict): Keyword arguments for the optimization.
@@ -1051,7 +1219,7 @@ def vacuum_stage_II_optimization(
     """
     import uuid
     from simsopt._core.optimizable import load
-    from simsopt.field import Current, coils_via_symmetries, BiotSavart # coils_to_vtk
+    from simsopt.field import Current, coils_via_symmetries, BiotSavart  # coils_to_vtk
     from simsopt.geo import (
         CurveLength,
         CurveCurveDistance,
@@ -1060,7 +1228,8 @@ def vacuum_stage_II_optimization(
         LpCurveCurvature,
         ArclengthVariation,
         create_equally_spaced_curves,
-        SurfaceRZFourier)
+        SurfaceRZFourier,
+    )
     from simsopt.objectives import SquaredFlux, QuadraticPenalty
 
     start_time = time.perf_counter()
@@ -1070,14 +1239,18 @@ def vacuum_stage_II_optimization(
             OUTPUT_DIR = "./output/QA/optimizations/"
         if INPUT_FILE is None:
             # Default to test files directory
-            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            test_dir = (
+                Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            )
             INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QA")
     elif config == "QH":
         if OUTPUT_DIR is None:
             OUTPUT_DIR = "./output/QH/optimizations/"
         if INPUT_FILE is None:
             # Default to test files directory
-            test_dir = Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            test_dir = (
+                Path(__file__).parent.parent.parent.parent / "tests" / "test_files"
+            )
             INPUT_FILE = str(test_dir / "input.LandremanPaul2021_QH_magwell_R0=1")
     else:
         raise ValueError(f"Invalid configuration: {config}. Must be 'QA' or 'QH'.")
@@ -1085,7 +1258,9 @@ def vacuum_stage_II_optimization(
     # Initialize the boundary magnetic surface:
     nphi = 32
     ntheta = 32
-    s = SurfaceRZFourier.from_vmec_input(INPUT_FILE, range="half period", nphi=nphi, ntheta=ntheta)
+    s = SurfaceRZFourier.from_vmec_input(
+        INPUT_FILE, range="half period", nphi=nphi, ntheta=ntheta
+    )
     nfp = s.nfp
     R0 = s.get_rc(0, 0)
 
@@ -1102,15 +1277,18 @@ def vacuum_stage_II_optimization(
     from simsopt.field.force import LpCurveForce
     from simsopt.field.selffield import regularization_circ
     from simsopt.field import RegularizedCoil
-    with_force = kwargs.get('with_force', False)
 
-    if UUID_init_from is None: # No previous optimization to initialize from
+    with_force = kwargs.get("with_force", False)
+
+    if UUID_init_from is None:  # No previous optimization to initialize from
         base_curves = initial_base_curves(R0, R1, order, ncoils)
         total_current = 3e5
         # Since we know the total sum of currents, we only optimize for ncoils-1
         # currents, and then pick the last one so that they all add up to the correct
         # value.
-        base_currents = [Current(total_current / ncoils * 1e-5) * 1e5 for _ in range(ncoils-1)]
+        base_currents = [
+            Current(total_current / ncoils * 1e-5) * 1e5 for _ in range(ncoils - 1)
+        ]
         # Above, the factors of 1e-5 and 1e5 are included so the current
         # degrees of freedom are O(1) rather than ~ MA.  The optimization
         # algorithm may not perform well if the dofs are scaled badly.
@@ -1120,7 +1298,9 @@ def vacuum_stage_II_optimization(
 
         if with_force:
             regularizations = [regularization_circ(0.05) for _ in range(ncoils)]
-            coils = coils_via_symmetries(base_curves, base_currents, nfp, True, regularizations=regularizations)
+            coils = coils_via_symmetries(
+                base_curves, base_currents, nfp, True, regularizations=regularizations
+            )
         else:
             coils = coils_via_symmetries(base_curves, base_currents, nfp, True)
         base_coils = coils[:ncoils]
@@ -1140,29 +1320,31 @@ def vacuum_stage_II_optimization(
         bs.set_points(s.gamma().reshape((-1, 3)))
 
     # Define the individual terms objective function:
-    LENGTH_TARGET = kwargs.get('LENGTH_TARGET', 5.00)
-    LENGTH_WEIGHT = kwargs.get('LENGTH_WEIGHT', 1e-03)
-    CURVATURE_THRESHOLD = kwargs.get('CURVATURE_THRESHOLD', 12.0)
-    CURVATURE_WEIGHT = kwargs.get('CURVATURE_WEIGHT', 1e-08)
-    MSC_THRESHOLD = kwargs.get('MSC_THRESHOLD', 5.00)
-    MSC_WEIGHT = kwargs.get('MSC_WEIGHT', 1e-04)
-    CC_THRESHOLD = kwargs.get('CC_THRESHOLD', 0.083)
-    CC_WEIGHT = kwargs.get('CC_WEIGHT', 1e+03)
-    CS_THRESHOLD = kwargs.get('CS_THRESHOLD', 0.166)
-    CS_WEIGHT = kwargs.get('CS_WEIGHT', 1e+03)
+    LENGTH_TARGET = kwargs.get("LENGTH_TARGET", 5.00)
+    LENGTH_WEIGHT = kwargs.get("LENGTH_WEIGHT", 1e-03)
+    CURVATURE_THRESHOLD = kwargs.get("CURVATURE_THRESHOLD", 12.0)
+    CURVATURE_WEIGHT = kwargs.get("CURVATURE_WEIGHT", 1e-08)
+    MSC_THRESHOLD = kwargs.get("MSC_THRESHOLD", 5.00)
+    MSC_WEIGHT = kwargs.get("MSC_WEIGHT", 1e-04)
+    CC_THRESHOLD = kwargs.get("CC_THRESHOLD", 0.083)
+    CC_WEIGHT = kwargs.get("CC_WEIGHT", 1e03)
+    CS_THRESHOLD = kwargs.get("CS_THRESHOLD", 0.166)
+    CS_WEIGHT = kwargs.get("CS_WEIGHT", 1e03)
     # FORCE_THRESHOLD is now in MN/m or MN (previously was in N/m or N)
     # Default was 2e+04 N/m, converted to 2e-2 MN/m
-    FORCE_THRESHOLD = kwargs.get('FORCE_THRESHOLD', 2e+04 / 1e6)  # Convert to MN/m or MN
+    FORCE_THRESHOLD = kwargs.get("FORCE_THRESHOLD", 2e04 / 1e6)  # Convert to MN/m or MN
     # FORCE_WEIGHT needs to be scaled for objectives that now return MN/m or MN units
     # For LpCurveForce/LpCurveTorque with p=2 or SquaredMeanForce/SquaredMeanTorque:
     #   multiply old weights by 1e12 (since (1e6)^2 = 1e12)
     # Default was 1e-10, scaled becomes 1e2
-    FORCE_WEIGHT = kwargs.get('FORCE_WEIGHT', 1e-10 * 1e12)  # Scale for (MN/m)^2 or (MN)^2 units
-    FORCE_OBJ = kwargs.get('FORCE_OBJ', None)
-    ARCLENGTH_WEIGHT = kwargs.get('ARCLENGTH_WEIGHT', 1e-2)
-    dx = kwargs.get('dx', 0.05)
-    debug = kwargs.get('debug', False)
-    MAXITER = kwargs.get('MAXITER', 14000)
+    FORCE_WEIGHT = kwargs.get(
+        "FORCE_WEIGHT", 1e-10 * 1e12
+    )  # Scale for (MN/m)^2 or (MN)^2 units
+    FORCE_OBJ = kwargs.get("FORCE_OBJ", None)
+    ARCLENGTH_WEIGHT = kwargs.get("ARCLENGTH_WEIGHT", 1e-2)
+    dx = kwargs.get("dx", 0.05)
+    debug = kwargs.get("debug", False)
+    MAXITER = kwargs.get("MAXITER", 14000)
 
     Jf = SquaredFlux(s, bs)
     Jls = [CurveLength(c) for c in base_curves]
@@ -1180,26 +1362,32 @@ def vacuum_stage_II_optimization(
             except:
                 Jforce = FORCE_OBJ(coils)  # For B2Energy
     else:
+
         class dummyObjective:
             def __init__(self):
                 pass
+
             def J(self):
                 return 0.0
+
             def dJ(self):
                 return 0.0
+
         Jforce = dummyObjective()
 
     Jals = [ArclengthVariation(c) for c in base_curves]
     Jlength = sum(QuadraticPenalty(Jl, LENGTH_TARGET, "max") for Jl in Jls)
 
     # Form the total objective function.
-    JF = Jf \
-        + LENGTH_WEIGHT * Jlength \
-        + CC_WEIGHT * Jccdist \
-        + CS_WEIGHT * Jcsdist \
-        + CURVATURE_WEIGHT * sum(Jcs) \
-        + MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs) \
+    JF = (
+        Jf
+        + LENGTH_WEIGHT * Jlength
+        + CC_WEIGHT * Jccdist
+        + CS_WEIGHT * Jcsdist
+        + CURVATURE_WEIGHT * sum(Jcs)
+        + MSC_WEIGHT * sum(QuadraticPenalty(J, MSC_THRESHOLD, "max") for J in Jmscs)
         + ARCLENGTH_WEIGHT * sum(Jals)
+    )
 
     if with_force:
         JF += FORCE_WEIGHT * Jforce
@@ -1217,9 +1405,16 @@ def vacuum_stage_II_optimization(
             cs_val = CS_WEIGHT * Jcsdist.J()
             forces_val = Jforce.J()
             arc_val = sum(Jals).J()
-            BdotN = np.mean(np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
-            BdotN_over_B = np.mean(np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2))
-                                   ) / np.mean(bs.AbsB())
+            BdotN = np.mean(
+                np.abs(
+                    np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)
+                )
+            )
+            BdotN_over_B = np.mean(
+                np.abs(
+                    np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)
+                )
+            ) / np.mean(bs.AbsB())
             outstr = f"J={J:.1e}, Jf={jf:.1e}, ⟨B·n⟩={BdotN:.1e}, ⟨B·n⟩/⟨B⟩={BdotN_over_B:.1e}"
             valuestr = f"J={J:.2e}, Jf={jf:.2e}"
             cl_string = ", ".join([f"{J.J():.1f}" for J in Jls])
@@ -1240,8 +1435,14 @@ def vacuum_stage_II_optimization(
             print(valuestr)
         return J, grad
 
-    res = minimize(fun, JF.x, jac=True, method='L-BFGS-B',
-                   options={'maxiter': MAXITER, 'maxcor': 200}, tol=1e-15)
+    res = minimize(
+        fun,
+        JF.x,
+        jac=True,
+        method="L-BFGS-B",
+        options={"maxiter": MAXITER, "maxcor": 200},
+        tol=1e-15,
+    )
     JF.x = res.x
 
     ###########################################################################
@@ -1253,19 +1454,37 @@ def vacuum_stage_II_optimization(
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # SAVE DATA TO JSON
-    BdotN = np.mean(np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2)))
+    BdotN = np.mean(
+        np.abs(np.sum(bs.B().reshape((nphi, ntheta, 3)) * s.unitnormal(), axis=2))
+    )
     mean_AbsB = np.mean(bs.AbsB())
     # Create RegularizedCoil objects for force calculations
     reg_param = regularization_circ(0.05)
-    base_coils_reg = [RegularizedCoil(c.curve, c.current, reg_param) for c in base_coils]
-    
-    lpcurveforce = sum([LpCurveForce(c, coils, p=2, 
-        threshold=FORCE_THRESHOLD, 
-        ) for c in base_coils_reg]
+    base_coils_reg = [
+        RegularizedCoil(c.curve, c.current, reg_param) for c in base_coils
+    ]
+
+    lpcurveforce = sum(
+        [
+            LpCurveForce(
+                c,
+                coils,
+                p=2,
+                threshold=FORCE_THRESHOLD,
+            )
+            for c in base_coils_reg
+        ]
     ).J()
-    max_forces = [np.max(np.linalg.norm(c_reg.force(coils), axis=1)) for c_reg in base_coils_reg]
-    min_forces = [np.min(np.linalg.norm(c_reg.force(coils), axis=1)) for c_reg in base_coils_reg]
-    RMS_forces = [np.sqrt(np.mean(np.square(np.linalg.norm(c_reg.force(coils), axis=1)))) for c_reg in base_coils_reg]
+    max_forces = [
+        np.max(np.linalg.norm(c_reg.force(coils), axis=1)) for c_reg in base_coils_reg
+    ]
+    min_forces = [
+        np.min(np.linalg.norm(c_reg.force(coils), axis=1)) for c_reg in base_coils_reg
+    ]
+    RMS_forces = [
+        np.sqrt(np.mean(np.square(np.linalg.norm(c_reg.force(coils), axis=1))))
+        for c_reg in base_coils_reg
+    ]
     results = {
         "nfp": nfp,
         "ncoils": int(ncoils),
@@ -1310,7 +1529,7 @@ def vacuum_stage_II_optimization(
         "max_arclength_variance": max(float(J.J()) for J in Jals),
         "BdotN": BdotN,
         "mean_AbsB": mean_AbsB,
-        "normalized_BdotN": BdotN/mean_AbsB,
+        "normalized_BdotN": BdotN / mean_AbsB,
         "coil_coil_distance": Jccdist.shortest_distance(),
         "coil_surface_distance": Jcsdist.shortest_distance(),
         "message": res.message,
@@ -1320,12 +1539,14 @@ def vacuum_stage_II_optimization(
         "coil_currents": [c.get_value() for c in base_currents],
         "UUID": UUID,
         "eval_time": time.perf_counter() - start_time,
-        "dx": dx
+        "dx": dx,
     }
 
     with open(OUTPUT_DIR + "results.json", "w") as outfile:
         json.dump(results, outfile, indent=2)
-    bs.save(OUTPUT_DIR + "biot_savart.json")  # save the optimized coil shapes and currents
+    bs.save(
+        OUTPUT_DIR + "biot_savart.json"
+    )  # save the optimized coil shapes and currents
     print(time.perf_counter() - start_time)
     # return res, base_coils
 
@@ -1381,9 +1602,11 @@ Dependencies:
     - glob, json, os
 
 """
+
+
 def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = "./"):
     """
-    Generate and save histograms comparing distributions of key metrics before and 
+    Generate and save histograms comparing distributions of key metrics before and
     after filtering for vacuum stage II coil optimizations.
 
     Parameters
@@ -1407,7 +1630,7 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
         """
         plt.subplot(nrows, ncols, subplot_index)
         nbins = 20
-        
+
         def get_field_values(data_list, field_name):
             """Extract field values from list of dicts, handling list values.
 
@@ -1431,10 +1654,10 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
                 if val is not None:
                     values.append(val)
             return np.array(values) if values else np.array([])
-        
+
         data = get_field_values(df, field)
         data_filtered = get_field_values(df_filtered, field)
-        
+
         # Filter out NaN and infinite values - ensure we have numpy arrays
         if len(data) > 0:
             data = data[np.isfinite(data)]
@@ -1444,14 +1667,20 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
             data_filtered = data_filtered[np.isfinite(data_filtered)]
         else:
             data_filtered = np.array([])
-        
+
         # Skip plotting if no valid data
         if len(data) == 0:
-            plt.text(0.5, 0.5, f'No valid data for {field}', 
-                    ha='center', va='center', transform=plt.gca().transAxes)
+            plt.text(
+                0.5,
+                0.5,
+                f"No valid data for {field}",
+                ha="center",
+                va="center",
+                transform=plt.gca().transAxes,
+            )
             plt.xlabel(field)
             return
-        
+
         if len(data) > 0 and np.min(data) > 0:
             bins = np.logspace(np.log10(data.min()), np.log10(data.max()), nbins)
         else:
@@ -1473,8 +1702,7 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
                     if min_val == 0:
                         plt.xlim(-0.1, 0.1)
                 else:
-                    plt.xlim(min_val - 0.1 * abs(min_val), 
-                            max_val + 0.1 * abs(max_val))
+                    plt.xlim(min_val - 0.1 * abs(min_val), max_val + 0.1 * abs(max_val))
         if len(data) > 0 and np.min(data) > 0:
             plt.xscale("log")
 
@@ -1499,7 +1727,7 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
         "cc_weight",
         "cs_weight",
         "force_weight",
-        "ncoils"
+        "ncoils",
     ]
 
     for i, field in enumerate(fields):
@@ -1509,14 +1737,15 @@ def make_stage_II_pareto_plots(df: list, df_filtered: list, OUTPUT_DIR: str = ".
     plt.savefig(OUTPUT_DIR + "histograms.pdf")
     plt.close()
 
+
 def build_stage_II_data_array(
-    INPUT_DIR='./', margin_up: float = 1.5, margin_low: float = 0.5,
-    **kwargs):
+    INPUT_DIR="./", margin_up: float = 1.5, margin_low: float = 0.5, **kwargs
+):
     """
-    Load, filter, and compute Pareto front for coil optimization results. Filtering is 
+    Load, filter, and compute Pareto front for coil optimization results. Filtering is
     done based on the following engineering constraints. Max denotes the maximum over all coils,
-    max denotes the maximum over a single coil, mean denotes an average over the plasma surface. 
-    These numbers will need to be adjusted for other stellarator configurations and rescaled if 
+    max denotes the maximum over a single coil, mean denotes an average over the plasma surface.
+    These numbers will need to be adjusted for other stellarator configurations and rescaled if
     the major radius is scaled from the 1 m baseline:
 
     Parameters
@@ -1527,7 +1756,7 @@ def build_stage_II_data_array(
         The upper bound margin to consider for tolerable engineering constraints.
     margin_low (float, default 0.5):
         The lower bound margin to consider for tolerable engineering constraints.
-    **kwargs (dict): Keyword arguments for the optimization.    
+    **kwargs (dict): Keyword arguments for the optimization.
         max_coil_length (float, default 5): Maximum coil length.
         max_max_kappa (float, default 12): Maximum curvature over all coils.
         max_mean_squared_curvature (float, default 6): Maximum mean squared curvature.
@@ -1551,25 +1780,30 @@ def build_stage_II_data_array(
     # Try to import paretoset, but make it optional
     try:
         from paretoset import paretoset
+
         paretoset_available = True
     except ImportError:
         paretoset_available = False
         import warnings
-        warnings.warn("paretoset package not available. Pareto front calculation will be skipped. "
-                     "Install with 'pip install paretoset' to enable this feature.", ImportWarning)
 
-    min_coil_length = kwargs.get('min_coil_length', 3)
-    max_coil_length = kwargs.get('max_coil_length', 5)
-    max_max_kappa = kwargs.get('max_max_kappa', 12)
-    max_mean_squared_curvature = kwargs.get('max_mean_squared_curvature', 6)
-    min_coil_coil_distance = kwargs.get('min_coil_coil_distance', 0.083)
-    min_coil_surface_distance = kwargs.get('min_coil_surface_distance', 0.166)
-    mean_abs_B = kwargs.get('mean_abs_B', 0.22)
-    max_arclength_variance = kwargs.get('max_arclength_variance', 1e-2)
-    max_normalized_BdotN = kwargs.get('max_normalized_BdotN', 4e-2)
-    max_max_force = kwargs.get('max_max_force', 50000)
-    max_coil_surface_distance = kwargs.get('max_coil_surface_distance', 0.375)
-    max_coil_coil_distance = kwargs.get('max_coil_coil_distance', 0.15)
+        warnings.warn(
+            "paretoset package not available. Pareto front calculation will be skipped. "
+            "Install with 'pip install paretoset' to enable this feature.",
+            ImportWarning,
+        )
+
+    min_coil_length = kwargs.get("min_coil_length", 3)
+    max_coil_length = kwargs.get("max_coil_length", 5)
+    max_max_kappa = kwargs.get("max_max_kappa", 12)
+    max_mean_squared_curvature = kwargs.get("max_mean_squared_curvature", 6)
+    min_coil_coil_distance = kwargs.get("min_coil_coil_distance", 0.083)
+    min_coil_surface_distance = kwargs.get("min_coil_surface_distance", 0.166)
+    mean_abs_B = kwargs.get("mean_abs_B", 0.22)
+    max_arclength_variance = kwargs.get("max_arclength_variance", 1e-2)
+    max_normalized_BdotN = kwargs.get("max_normalized_BdotN", 4e-2)
+    max_max_force = kwargs.get("max_max_force", 50000)
+    max_coil_surface_distance = kwargs.get("max_coil_surface_distance", 0.375)
+    max_coil_coil_distance = kwargs.get("max_coil_coil_distance", 0.15)
 
     def get_field_value(item, field_name):
         """Extract field value from dict, handling list values.
@@ -1604,37 +1838,45 @@ def build_stage_II_data_array(
     # Filter the data
     df_filtered = []
     for item in df:
-        max_length = get_field_value(item, 'max_length')
-        max_max_κ = get_field_value(item, 'max_max_κ')
-        max_MSC = get_field_value(item, 'max_MSC')
-        coil_coil_distance = get_field_value(item, 'coil_coil_distance')
-        coil_surface_distance = get_field_value(item, 'coil_surface_distance')
-        mean_AbsB = get_field_value(item, 'mean_AbsB')
-        max_arclength_variance = get_field_value(item, 'max_arclength_variance')
-        normalized_BdotN = get_field_value(item, 'normalized_BdotN')
-        max_max_force = get_field_value(item, 'max_max_force')
-        
+        max_length = get_field_value(item, "max_length")
+        max_max_κ = get_field_value(item, "max_max_κ")
+        max_MSC = get_field_value(item, "max_MSC")
+        coil_coil_distance = get_field_value(item, "coil_coil_distance")
+        coil_surface_distance = get_field_value(item, "coil_surface_distance")
+        mean_AbsB = get_field_value(item, "mean_AbsB")
+        max_arclength_variance = get_field_value(item, "max_arclength_variance")
+        normalized_BdotN = get_field_value(item, "normalized_BdotN")
+        max_max_force = get_field_value(item, "max_max_force")
+
         # ENGINEERING CONSTRAINTS:
-        if (max_length < max_coil_length * margin_up
+        if (
+            max_length < max_coil_length * margin_up
             and max_max_κ < max_max_kappa * margin_up
             and max_MSC < max_mean_squared_curvature * margin_up
             and coil_coil_distance > min_coil_coil_distance * margin_low
             and coil_surface_distance > min_coil_surface_distance * margin_low
-            and mean_AbsB > mean_abs_B * margin_low  # prevent coils from becoming detached from LCFS when margin_low ~ 1
+            and mean_AbsB
+            > mean_abs_B
+            * margin_low  # prevent coils from becoming detached from LCFS when margin_low ~ 1
             # FILTERING OUT BAD/UNNECESSARY DATA:
             and max_arclength_variance < max_arclength_variance * margin_up
             and coil_surface_distance < max_coil_surface_distance * margin_up
             and coil_coil_distance < max_coil_coil_distance * margin_up
             and max_length > min_coil_length * margin_low
             and normalized_BdotN < max_normalized_BdotN * margin_up
-            and max_max_force < max_max_force * margin_up):
+            and max_max_force < max_max_force * margin_up
+        ):
             df_filtered.append(item)
 
     ### STEP 3: Generate Pareto front and export UUIDs as .txt
     if len(df_filtered) > 0 and paretoset_available:
         # Extract normalized_BdotN and max_max_force arrays for paretoset
-        normalized_BdotN_array = np.array([get_field_value(item, 'normalized_BdotN') for item in df_filtered])
-        max_max_force_array = np.array([get_field_value(item, 'max_max_force') for item in df_filtered])
+        normalized_BdotN_array = np.array(
+            [get_field_value(item, "normalized_BdotN") for item in df_filtered]
+        )
+        max_max_force_array = np.array(
+            [get_field_value(item, "max_max_force") for item in df_filtered]
+        )
         pareto_data = np.column_stack([normalized_BdotN_array, max_max_force_array])
         pareto_mask = paretoset(pareto_data, sense=[min, min])
         df_pareto = [df_filtered[i] for i in range(len(df_filtered)) if pareto_mask[i]]

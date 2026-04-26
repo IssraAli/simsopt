@@ -1,6 +1,7 @@
 import logging
 import unittest
 import numpy as np
+
 try:
     from mpi4py import MPI
 except:
@@ -75,7 +76,7 @@ class MpiPartitionTests(unittest.TestCase):
         rank_world = MPI.COMM_WORLD.Get_rank()
         nprocs = MPI.COMM_WORLD.Get_size()
 
-        for ngroups in range(-1, nprocs+3):
+        for ngroups in range(-1, nprocs + 3):
             m = MpiPartition(ngroups=ngroups)
 
             self.assertGreaterEqual(m.ngroups, 1)
@@ -104,11 +105,11 @@ class MpiPartitionTests(unittest.TestCase):
             # even, with a difference of no more than 1 between the
             # largest and the smallest.
             if m.proc0_world:
-                group_sizes = np.zeros(nprocs, dtype='i')
+                group_sizes = np.zeros(nprocs, dtype="i")
                 group_sizes[0] = m.nprocs_groups
                 for j in range(1, nprocs):
                     group_sizes[j] = m.comm_world.recv(tag=j)
-                print('group_sizes:', group_sizes)
+                print("group_sizes:", group_sizes)
                 self.assertLessEqual(np.max(group_sizes) - np.min(group_sizes), 1)
             else:
                 m.comm_world.send(m.nprocs_groups, 0, tag=m.rank_world)

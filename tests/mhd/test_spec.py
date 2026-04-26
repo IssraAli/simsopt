@@ -56,7 +56,7 @@ class SpecTests(unittest.TestCase):
         Try creating a Spec instance from a specified input file.
         """
 
-        filename = os.path.join(TEST_DIR, '1DOF_Garabedian.sp')
+        filename = os.path.join(TEST_DIR, "1DOF_Garabedian.sp")
 
         with ScratchDir("."):
             s = Spec(filename)
@@ -85,16 +85,24 @@ class SpecTests(unittest.TestCase):
         Check value of normal field
         """
 
-        filename = os.path.join(TEST_DIR, 'M16N08.sp')
+        filename = os.path.join(TEST_DIR, "M16N08.sp")
 
         with ScratchDir("."):
             s = Spec(filename)
 
             places = 7
-            self.assertAlmostEqual(s.normal_field.get_vns(0, 1), 3.615260745287559e-04, places)
-            self.assertAlmostEqual(s.normal_field.get_vns(3, -1), -1.269776831212886e-04, places)
-            self.assertAlmostEqual(s.normal_field.get_vnc(1, 0), 1.924871538367248e-04, places)
-            self.assertAlmostEqual(s.normal_field.get_vnc(1, -2), 4.070523669489626e-04, places)
+            self.assertAlmostEqual(
+                s.normal_field.get_vns(0, 1), 3.615260745287559e-04, places
+            )
+            self.assertAlmostEqual(
+                s.normal_field.get_vns(3, -1), -1.269776831212886e-04, places
+            )
+            self.assertAlmostEqual(
+                s.normal_field.get_vnc(1, 0), 1.924871538367248e-04, places
+            )
+            self.assertAlmostEqual(
+                s.normal_field.get_vnc(1, -2), 4.070523669489626e-04, places
+            )
 
     def test_normal_field_setter(self):
         """
@@ -103,16 +111,20 @@ class SpecTests(unittest.TestCase):
         Check value of normal field
         """
 
-        filename = os.path.join(TEST_DIR, 'M16N08.sp')
+        filename = os.path.join(TEST_DIR, "M16N08.sp")
 
         with ScratchDir("."):
             s = Spec(filename)
             surface = s.boundary
             old_normal = s.normal_field
-            new_normal = NormalField(s.nfp, stellsym=s.stellsym, mpol=s.mpol, ntor=s.ntor, surface=surface)
+            new_normal = NormalField(
+                s.nfp, stellsym=s.stellsym, mpol=s.mpol, ntor=s.ntor, surface=surface
+            )
             s.normal_field = new_normal
             self.assertAlmostEqual(s.normal_field.get_vns(0, 1), 0)  # set to zeros
-            self.assertIs(s.normal_field.surface, s._computational_boundary)  # normal field surface is set to spec computational boundary.
+            self.assertIs(
+                s.normal_field.surface, s._computational_boundary
+            )  # normal field surface is set to spec computational boundary.
             self.assertIsNot(old_normal, new_normal)
 
     def test_init_freeboundary(self):
@@ -121,35 +133,39 @@ class SpecTests(unittest.TestCase):
         of normal field
         """
 
-        filename = os.path.join(TEST_DIR, 'Dommaschk.sp')
+        filename = os.path.join(TEST_DIR, "Dommaschk.sp")
 
         with ScratchDir("."):
             s = Spec(filename)
 
             places = 5
-            self.assertAlmostEqual(s.normal_field.get_vns(0, 1), -1.116910580000000E-04, places)
-            self.assertAlmostEqual(s.normal_field.get_vns(3, -1), 1.714666510000000E-03, places)
+            self.assertAlmostEqual(
+                s.normal_field.get_vns(0, 1), -1.116910580000000e-04, places
+            )
+            self.assertAlmostEqual(
+                s.normal_field.get_vns(3, -1), 1.714666510000000e-03, places
+            )
 
     def test_run(self):
         """
         Try running SPEC and reading in the output.
         """
-        filename = os.path.join(TEST_DIR, '1DOF_Garabedian.sp')
+        filename = os.path.join(TEST_DIR, "1DOF_Garabedian.sp")
 
         for new_mpol in [2, 3]:
             for new_ntor in [2, 3]:
                 with ScratchDir("."):
                     s = Spec(filename)
-                    print('new_mpol: {}, new_ntor: {}'.format(new_mpol, new_ntor))
+                    print("new_mpol: {}, new_ntor: {}".format(new_mpol, new_ntor))
                     s.inputlist.mpol = new_mpol
                     s.inputlist.ntor = new_ntor
                     s.run()
 
-                    self.assertAlmostEqual(
-                        s.volume(), 0.001973920880217874, places=4)
+                    self.assertAlmostEqual(s.volume(), 0.001973920880217874, places=4)
 
                     self.assertAlmostEqual(
-                        s.results.output.helicity, 0.435225, places=3)
+                        s.results.output.helicity, 0.435225, places=3
+                    )
 
                     self.assertAlmostEqual(s.iota(), 0.544176, places=3)
 
@@ -159,31 +175,33 @@ class SpecTests(unittest.TestCase):
         and try to modify it.
         """
 
-        filename = os.path.join(TEST_DIR, 'RotatingEllipse_Nvol8.sp')
+        filename = os.path.join(TEST_DIR, "RotatingEllipse_Nvol8.sp")
 
         with ScratchDir("."):
             s = Spec(filename)
             nvol = s.inputlist.nvol
             mvol = nvol + s.inputlist.lfreebound
 
-            cumulative = False  # Surfaces currents are non-cumulative quantities in SPEC
+            cumulative = (
+                False  # Surfaces currents are non-cumulative quantities in SPEC
+            )
             surface_current = ProfileSpec(np.zeros((mvol,)), cumulative=cumulative)
 
             s.interface_current_profile = surface_current
 
             # Check that all currents are actually zero
             for lvol in range(1, mvol):
-                self.assertEqual(s.get_profile('interface_current', lvol), 0)
+                self.assertEqual(s.get_profile("interface_current", lvol), 0)
 
             # Modify one interface current
-            s.set_profile('interface_current', lvol=3, value=1)
+            s.set_profile("interface_current", lvol=3, value=1)
 
             # Check values
             for lvol in range(1, mvol):
                 if lvol != 3:
-                    self.assertEqual(s.get_profile('interface_current', lvol), 0)
+                    self.assertEqual(s.get_profile("interface_current", lvol), 0)
                 else:
-                    self.assertEqual(s.get_profile('interface_current', lvol), 1)
+                    self.assertEqual(s.get_profile("interface_current", lvol), 1)
 
     def test_set_profile_cumulative(self):
         """
@@ -191,7 +209,7 @@ class SpecTests(unittest.TestCase):
         and tries to modify it.
         """
 
-        filename = os.path.join(TEST_DIR, 'RotatingEllipse_Nvol8.sp')
+        filename = os.path.join(TEST_DIR, "RotatingEllipse_Nvol8.sp")
 
         with ScratchDir("."):
             s = Spec(filename)
@@ -205,49 +223,51 @@ class SpecTests(unittest.TestCase):
 
             # Check that all currents are actually zero
             for lvol in range(1, mvol):
-                self.assertEqual(s.get_profile('volume_current', lvol), 0)
+                self.assertEqual(s.get_profile("volume_current", lvol), 0)
 
             # Modify one interface current
-            s.set_profile('volume_current', lvol=3, value=1)
+            s.set_profile("volume_current", lvol=3, value=1)
 
             print(s.volume_current_profile)
 
             # Check values
             for lvol in range(1, mvol):
                 if lvol < 3:
-                    self.assertEqual(s.get_profile('volume_current', lvol), 0)
+                    self.assertEqual(s.get_profile("volume_current", lvol), 0)
                 else:
-                    self.assertEqual(s.get_profile('volume_current', lvol), 1)
+                    self.assertEqual(s.get_profile("volume_current", lvol), 1)
 
     def test_activate_profiles(self):
         """
         test activate all profiles and confirm that DOFs are
         correctly added
         """
-        profiles = ['pressure',
-                    'volume_current',
-                    'interface_current',
-                    'iota',
-                    'oita',
-                    'mu',
-                    'pflux',
-                    'tflux',
-                    'helicity']
+        profiles = [
+            "pressure",
+            "volume_current",
+            "interface_current",
+            "iota",
+            "oita",
+            "mu",
+            "pflux",
+            "tflux",
+            "helicity",
+        ]
 
         for profile in profiles:
             with ScratchDir("."):
                 s = Spec.default_freeboundary(copy_to_pwd=True)
                 startdofs = len(s.x)
-                self.assertIsNone(s.__getattribute__(profile+'_profile'))
+                self.assertIsNone(s.__getattribute__(profile + "_profile"))
                 s.activate_profile(profile)
-                self.assertIsNotNone(s.__getattribute__(profile+'_profile'))
-                if profile in ['tflux', 'pflux', 'mu', 'oita', 'iota', 'helicity']:
+                self.assertIsNotNone(s.__getattribute__(profile + "_profile"))
+                if profile in ["tflux", "pflux", "mu", "oita", "iota", "helicity"]:
                     # test that the 'mvol' length profiles have been increased by two
-                    self.assertEqual(len(s.x), startdofs+2)
-                elif profile in ['volume_current', 'pressure']:
+                    self.assertEqual(len(s.x), startdofs + 2)
+                elif profile in ["volume_current", "pressure"]:
                     # test that the 'nvol' length profiles have been increased by one
-                    self.assertEqual(len(s.x), startdofs+1)
-                elif profile in ['interface_current']:
+                    self.assertEqual(len(s.x), startdofs + 1)
+                elif profile in ["interface_current"]:
                     # test that the surface current profile has not been increased
                     self.assertEqual(len(s.x), startdofs)
                 else:
@@ -286,8 +306,8 @@ class SpecTests(unittest.TestCase):
         spec = Spec()
         array = spec.inputlist.rbc
         translator = spec.array_translator(array)
-        translator2 = spec.array_translator(array, style='spec')
-        translator3 = spec.array_translator(translator.as_simsopt, style='simsopt')
+        translator2 = spec.array_translator(array, style="spec")
+        translator3 = spec.array_translator(translator.as_simsopt, style="simsopt")
 
         self.assertTrue(np.all(array == translator.as_spec))
         self.assertTrue(np.all(array == translator2.as_spec))
@@ -295,15 +315,18 @@ class SpecTests(unittest.TestCase):
         self.assertTrue(np.all(translator.as_simsopt == translator2.as_simsopt))
         self.assertTrue(np.all(translator2.as_simsopt == translator3.as_simsopt))
         # test that the shape of the array is correct:
-        self.assertEqual(translator2.as_simsopt.shape, (spec.inputlist.ntor+1, (2*spec.inputlist.mpol)+1))
+        self.assertEqual(
+            translator2.as_simsopt.shape,
+            (spec.inputlist.ntor + 1, (2 * spec.inputlist.mpol) + 1),
+        )
 
     def test_poloidal_current_amperes(self):
         """
         Test the poloidal current in amperes
         """
-        filename = os.path.join(TEST_DIR, 'RotatingEllipse_Nvol8.sp')
+        filename = os.path.join(TEST_DIR, "RotatingEllipse_Nvol8.sp")
         s = Spec(filename)
-        self.assertAlmostEqual(s.poloidal_current_amperes, s.inputlist.curpol/mu_0)
+        self.assertAlmostEqual(s.poloidal_current_amperes, s.inputlist.curpol / mu_0)
 
     def test_integrated_stellopt_scenarios_1dof(self):
         """
@@ -330,7 +353,7 @@ class SpecTests(unittest.TestCase):
                 surf = equil.boundary
 
                 # Set the initial boundary shape. Here is one way to do it:
-                surf.set('rc(0,0)', 1.0)
+                surf.set("rc(0,0)", 1.0)
                 # Here is another syntax that works:
                 surf.set_rc(0, 1, 0.1)
                 surf.set_zs(0, 1, 0.1)
@@ -346,7 +369,7 @@ class SpecTests(unittest.TestCase):
                 # which parameters are optimized by setting their 'fixed'
                 # attributes.
                 surf.local_fix_all()
-                surf.unfix('rc(0,0)')
+                surf.unfix("rc(0,0)")
 
                 # Turn off Poincare plots and use low resolution, for speed:
                 equil.inputlist.nptrj[0] = 0
@@ -392,7 +415,7 @@ class SpecTests(unittest.TestCase):
         # Create Spec object
         # TODO: Investigate why chdir is necessary here
         os.chdir(TEST_DIR)
-        filename = 'RotatingEllipse_Nvol2.sp'
+        filename = "RotatingEllipse_Nvol2.sp"
         s = Spec(filename=filename)
 
         # Define volume current profile
@@ -413,10 +436,12 @@ class SpecTests(unittest.TestCase):
 
         # Check result
         self.assertAlmostEqual(s.iota(), 0.55, places=5)
-        self.assertAlmostEqual(s.get_profile('volume_current', lvol=0)[0],
-                               0.01659580617394017, places=4)
-        self.assertAlmostEqual(s.get_profile('volume_current', lvol=1)[0],
-                               0.01659580617394017, places=4)
+        self.assertAlmostEqual(
+            s.get_profile("volume_current", lvol=0)[0], 0.01659580617394017, places=4
+        )
+        self.assertAlmostEqual(
+            s.get_profile("volume_current", lvol=1)[0], 0.01659580617394017, places=4
+        )
 
     def test_integrated_stellopt_scenarios_1dof_Garabedian(self):
         """
@@ -435,7 +460,7 @@ class SpecTests(unittest.TestCase):
         can be found here:
         https://github.com/landreman/stellopt_scenarios/tree/master/1DOF_circularCrossSection_varyAxis_targetIota
         """
-        filename = os.path.join(TEST_DIR, '1DOF_Garabedian.sp')
+        filename = os.path.join(TEST_DIR, "1DOF_Garabedian.sp")
 
         with ScratchDir("."):
             for mpol_ntor in [2, 4]:
@@ -455,7 +480,7 @@ class SpecTests(unittest.TestCase):
                 # which parameters are optimized by setting their 'fixed'
                 # attributes.
                 surf.local_fix_all()
-                surf.unfix('Delta(1,-1)')
+                surf.unfix("Delta(1,-1)")
 
                 # Use low resolution, for speed:
                 equil.inputlist.lrad[0] = 4
@@ -464,8 +489,7 @@ class SpecTests(unittest.TestCase):
                 # Each Target is then equipped with a shift and weight, to become a
                 # term in a least-squares objective function
                 desired_iota = 0.41  # Sign was + for VMEC
-                prob = LeastSquaresProblem.from_tuples(
-                    [(equil.iota, desired_iota, 1)])
+                prob = LeastSquaresProblem.from_tuples([(equil.iota, desired_iota, 1)])
 
                 # Check that the problem was set up correctly:
                 np.testing.assert_allclose(prob.x, [0.1])
@@ -495,7 +519,7 @@ class SpecTests(unittest.TestCase):
         can be found here:
         https://github.com/landreman/stellopt_scenarios/tree/master/2DOF_vmecOnly_targetIotaAndVolume
         """
-        filename = os.path.join(TEST_DIR, '2DOF_targetIotaAndVolume.sp')
+        filename = os.path.join(TEST_DIR, "2DOF_targetIotaAndVolume.sp")
 
         with ScratchDir("."):
             # Initialize SPEC from an input file
@@ -506,8 +530,8 @@ class SpecTests(unittest.TestCase):
             # You can choose which parameters are optimized by setting their
             # 'fixed' attributes.
             surf.local_fix_all()
-            surf.unfix('rc(1,1)')
-            surf.unfix('zs(1,1)')
+            surf.unfix("rc(1,1)")
+            surf.unfix("zs(1,1)")
 
             # Each Target is then equipped with a shift and weight, to become a
             # term in a least-squares objective function.  A list of terms are
@@ -542,16 +566,18 @@ class SpecTests(unittest.TestCase):
             self.assertAlmostEqual(equil.volume(), 0.178091, places=3)
             self.assertAlmostEqual(surf.volume(), 0.178091, places=3)
             self.assertAlmostEqual(equil.iota(), -0.4114567, places=3)
-            self.assertAlmostEqual(prob.objective(), 7.912501330E-04, places=3)
+            self.assertAlmostEqual(prob.objective(), 7.912501330e-04, places=3)
 
-    @unittest.skipIf((spec_mod is None) or (pyoculus is None),
-                     "SPEC python module or pyoculus not found")
+    @unittest.skipIf(
+        (spec_mod is None) or (pyoculus is None),
+        "SPEC python module or pyoculus not found",
+    )
     def test_residue(self):
         """
         Check that we can compute residues from a Spec equilibrium.
         """
 
-        filename = os.path.join(TEST_DIR, 'QH-residues.sp')
+        filename = os.path.join(TEST_DIR, "QH-residues.sp")
 
         # Initialize SPEC from an input file
         with ScratchDir("."):
@@ -569,7 +595,7 @@ class SpecTests(unittest.TestCase):
             res1 = residue1.J()
             res2 = residue2.J()
 
-        print(f'Residues: {res1}, {res2}')
+        print(f"Residues: {res1}, {res2}")
         self.assertAlmostEqual(res1, 0.02331532869145614, places=4)
         self.assertAlmostEqual(res2, -0.022876376815881616, places=4)
 

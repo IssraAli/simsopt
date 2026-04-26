@@ -14,7 +14,12 @@ from simsopt.geo.curverzfourier import CurveRZFourier
 from simsopt.geo.curveplanarfourier import CurvePlanarFourier, JaxCurvePlanarFourier
 from simsopt.geo.curvehelical import CurveHelical
 from simsopt.geo.curvexyzfouriersymmetries import CurveXYZFourierSymmetries
-from simsopt.geo.curve import RotatedCurve, curves_to_vtk, create_planar_curves_between_two_toroidal_surfaces, _setup_uniform_grid_in_bounding_box
+from simsopt.geo.curve import (
+    RotatedCurve,
+    curves_to_vtk,
+    create_planar_curves_between_two_toroidal_surfaces,
+    _setup_uniform_grid_in_bounding_box,
+)
 from simsopt.geo import parameters
 from simsopt.configs.zoo import get_data
 from simsopt.field import BiotSavart, Current, coils_via_symmetries, Coil
@@ -31,19 +36,21 @@ except ImportError:
     pyevtk = None
 
 logger = logging.getLogger(__name__)
-#logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 
-parameters['jit'] = False
+parameters["jit"] = False
 
 
 def taylor_test(f, df, x, epsilons=None, direction=None):
     np.random.seed(1)
     if direction is None:
-        direction = np.random.rand(*(x.shape))-0.5
-    dfx = df(x)@direction
+        direction = np.random.rand(*(x.shape)) - 0.5
+    dfx = df(x) @ direction
     if epsilons is None:
-        epsilons = np.power(2., -np.asarray(range(7, 20)))
-    print("################################################################################")
+        epsilons = np.power(2.0, -np.asarray(range(7, 20)))
+    print(
+        "################################################################################"
+    )
     err_old = 1e9
     counter = 0
     for eps in epsilons:
@@ -51,9 +58,9 @@ def taylor_test(f, df, x, epsilons=None, direction=None):
             break
         fpluseps = f(x + eps * direction)
         fminuseps = f(x - eps * direction)
-        dfest = (fpluseps-fminuseps)/(2*eps)
+        dfest = (fpluseps - fminuseps) / (2 * eps)
         err = np.linalg.norm(dfest - dfx)
-        print(err, err/err_old)
+        print(err, err / err_old)
 
         assert err < 1e-9 or err < 0.3 * err_old
         if err < 1e-9:
@@ -62,7 +69,9 @@ def taylor_test(f, df, x, epsilons=None, direction=None):
         counter += 1
     if err > 1e-10:
         assert counter > 3
-    print("################################################################################")
+    print(
+        "################################################################################"
+    )
 
 
 def get_curve(curvetype, rotated, x=np.asarray([0.5])):
@@ -93,43 +102,43 @@ def get_curve(curvetype, rotated, x=np.asarray([0.5])):
     else:
         assert False
 
-    dofs = np.zeros((curve.dof_size, ))
+    dofs = np.zeros((curve.dof_size,))
     if curvetype in ["CurveXYZFourier", "JaxCurveXYZFourier"]:
-        dofs[1] = 1.
-        dofs[2*order + 3] = 1.
-        dofs[4*order + 3] = 1.
+        dofs[1] = 1.0
+        dofs[2 * order + 3] = 1.0
+        dofs[4 * order + 3] = 1.0
     elif curvetype in ["CurveRZFourier", "CurvePlanarFourier", "JaxCurvePlanarFourier"]:
-        dofs[0] = 1.
+        dofs[0] = 1.0
         dofs[1] = 0.1
-        dofs[order+1] = 0.1
+        dofs[order + 1] = 0.1
     elif curvetype in ["CurveHelical", "CurveHelicalInitx0"]:
-        dofs[0] = np.pi/2
+        dofs[0] = np.pi / 2
     elif curvetype == "CurveXYZFourierSymmetries1":
         R = 1
         r = 0.5
-        curve.set('xc(0)', R)
-        curve.set('xc(1)', -r)
-        curve.set('zs(1)', -r)
+        curve.set("xc(0)", R)
+        curve.set("xc(1)", -r)
+        curve.set("zs(1)", -r)
         dofs = curve.get_dofs()
     elif curvetype == "CurveXYZFourierSymmetries2":
         R = 1
         r = 0.5
-        curve.set('xc(0)', R)
-        curve.set('xs(1)', -0.1*r)
-        curve.set('xc(1)', -r)
-        curve.set('zs(1)', -r)
-        curve.set('zc(0)', 1)
-        curve.set('zs(1)', r)
+        curve.set("xc(0)", R)
+        curve.set("xs(1)", -0.1 * r)
+        curve.set("xc(1)", -r)
+        curve.set("zs(1)", -r)
+        curve.set("zc(0)", 1)
+        curve.set("zs(1)", r)
         dofs = curve.get_dofs()
     elif curvetype == "CurveXYZFourierSymmetries3":
         R = 1
         r = 0.5
-        curve.set('xc(0)', R)
-        curve.set('xs(1)', -0.1*r)
-        curve.set('xc(1)', -r)
-        curve.set('zs(1)', -r)
-        curve.set('zc(0)', 1)
-        curve.set('zs(1)', r)
+        curve.set("xc(0)", R)
+        curve.set("xs(1)", -0.1 * r)
+        curve.set("xc(1)", -r)
+        curve.set("zs(1)", -r)
+        curve.set("zc(0)", 1)
+        curve.set("zs(1)", r)
         dofs = curve.get_dofs()
     else:
         assert False
@@ -142,8 +151,18 @@ def get_curve(curvetype, rotated, x=np.asarray([0.5])):
 
 
 class Testing(unittest.TestCase):
-
-    curvetypes = ["CurveXYZFourier", "JaxCurveXYZFourier", "CurveRZFourier", "JaxCurvePlanarFourier", "CurvePlanarFourier", "CurveHelical", "CurveXYZFourierSymmetries1", "CurveXYZFourierSymmetries2", "CurveXYZFourierSymmetries3", "CurveHelicalInitx0"]
+    curvetypes = [
+        "CurveXYZFourier",
+        "JaxCurveXYZFourier",
+        "CurveRZFourier",
+        "JaxCurvePlanarFourier",
+        "CurvePlanarFourier",
+        "CurveHelical",
+        "CurveXYZFourierSymmetries1",
+        "CurveXYZFourierSymmetries2",
+        "CurveXYZFourierSymmetries3",
+        "CurveHelicalInitx0",
+    ]
 
     def get_curvexyzfouriersymmetries(self, stellsym=True, x=None, nfp=None, ntor=1):
         # returns a CurveXYZFourierSymmetries that is randomly perturbed
@@ -160,11 +179,11 @@ class Testing(unittest.TestCase):
         curve = CurveXYZFourierSymmetries(x, order, nfp, stellsym, ntor=ntor)
         R = 1
         r = 0.25
-        curve.set('xc(0)', R)
-        curve.set('xc(2)', r)
-        curve.set('ys(2)', -r)
-        curve.set('zs(1)', -2*r)
-        curve.set('zs(2)', r)
+        curve.set("xc(0)", R)
+        curve.set("xc(2)", r)
+        curve.set("ys(2)", -r)
+        curve.set("zs(1)", -2 * r)
+        curve.set("zs(2)", r)
         dofs = curve.x.copy()
         curve.x = dofs + rand_scale * np.random.rand(len(dofs)).reshape(dofs.shape)
 
@@ -178,7 +197,9 @@ class Testing(unittest.TestCase):
         nfp = 1
         ntor = 2
         # nfp = 1 and ntor = 2 here, so it should work
-        curve = CurveXYZFourierSymmetries(100, order, nfp, True, ntor=ntor, x0=np.ones(3*order+1))
+        curve = CurveXYZFourierSymmetries(
+            100, order, nfp, True, ntor=ntor, x0=np.ones(3 * order + 1)
+        )
         print(curve.x)
 
         with self.assertRaises(Exception):
@@ -186,7 +207,9 @@ class Testing(unittest.TestCase):
             nfp = 2
             ntor = 2
             # nfp = 2 and ntor = 2 here, so an exception should be raised
-            _ = CurveXYZFourierSymmetries(100, order, nfp, True, ntor=ntor, x0=np.ones(3*order+1))
+            _ = CurveXYZFourierSymmetries(
+                100, order, nfp, True, ntor=ntor, x0=np.ones(3 * order + 1)
+            )
 
     def test_curvehelical_is_curvexyzfouriersymmetries(self):
         # this test checks that both helical coil representations can produce the same helical curve on a torus
@@ -195,14 +218,22 @@ class Testing(unittest.TestCase):
         curve1 = CurveXYZFourierSymmetries(100, order, nfp, True)
         R = 1
         r = 0.5
-        curve1.set('xc(0)', R)
-        curve1.set('xc(1)', r)
-        curve1.set('zs(1)', -r)
-        curve2 = CurveHelical(np.linspace(0, 1, 100, endpoint=False), order, nfp, 1, R, r, x0=np.zeros(2 * order + 1))
+        curve1.set("xc(0)", R)
+        curve1.set("xc(1)", r)
+        curve1.set("zs(1)", -r)
+        curve2 = CurveHelical(
+            np.linspace(0, 1, 100, endpoint=False),
+            order,
+            nfp,
+            1,
+            R,
+            r,
+            x0=np.zeros(2 * order + 1),
+        )
         np.testing.assert_allclose(curve1.gamma(), curve2.gamma(), atol=1e-14)
 
     def test_trefoil_nonstellsym(self):
-        r''' This test checks that a CurveXYZFourierSymmetries can represent a non-stellarator symmetric
+        r"""This test checks that a CurveXYZFourierSymmetries can represent a non-stellarator symmetric
         trefoil knot.  A parametric representation of a trefoil knot is given by:
 
             x(t) = sin(t) + 2sin(t)
@@ -221,7 +252,7 @@ class Testing(unittest.TestCase):
             yhat(t) = -2 + cos(nfp*t),
 
         i.e., The dofs are xs(1)=1, yc(0)=-2, yc(1)=1, zs(1)=-1, and zero otherwise.
-        '''
+        """
 
         order = 1
         nfp = 3
@@ -229,19 +260,19 @@ class Testing(unittest.TestCase):
         x = np.linspace(0, 1, 500, endpoint=False)
         curve = CurveXYZFourierSymmetries(x, order, nfp, False, ntor=ntor)
 
-        X = np.sin(2*np.pi * x) + 2 * np.sin(2*2*np.pi * x)
-        Y = np.cos(2*np.pi * x) - 2 * np.cos(2*2*np.pi * x)
-        Z = -np.sin(3*2*np.pi*x)
+        X = np.sin(2 * np.pi * x) + 2 * np.sin(2 * 2 * np.pi * x)
+        Y = np.cos(2 * np.pi * x) - 2 * np.cos(2 * 2 * np.pi * x)
+        Z = -np.sin(3 * 2 * np.pi * x)
         XYZ = np.concatenate([X[:, None], Y[:, None], Z[:, None]], axis=1)
 
-        curve.set('xs(1)', 1.)
-        curve.set('yc(0)', -2.)
-        curve.set('yc(1)', 1.)
-        curve.set('zs(1)', -1.)
+        curve.set("xs(1)", 1.0)
+        curve.set("yc(0)", -2.0)
+        curve.set("yc(1)", 1.0)
+        curve.set("zs(1)", -1.0)
         np.testing.assert_allclose(curve.gamma(), XYZ, atol=1e-14)
 
     def test_trefoil_stellsym(self):
-        r''' This test checks that a CurveXYZFourierSymmetries can represent a stellarator symmetric
+        r"""This test checks that a CurveXYZFourierSymmetries can represent a stellarator symmetric
         trefoil knot.  A parametric representation of a trefoil knot is given by:
 
             x(t) = cos(t) - 2cos(t),
@@ -261,7 +292,7 @@ class Testing(unittest.TestCase):
             yhat(t) = -sin(nfp*t)
 
         i.e., xc(0)=-2, xc(1)=1, ys(1)=-1, zs(1)=-1.
-        '''
+        """
 
         order = 1
         nfp = 3
@@ -269,15 +300,15 @@ class Testing(unittest.TestCase):
         x = np.linspace(0, 1, 500, endpoint=False)
         curve = CurveXYZFourierSymmetries(x, order, nfp, True, ntor=ntor)
 
-        X = np.cos(2*np.pi * x) - 2 * np.cos(2*2*np.pi * x)
-        Y = -np.sin(2*np.pi * x) - 2 * np.sin(2*2*np.pi * x)
-        Z = -np.sin(3*2*np.pi*x)
+        X = np.cos(2 * np.pi * x) - 2 * np.cos(2 * 2 * np.pi * x)
+        Y = -np.sin(2 * np.pi * x) - 2 * np.sin(2 * 2 * np.pi * x)
+        Z = -np.sin(3 * 2 * np.pi * x)
         XYZ = np.concatenate([X[:, None], Y[:, None], Z[:, None]], axis=1)
 
-        curve.set('xc(0)', -2)
-        curve.set('xc(1)', 1)
-        curve.set('ys(1)', -1)
-        curve.set('zs(1)', -1)
+        curve.set("xc(0)", -2)
+        curve.set("xc(1)", 1)
+        curve.set("ys(1)", -1)
+        curve.set("zs(1)", -1)
         np.testing.assert_allclose(curve.gamma(), XYZ, atol=1e-14)
 
     def test_nonstellsym(self):
@@ -316,43 +347,55 @@ class Testing(unittest.TestCase):
             return
 
         # does the stellarator symmetric curve have rotational symmetry?
-        curve = self.get_curvexyzfouriersymmetries(stellsym=True, nfp=nfp, x=np.array([0.123, 0.123+1/nfp]), ntor=ntor)
+        curve = self.get_curvexyzfouriersymmetries(
+            stellsym=True, nfp=nfp, x=np.array([0.123, 0.123 + 1 / nfp]), ntor=ntor
+        )
         out = curve.gamma()
 
         # NOTE: the point at angle t+1/nfp is the point at angle t, but rotated by 2pi *(ntor/nfp) radians.
-        alpha = 2*np.pi*ntor/nfp
-        R = np.array([
-            [np.cos(alpha), -np.sin(alpha), 0],
-            [np.sin(alpha), np.cos(alpha), 0],
-            [0, 0, 1]
-        ])
+        alpha = 2 * np.pi * ntor / nfp
+        R = np.array(
+            [
+                [np.cos(alpha), -np.sin(alpha), 0],
+                [np.sin(alpha), np.cos(alpha), 0],
+                [0, 0, 1],
+            ]
+        )
 
-        print(R@out[0], out[1])
-        np.testing.assert_allclose(out[1], R@out[0], atol=1e-14)
+        print(R @ out[0], out[1])
+        np.testing.assert_allclose(out[1], R @ out[0], atol=1e-14)
 
         # does the stellarator symmetric curve indeed pass through (x0, 0, 0)?
-        curve = self.get_curvexyzfouriersymmetries(stellsym=True, nfp=nfp, x=np.array([0]), ntor=ntor)
+        curve = self.get_curvexyzfouriersymmetries(
+            stellsym=True, nfp=nfp, x=np.array([0]), ntor=ntor
+        )
         out = curve.gamma()
         assert np.abs(out[0, 0]) > 1e-3
         np.testing.assert_allclose(out[0, 1], 0, atol=1e-14)
         np.testing.assert_allclose(out[0, 2], 0, atol=1e-14)
 
         # does the non-stellarator symmetric curve not pass through (x0, 0, 0)?
-        curve = self.get_curvexyzfouriersymmetries(stellsym=False, nfp=nfp, x=np.array([0]), ntor=ntor)
+        curve = self.get_curvexyzfouriersymmetries(
+            stellsym=False, nfp=nfp, x=np.array([0]), ntor=ntor
+        )
         out = curve.gamma()
         assert np.abs(out[0, 0]) > 1e-3
         assert np.abs(out[0, 1]) > 1e-3
         assert np.abs(out[0, 2]) > 1e-3
 
         # is the stellarator symmetric curve actually stellarator symmetric?
-        curve = self.get_curvexyzfouriersymmetries(stellsym=True, nfp=nfp, x=np.array([0.123, -0.123]), ntor=ntor)
+        curve = self.get_curvexyzfouriersymmetries(
+            stellsym=True, nfp=nfp, x=np.array([0.123, -0.123]), ntor=ntor
+        )
         pts = curve.gamma()
         np.testing.assert_allclose(pts[0, 0], pts[1, 0], atol=1e-14)
         np.testing.assert_allclose(pts[0, 1], -pts[1, 1], atol=1e-14)
         np.testing.assert_allclose(pts[0, 2], -pts[1, 2], atol=1e-14)
 
         # is the field from the stellarator symmetric curve actually stellarator symmetric?
-        curve = self.get_curvexyzfouriersymmetries(stellsym=True, nfp=nfp, x=np.linspace(0, 1, 200, endpoint=False), ntor=ntor)
+        curve = self.get_curvexyzfouriersymmetries(
+            stellsym=True, nfp=nfp, x=np.linspace(0, 1, 200, endpoint=False), ntor=ntor
+        )
         current = Current(1e5)
         coil = Coil(curve, current)
         bs = BiotSavart([coil])
@@ -364,26 +407,73 @@ class Testing(unittest.TestCase):
 
         # does the non-stellarator symmetric curve have rotational symmetry still?
         # NOTE: the point at angle t+1/nfp is the point at angle t, but rotated by 2pi *(ntor/nfp) radians.
-        curve = self.get_curvexyzfouriersymmetries(stellsym=False, nfp=nfp, x=np.array([0.123, 0.123+1./nfp]), ntor=ntor)
+        curve = self.get_curvexyzfouriersymmetries(
+            stellsym=False, nfp=nfp, x=np.array([0.123, 0.123 + 1.0 / nfp]), ntor=ntor
+        )
         out = curve.gamma()
-        alpha = 2*np.pi*ntor/nfp
-        R = np.array([
-            [np.cos(alpha), -np.sin(alpha), 0],
-            [np.sin(alpha), np.cos(alpha), 0],
-            [0, 0, 1]
-        ])
-        print(R@out[0], out[1])
-        np.testing.assert_allclose(out[1], R@out[0], atol=1e-14)
+        alpha = 2 * np.pi * ntor / nfp
+        R = np.array(
+            [
+                [np.cos(alpha), -np.sin(alpha), 0],
+                [np.sin(alpha), np.cos(alpha), 0],
+                [0, 0, 1],
+            ]
+        )
+        print(R @ out[0], out[1])
+        np.testing.assert_allclose(out[1], R @ out[0], atol=1e-14)
 
     def test_curve_helical_xyzfourier(self):
         x = np.asarray([0.6])
         curve1 = CurveHelical(x, 1, 5, 2, 1.0, 0.3)
-        curve1.x = [np.pi/2, 0, 0]
+        curve1.x = [np.pi / 2, 0, 0]
         curve2 = CurveXYZFourier(x, 7)
-        curve2.x = \
-            [0, 0, 0, 0, 1, -0.15, 0, 0, 0, 0, 0, 0, 0, -0.15, 0,
-             0, 0, 0, 1, 0, 0, -0.15, 0, 0, 0, 0, 0, 0, 0, 0.15,
-             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -0.3, 0, 0, 0, 0]
+        curve2.x = [
+            0,
+            0,
+            0,
+            0,
+            1,
+            -0.15,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -0.15,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            -0.15,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0.15,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -0.3,
+            0,
+            0,
+            0,
+            0,
+        ]
         assert np.allclose(curve1.gamma(), curve2.gamma())
         assert np.allclose(curve1.gammadash(), curve2.gammadash())
 
@@ -395,9 +485,9 @@ class Testing(unittest.TestCase):
         deriv = curve.gammadash()[0]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = curve.gamma()[i+1]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = curve.gamma()[i + 1]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -415,9 +505,9 @@ class Testing(unittest.TestCase):
         deriv = curve.gammadashdash()[0]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = curve.gammadash()[i+1]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = curve.gammadash()[i + 1]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -435,9 +525,9 @@ class Testing(unittest.TestCase):
         deriv = curve.gammadashdashdash()[0]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = curve.gammadashdash()[i+1]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = curve.gammadashdash()[i + 1]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -453,6 +543,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             cfc.x = dofs
             return cfc.dgamma_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -462,6 +553,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             cfc.x = dofs
             return cfc.dgammadash_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -471,6 +563,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             cfc.x = dofs
             return cfc.dgammadashdash_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -480,6 +573,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             cfc.x = dofs
             return cfc.dgammadashdashdash_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
     def test_coil_coefficient_derivative(self):
@@ -501,6 +595,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             cfc.x = dofs
             return cfc.dkappa_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
     def test_coil_kappa_derivative(self):
@@ -517,9 +612,9 @@ class Testing(unittest.TestCase):
         deriv = ma.kappadash()[0]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = ma.kappa()[i+1]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = ma.kappa()[i + 1]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             # print("err", err)
             assert err < 0.55 * err_old
             err_old = err
@@ -543,13 +638,16 @@ class Testing(unittest.TestCase):
         def df(dofs):
             ma.x = dofs
             return ma.dincremental_arclength_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
     def test_curve_incremental_arclength_derivative(self):
         for curvetype in self.curvetypes:
             for rotated in [True, False]:
                 with self.subTest(curvetype=curvetype, rotated=rotated):
-                    self.subtest_curve_incremental_arclength_derivative(curvetype, rotated)
+                    self.subtest_curve_incremental_arclength_derivative(
+                        curvetype, rotated
+                    )
 
     def subtest_curve_kappa_derivative(self, curvetype, rotated):
         cfc = get_curve(curvetype, rotated)
@@ -562,6 +660,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             cfc.x = dofs
             return cfc.dkappa_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
     def test_curve_kappa_derivative(self):
@@ -581,6 +680,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             cfc.x = dofs
             return cfc.dtorsion_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
     def test_curve_torsion_derivative(self):
@@ -592,12 +692,12 @@ class Testing(unittest.TestCase):
     def subtest_curve_frenet_frame(self, curvetype, rotated):
         ma = get_curve(curvetype, rotated)
         (t, n, b) = ma.frenet_frame()
-        assert np.allclose(np.sum(n*t, axis=1), 0)
-        assert np.allclose(np.sum(n*b, axis=1), 0)
-        assert np.allclose(np.sum(t*b, axis=1), 0)
-        assert np.allclose(np.sum(t*t, axis=1), 1)
-        assert np.allclose(np.sum(n*n, axis=1), 1)
-        assert np.allclose(np.sum(b*b, axis=1), 1)
+        assert np.allclose(np.sum(n * t, axis=1), 0)
+        assert np.allclose(np.sum(n * b, axis=1), 0)
+        assert np.allclose(np.sum(t * b, axis=1), 0)
+        assert np.allclose(np.sum(t * t, axis=1), 1)
+        assert np.allclose(np.sum(n * n, axis=1), 1)
+        assert np.allclose(np.sum(b * b, axis=1), 1)
 
     def test_curve_frenet_frame(self):
         for curvetype in self.curvetypes:
@@ -616,6 +716,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             ma.x = dofs
             return ma.dfrenet_frame_by_dcoeff()[0].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -625,6 +726,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             ma.x = dofs
             return ma.dfrenet_frame_by_dcoeff()[1].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -634,6 +736,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             ma.x = dofs
             return ma.dfrenet_frame_by_dcoeff()[2].copy()
+
         taylor_test(f, df, coeffs)
 
     def test_curve_frenet_frame_derivative(self):
@@ -653,6 +756,7 @@ class Testing(unittest.TestCase):
         def df(dofs):
             ma.x = dofs
             return ma.dkappadash_by_dcoeff().copy()
+
         taylor_test(f, df, coeffs)
 
     def test_curve_dkappa_by_dphi_derivative(self):
@@ -665,7 +769,7 @@ class Testing(unittest.TestCase):
     def test_curve_to_vtk(self):
         curve0 = get_curve(self.curvetypes[0], False)
         curve1 = get_curve(self.curvetypes[1], True)
-        curves_to_vtk([curve0, curve1], '/tmp/curves')
+        curves_to_vtk([curve0, curve1], "/tmp/curves")
 
     def test_plot(self):
         """
@@ -699,20 +803,30 @@ class Testing(unittest.TestCase):
         else:
             engines.append("plotly")
 
-        print(f'Testing these plotting engines: {engines}')
+        print(f"Testing these plotting engines: {engines}")
         c = CurveXYZFourier(30, 2)
         c.set_dofs(np.random.rand(len(c.get_dofs())) - 0.5)
-        base_coils, base_currents, ma, nfp, bs =  get_data("ncsx", coil_order=25, magnetic_axis_order=10)
+        base_coils, base_currents, ma, nfp, bs = get_data(
+            "ncsx", coil_order=25, magnetic_axis_order=10
+        )
         for engine in engines:
             for close in [True, False]:
                 # Plot a single curve:
-                c.plot(engine=engine, close=close, plot_derivative=True, show=show, color=(0.9, 0.2, 0.3))
+                c.plot(
+                    engine=engine,
+                    close=close,
+                    plot_derivative=True,
+                    show=show,
+                    color=(0.9, 0.2, 0.3),
+                )
 
                 # Plot multiple curves together:
                 ax = None
                 for curve in base_coils:
                     ax = curve.plot(engine=engine, ax=ax, show=False, close=close)
-                c.plot(engine=engine, ax=ax, close=close, plot_derivative=True, show=show)
+                c.plot(
+                    engine=engine, ax=ax, close=close, plot_derivative=True, show=show
+                )
 
     def test_rotated_curve_gamma_impl(self):
         rc = get_curve("CurveXYZFourier", True, x=100)
@@ -723,11 +837,11 @@ class Testing(unittest.TestCase):
         cg = c.gamma()
         quadpoints = rc.quadpoints
 
-        assert np.allclose(rcg, cg@mat)
+        assert np.allclose(rcg, cg @ mat)
         # run gamma_impl so that the `else` in RotatedCurve.gamma_impl gets triggered
         tmp = np.zeros_like(cg[:10, :])
         rc.gamma_impl(tmp, quadpoints[:10])
-        assert np.allclose(cg[:10, :]@mat, tmp)
+        assert np.allclose(cg[:10, :] @ mat, tmp)
 
     def subtest_serialization(self, curvetype, rotated):
         epss = [0.5**i for i in range(10, 15)]
@@ -750,11 +864,15 @@ class Testing(unittest.TestCase):
         points_per_period = 4
 
         for cfg in configs:
-            base_curves, base_currents, ma, nfp, bs = get_data(cfg, coil_order=order, points_per_period=points_per_period)
+            base_curves, base_currents, ma, nfp, bs = get_data(
+                cfg, coil_order=order, points_per_period=points_per_period
+            )
 
             # write coils to MAKEGRID file
             coils_to_makegrid("coils.file_to_load", base_curves, base_currents, nfp=1)
-            loaded_curves = CurveXYZFourier.load_curves_from_makegrid_file("coils.file_to_load", order, points_per_period)
+            loaded_curves = CurveXYZFourier.load_curves_from_makegrid_file(
+                "coils.file_to_load", order, points_per_period
+            )
 
             assert len(base_curves) == len(loaded_curves)
 
@@ -783,36 +901,53 @@ class Testing(unittest.TestCase):
 
             os.remove("coils.file_to_load")
 
-
     def test_create_planar_curves_between_two_toroidal_surfaces(self):
         """
-        Rigorously test that the create_planar_curves_between_two_toroidal_surfaces 
+        Rigorously test that the create_planar_curves_between_two_toroidal_surfaces
         function works correctly.
         This test checks that the curves and curve properties are identical for both JAX and non-JAX versions.
-        This test also checks that the curves are created correctly various nfp and 
-        different stellarator equilibria. 
+        This test also checks that the curves are created correctly various nfp and
+        different stellarator equilibria.
         """
         # Use a real surface from test files for a minimal working test
         TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
-        filename = TEST_DIR / 'input.LandremanPaul2021_QA'
+        filename = TEST_DIR / "input.LandremanPaul2021_QA"
         nphi, ntheta = 8, 8
         with ScratchDir("."):
-            s = SurfaceRZFourier.from_vmec_input(filename, range="half period", nphi=nphi, ntheta=ntheta)
-            s_inner = SurfaceRZFourier.from_vmec_input(filename, range="half period", nphi=nphi, ntheta=ntheta)
-            s_outer = SurfaceRZFourier.from_vmec_input(filename, range="half period", nphi=nphi, ntheta=ntheta)
+            s = SurfaceRZFourier.from_vmec_input(
+                filename, range="half period", nphi=nphi, ntheta=ntheta
+            )
+            s_inner = SurfaceRZFourier.from_vmec_input(
+                filename, range="half period", nphi=nphi, ntheta=ntheta
+            )
+            s_outer = SurfaceRZFourier.from_vmec_input(
+                filename, range="half period", nphi=nphi, ntheta=ntheta
+            )
             s_inner.extend_via_projected_normal(0.1)
             s_outer.extend_via_projected_normal(0.2)
             # Standard usage
             curves, all_curves = create_planar_curves_between_two_toroidal_surfaces(
-                s, s_inner, s_outer, Nx=3, Ny=3, Nz=3, order=1, use_jax_curve=False, numquadpoints=10
+                s,
+                s_inner,
+                s_outer,
+                Nx=3,
+                Ny=3,
+                Nz=3,
+                order=1,
+                use_jax_curve=False,
+                numquadpoints=10,
             )
             self.assertTrue(len(curves) > 0)
             self.assertTrue(len(all_curves) >= len(curves))
             for curve in curves:
                 gamma = curve.gamma()
                 print(gamma.shape)
-                self.assertEqual(gamma.shape[1], 3, "Gamma should have 3 columns (x, y, z)")
-                self.assertEqual(gamma.shape[0], 10, "Gamma should have 10 rows (numquadpoints)")
+                self.assertEqual(
+                    gamma.shape[1], 3, "Gamma should have 3 columns (x, y, z)"
+                )
+                self.assertEqual(
+                    gamma.shape[0], 10, "Gamma should have 10 rows (numquadpoints)"
+                )
 
             # Standard usage without specified numquadpoints
             curves, all_curves = create_planar_curves_between_two_toroidal_surfaces(
@@ -823,27 +958,45 @@ class Testing(unittest.TestCase):
             for curve in curves:
                 gamma = curve.gamma()
                 print(gamma.shape)
-                self.assertEqual(gamma.shape[1], 3, "Gamma should have 3 columns (x, y, z)")
-                self.assertEqual(gamma.shape[0], 80, "Gamma should have 80 rows (numquadpoints)")  # default numquadpoints = (order + 1) * 40
+                self.assertEqual(
+                    gamma.shape[1], 3, "Gamma should have 3 columns (x, y, z)"
+                )
+                self.assertEqual(
+                    gamma.shape[0], 80, "Gamma should have 80 rows (numquadpoints)"
+                )  # default numquadpoints = (order + 1) * 40
 
             # Test with use_jax_curve=True
-            curves_jax, all_curves_jax = create_planar_curves_between_two_toroidal_surfaces(
-                s, s_inner, s_outer, Nx=3, Ny=3, Nz=3, order=1, use_jax_curve=True, numquadpoints=10
+            curves_jax, all_curves_jax = (
+                create_planar_curves_between_two_toroidal_surfaces(
+                    s,
+                    s_inner,
+                    s_outer,
+                    Nx=3,
+                    Ny=3,
+                    Nz=3,
+                    order=1,
+                    use_jax_curve=True,
+                    numquadpoints=10,
+                )
             )
             self.assertTrue(len(curves_jax) > 0)
             self.assertTrue(len(all_curves_jax) >= len(curves_jax))
             for curve in curves_jax:
                 gamma = curve.gamma()
                 print(gamma.shape)
-                self.assertEqual(gamma.shape[1], 3, "Gamma should have 3 columns (x, y, z)")
-                self.assertEqual(gamma.shape[0], 10, "Gamma should have 10 rows (numquadpoints)")
+                self.assertEqual(
+                    gamma.shape[1], 3, "Gamma should have 3 columns (x, y, z)"
+                )
+                self.assertEqual(
+                    gamma.shape[0], 10, "Gamma should have 10 rows (numquadpoints)"
+                )
 
             # Additional tests for different nfp values and files
             nfp_file_map = {
-                1: 'input.circular_tokamak',
-                2: 'input.LandremanPaul2021_QA_reactorScale_lowres',
-                3: 'c09r00_B_axis_half_tesla_PM4Stell.plasma',
-                4: 'input.LandremanPaul2021_QH_reactorScale_lowres'
+                1: "input.circular_tokamak",
+                2: "input.LandremanPaul2021_QA_reactorScale_lowres",
+                3: "c09r00_B_axis_half_tesla_PM4Stell.plasma",
+                4: "input.LandremanPaul2021_QH_reactorScale_lowres",
             }
             for nfp, fname in nfp_file_map.items():
                 for use_jax_curve in [False, True]:
@@ -855,9 +1008,15 @@ class Testing(unittest.TestCase):
                             load_func = SurfaceRZFourier.from_focus
                         else:
                             load_func = SurfaceRZFourier.from_vmec_input
-                        s_nfp = load_func(file_nfp, range="half period", nphi=nphi, ntheta=ntheta)
-                        s_inner_nfp = load_func(file_nfp, range="half period", nphi=nphi, ntheta=ntheta)
-                        s_outer_nfp = load_func(file_nfp, range="half period", nphi=nphi, ntheta=ntheta)
+                        s_nfp = load_func(
+                            file_nfp, range="half period", nphi=nphi, ntheta=ntheta
+                        )
+                        s_inner_nfp = load_func(
+                            file_nfp, range="half period", nphi=nphi, ntheta=ntheta
+                        )
+                        s_outer_nfp = load_func(
+                            file_nfp, range="half period", nphi=nphi, ntheta=ntheta
+                        )
                         # Use different extension distances for QH reactor scale (nfp=4)
                         if nfp == 4:
                             s_inner_nfp.extend_via_projected_normal(1.0)
@@ -865,15 +1024,39 @@ class Testing(unittest.TestCase):
                         else:
                             s_inner_nfp.extend_via_projected_normal(0.1)
                             s_outer_nfp.extend_via_projected_normal(0.2)
-                        curves_nfp, all_curves_nfp = create_planar_curves_between_two_toroidal_surfaces(
-                            s_nfp, s_inner_nfp, s_outer_nfp, Nx=10, Ny=10, Nz=10, order=1, use_jax_curve=use_jax_curve, numquadpoints=10
+                        curves_nfp, all_curves_nfp = (
+                            create_planar_curves_between_two_toroidal_surfaces(
+                                s_nfp,
+                                s_inner_nfp,
+                                s_outer_nfp,
+                                Nx=10,
+                                Ny=10,
+                                Nz=10,
+                                order=1,
+                                use_jax_curve=use_jax_curve,
+                                numquadpoints=10,
+                            )
                         )
-                        self.assertTrue(len(curves_nfp) > 0, "Number of unique curves should be nonzero")
-                        self.assertTrue(len(all_curves_nfp) >= len(curves_nfp), "Number of all curves should be at least the number of unique curves")
+                        self.assertTrue(
+                            len(curves_nfp) > 0,
+                            "Number of unique curves should be nonzero",
+                        )
+                        self.assertTrue(
+                            len(all_curves_nfp) >= len(curves_nfp),
+                            "Number of all curves should be at least the number of unique curves",
+                        )
                         for curve in curves_nfp:
                             gamma = curve.gamma()
-                            self.assertEqual(gamma.shape[1], 3, "Gamma should have 3 columns (x, y, z)")
-                            self.assertEqual(gamma.shape[0], 10, "Gamma should have 10 rows (numquadpoints)")
+                            self.assertEqual(
+                                gamma.shape[1],
+                                3,
+                                "Gamma should have 3 columns (x, y, z)",
+                            )
+                            self.assertEqual(
+                                gamma.shape[0],
+                                10,
+                                "Gamma should have 10 rows (numquadpoints)",
+                            )
 
     def test_create_equally_spaced_curves_jax(self):
         """
@@ -881,60 +1064,123 @@ class Testing(unittest.TestCase):
         This test checks that the curves and curve properties are identical for both JAX and non-JAX versions.
         """
         from simsopt.geo.curve import create_equally_spaced_curves
+
         ncurves, nfp = 2, 2
         stellsym = True
         R0, R1 = 5.0, 1.0
         order = 3
         numquadpoints = 12
         # JAX version
-        curves_jax = create_equally_spaced_curves(ncurves, nfp, stellsym,
-                                              R0=R0, R1=R1, order=order, numquadpoints=numquadpoints, use_jax_curve=True)
+        curves_jax = create_equally_spaced_curves(
+            ncurves,
+            nfp,
+            stellsym,
+            R0=R0,
+            R1=R1,
+            order=order,
+            numquadpoints=numquadpoints,
+            use_jax_curve=True,
+        )
         # Non-JAX version
-        curves_std = create_equally_spaced_curves(ncurves, nfp, stellsym,
-                                              R0=R0, R1=R1, order=order, numquadpoints=numquadpoints, use_jax_curve=False)
+        curves_std = create_equally_spaced_curves(
+            ncurves,
+            nfp,
+            stellsym,
+            R0=R0,
+            R1=R1,
+            order=order,
+            numquadpoints=numquadpoints,
+            use_jax_curve=False,
+        )
         self.assertEqual(len(curves_jax), ncurves)
         self.assertEqual(len(curves_std), ncurves)
         for curve_jax, curve_std in zip(curves_jax, curves_std):
             gamma_jax = curve_jax.gamma()
             gamma_std = curve_std.gamma()
-            self.assertEqual(gamma_jax.shape, (numquadpoints, 3), "Gamma_jax should be shape (numquadpoints, 3)")
-            self.assertEqual(gamma_std.shape, (numquadpoints, 3), "Gamma_std should be shape (numquadpoints, 3)")
+            self.assertEqual(
+                gamma_jax.shape,
+                (numquadpoints, 3),
+                "Gamma_jax should be shape (numquadpoints, 3)",
+            )
+            self.assertEqual(
+                gamma_std.shape,
+                (numquadpoints, 3),
+                "Gamma_std should be shape (numquadpoints, 3)",
+            )
             # Check that the major radius is close to R0 for all points
-            R_jax = np.sqrt(gamma_jax[:, 0]**2 + gamma_jax[:, 1]**2)
-            R_std = np.sqrt(gamma_std[:, 0]**2 + gamma_std[:, 1]**2)
-            self.assertTrue(np.allclose(np.mean(R_jax), R0, atol=0.2), "Mean of R_jax should be close to R0")
-            self.assertTrue(np.allclose(np.mean(R_std), R0, atol=0.2), "Mean of R_std should be close to R0")
+            R_jax = np.sqrt(gamma_jax[:, 0] ** 2 + gamma_jax[:, 1] ** 2)
+            R_std = np.sqrt(gamma_std[:, 0] ** 2 + gamma_std[:, 1] ** 2)
+            self.assertTrue(
+                np.allclose(np.mean(R_jax), R0, atol=0.2),
+                "Mean of R_jax should be close to R0",
+            )
+            self.assertTrue(
+                np.allclose(np.mean(R_std), R0, atol=0.2),
+                "Mean of R_std should be close to R0",
+            )
             # Check that the gamma outputs are close
             np.testing.assert_allclose(gamma_jax, gamma_std, atol=1e-12, rtol=1e-12)
             # Check that the dof names are identical
-            self.assertEqual(getattr(curve_jax, 'names', None), getattr(curve_std, 'names', None), "Dof names should be identical")
+            self.assertEqual(
+                getattr(curve_jax, "names", None),
+                getattr(curve_std, "names", None),
+                "Dof names should be identical",
+            )
             # Check gammadash
             gammadash_jax = curve_jax.gammadash()
             gammadash_std = curve_std.gammadash()
-            np.testing.assert_allclose(gammadash_jax, gammadash_std, atol=1e-12, rtol=1e-12, err_msg="Gammadash should be equal for both jax and standard curves")
+            np.testing.assert_allclose(
+                gammadash_jax,
+                gammadash_std,
+                atol=1e-12,
+                rtol=1e-12,
+                err_msg="Gammadash should be equal for both jax and standard curves",
+            )
             # Check gammadashdash if available
-            if hasattr(curve_jax, 'gammadashdash') and hasattr(curve_std, 'gammadashdash'):
+            if hasattr(curve_jax, "gammadashdash") and hasattr(
+                curve_std, "gammadashdash"
+            ):
                 gammadashdash_jax = curve_jax.gammadashdash()
                 gammadashdash_std = curve_std.gammadashdash()
-                np.testing.assert_allclose(gammadashdash_jax, gammadashdash_std, atol=1e-12, rtol=1e-12, err_msg="Gammadashdash should be equal for both jax and standard curves")
+                np.testing.assert_allclose(
+                    gammadashdash_jax,
+                    gammadashdash_std,
+                    atol=1e-12,
+                    rtol=1e-12,
+                    err_msg="Gammadashdash should be equal for both jax and standard curves",
+                )
             # Check kappa if available
-            if hasattr(curve_jax, 'kappa') and hasattr(curve_std, 'kappa'):
+            if hasattr(curve_jax, "kappa") and hasattr(curve_std, "kappa"):
                 kappa_jax = curve_jax.kappa()
                 kappa_std = curve_std.kappa()
-                np.testing.assert_allclose(kappa_jax, kappa_std, atol=1e-12, rtol=1e-12, err_msg="Kappa should be equal for both jax and standard curves")
+                np.testing.assert_allclose(
+                    kappa_jax,
+                    kappa_std,
+                    atol=1e-12,
+                    rtol=1e-12,
+                    err_msg="Kappa should be equal for both jax and standard curves",
+                )
             # Check order if available
-            if hasattr(curve_jax, 'order') and hasattr(curve_std, 'order'):
-                self.assertEqual(curve_jax.order, curve_std.order, "Order should be equal for both jax and standard curves")
+            if hasattr(curve_jax, "order") and hasattr(curve_std, "order"):
+                self.assertEqual(
+                    curve_jax.order,
+                    curve_std.order,
+                    "Order should be equal for both jax and standard curves",
+                )
             # Check num_dofs if available
-            if hasattr(curve_jax, 'num_dofs') and hasattr(curve_std, 'num_dofs'):
-                self.assertEqual(curve_jax.num_dofs(), curve_std.num_dofs(), "Number of dofs should be equal for both jax and standard curves")
+            if hasattr(curve_jax, "num_dofs") and hasattr(curve_std, "num_dofs"):
+                self.assertEqual(
+                    curve_jax.num_dofs(),
+                    curve_std.num_dofs(),
+                    "Number of dofs should be equal for both jax and standard curves",
+                )
 
     def test_curve_centroid(self):
         """
         Test that the center of a curve is computed correctly.
 
         Note that the PlanarFourier curve is not initialized with the correct quaternion dofs,
-        which should always be normalized to one, but instead is initialized to zero. 
+        which should always be normalized to one, but instead is initialized to zero.
         """
         # Use a simple planar circle for which the centroid is known
         nquad = 100
@@ -951,7 +1197,12 @@ class Testing(unittest.TestCase):
         curve.set_dofs(dofs)
         centroid = curve.centroid()
         # The centroid should be at (R0, 0, 0)
-        np.testing.assert_allclose(centroid, [R0, 0.0, 0.0], atol=1e-12, err_msg="Centroid of the planar curve should be at the center (R0, 0, 0)")
+        np.testing.assert_allclose(
+            centroid,
+            [R0, 0.0, 0.0],
+            atol=1e-12,
+            err_msg="Centroid of the planar curve should be at the center (R0, 0, 0)",
+        )
 
         # Repeat with RotatedCurve
         curve = RotatedCurve(curve, np.pi, flip=False)
@@ -964,7 +1215,13 @@ class Testing(unittest.TestCase):
         curve.set_dofs(dofs)
         centroid = curve.centroid()
         # The centroid should be at (R0, 0, 0)
-        np.testing.assert_allclose(centroid * -1, [R0, 0.0, 0.0], atol=1e-12, rtol=1e-12, err_msg="Centroid of the rotated planar curve should be at the center (R0, 0, 0)")
+        np.testing.assert_allclose(
+            centroid * -1,
+            [R0, 0.0, 0.0],
+            atol=1e-12,
+            rtol=1e-12,
+            err_msg="Centroid of the rotated planar curve should be at the center (R0, 0, 0)",
+        )
 
         # Repeat with JaxCurve
         curve = JaxCurvePlanarFourier(nquad, order)
@@ -977,7 +1234,13 @@ class Testing(unittest.TestCase):
         curve.set_dofs(dofs)
         centroid = curve.centroid()
         # The centroid should be at (R0, 0, 0)
-        np.testing.assert_allclose(centroid, [R0, 0.0, 0.0], atol=1e-12, rtol=1e-12, err_msg="Centroid of the jax planar curve should be at the center (R0, 0, 0)")
+        np.testing.assert_allclose(
+            centroid,
+            [R0, 0.0, 0.0],
+            atol=1e-12,
+            rtol=1e-12,
+            err_msg="Centroid of the jax planar curve should be at the center (R0, 0, 0)",
+        )
 
         # Repeat with RotatedCurve
         curve = RotatedCurve(curve, np.pi, flip=False)
@@ -990,7 +1253,13 @@ class Testing(unittest.TestCase):
         curve.set_dofs(dofs)
         centroid = curve.centroid()
         # The centroid should be at (R0, 0, 0)
-        np.testing.assert_allclose(centroid * -1, [R0, 0.0, 0.0], atol=1e-12, rtol=1e-12, err_msg="Centroid of the rotated jax planar curve should be at the center (R0, 0, 0)")
+        np.testing.assert_allclose(
+            centroid * -1,
+            [R0, 0.0, 0.0],
+            atol=1e-12,
+            rtol=1e-12,
+            err_msg="Centroid of the rotated jax planar curve should be at the center (R0, 0, 0)",
+        )
 
     def test_curverzfourier_dofnames(self):
         # test that the dof names correspond to how they are treated in the code
@@ -998,46 +1267,63 @@ class Testing(unittest.TestCase):
 
         # non-stellarator symmetric case
         curve = CurveRZFourier(32, order, 1, False)
-        curve.set('rc(0)', 1)
-        curve.set('rs(1)', 2)
-        curve.set('zc(2)', 3)
-        curve.set('zs(3)', 4)
+        curve.set("rc(0)", 1)
+        curve.set("rs(1)", 2)
+        curve.set("zc(2)", 3)
+        curve.set("zs(3)", 4)
 
         # test rc, rs, zc, and zs, note sine arrays start from mode number 1
-        assert curve.rc[0] == curve.get('rc(0)')
-        assert curve.zc[2] == curve.get('zc(2)')
-        assert curve.rs[0] == curve.get('rs(1)')
-        assert curve.zs[2] == curve.get('zs(3)')
+        assert curve.rc[0] == curve.get("rc(0)")
+        assert curve.zc[2] == curve.get("zc(2)")
+        assert curve.rs[0] == curve.get("rs(1)")
+        assert curve.zs[2] == curve.get("zs(3)")
 
         # stellarator symmetric case
         curve = CurveRZFourier(32, order, 1, True)
-        curve.set('rc(1)', 1)
-        curve.set('zs(2)', 2)
+        curve.set("rc(1)", 1)
+        curve.set("zs(2)", 2)
 
         # test rc and zs
-        assert curve.rc[1] == curve.get('rc(1)')
-        assert curve.zs[1] == curve.get('zs(2)')
+        assert curve.rc[1] == curve.get("rc(1)")
+        assert curve.zs[1] == curve.get("zs(2)")
 
     def test_create_equally_spaced_planar_curves_jax(self):
         """
-        Rigorously test that the create_equally_spaced_planar_curves function 
-        works correctly. This test checks that the curves and curve properties are 
+        Rigorously test that the create_equally_spaced_planar_curves function
+        works correctly. This test checks that the curves and curve properties are
         identical for both JAX and non-JAX versions.
-        This test also checks that the curves are created correctly for different 
+        This test also checks that the curves are created correctly for different
         nfp values and stellarator equilibria.
         """
         from simsopt.geo.curve import create_equally_spaced_planar_curves
+
         ncurves, nfp = 2, 2
         stellsym = True
         R0, R1 = 5.0, 1.0
         order = 3
         numquadpoints = 12
         # JAX version
-        curves_jax = create_equally_spaced_planar_curves(ncurves, nfp, stellsym,
-                                              R0=R0, R1=R1, order=order, numquadpoints=numquadpoints, use_jax_curve=True)
+        curves_jax = create_equally_spaced_planar_curves(
+            ncurves,
+            nfp,
+            stellsym,
+            R0=R0,
+            R1=R1,
+            order=order,
+            numquadpoints=numquadpoints,
+            use_jax_curve=True,
+        )
         # Non-JAX version
-        curves_std = create_equally_spaced_planar_curves(ncurves, nfp, stellsym,
-                                              R0=R0, R1=R1, order=order, numquadpoints=numquadpoints, use_jax_curve=False)
+        curves_std = create_equally_spaced_planar_curves(
+            ncurves,
+            nfp,
+            stellsym,
+            R0=R0,
+            R1=R1,
+            order=order,
+            numquadpoints=numquadpoints,
+            use_jax_curve=False,
+        )
         self.assertEqual(len(curves_jax), ncurves)
         self.assertEqual(len(curves_std), ncurves)
         for curve_jax, curve_std in zip(curves_jax, curves_std):
@@ -1046,33 +1332,41 @@ class Testing(unittest.TestCase):
             self.assertEqual(gamma_jax.shape, (numquadpoints, 3))
             self.assertEqual(gamma_std.shape, (numquadpoints, 3))
             # Check that the major radius is close to R0 for all points
-            R_jax = np.sqrt(gamma_jax[:, 0]**2 + gamma_jax[:, 1]**2)
-            R_std = np.sqrt(gamma_std[:, 0]**2 + gamma_std[:, 1]**2)
+            R_jax = np.sqrt(gamma_jax[:, 0] ** 2 + gamma_jax[:, 1] ** 2)
+            R_std = np.sqrt(gamma_std[:, 0] ** 2 + gamma_std[:, 1] ** 2)
             self.assertTrue(np.allclose(np.mean(R_jax), R0, atol=0.2))
             self.assertTrue(np.allclose(np.mean(R_std), R0, atol=0.2))
             # Check that the gamma outputs are close
             np.testing.assert_allclose(gamma_jax, gamma_std, atol=1e-12, rtol=1e-12)
             # Check that the dof names are identical
-            self.assertEqual(getattr(curve_jax, 'names', None), getattr(curve_std, 'names', None))
+            self.assertEqual(
+                getattr(curve_jax, "names", None), getattr(curve_std, "names", None)
+            )
             # Check gammadash
             gammadash_jax = curve_jax.gammadash()
             gammadash_std = curve_std.gammadash()
-            np.testing.assert_allclose(gammadash_jax, gammadash_std, atol=1e-12, rtol=1e-12)
+            np.testing.assert_allclose(
+                gammadash_jax, gammadash_std, atol=1e-12, rtol=1e-12
+            )
             # Check gammadashdash if available
-            if hasattr(curve_jax, 'gammadashdash') and hasattr(curve_std, 'gammadashdash'):
+            if hasattr(curve_jax, "gammadashdash") and hasattr(
+                curve_std, "gammadashdash"
+            ):
                 gammadashdash_jax = curve_jax.gammadashdash()
                 gammadashdash_std = curve_std.gammadashdash()
-                np.testing.assert_allclose(gammadashdash_jax, gammadashdash_std, atol=1e-12, rtol=1e-12)
+                np.testing.assert_allclose(
+                    gammadashdash_jax, gammadashdash_std, atol=1e-12, rtol=1e-12
+                )
             # Check kappa if available
-            if hasattr(curve_jax, 'kappa') and hasattr(curve_std, 'kappa'):
+            if hasattr(curve_jax, "kappa") and hasattr(curve_std, "kappa"):
                 kappa_jax = curve_jax.kappa()
                 kappa_std = curve_std.kappa()
                 np.testing.assert_allclose(kappa_jax, kappa_std, atol=1e-12, rtol=1e-12)
             # Check order if available
-            if hasattr(curve_jax, 'order') and hasattr(curve_std, 'order'):
+            if hasattr(curve_jax, "order") and hasattr(curve_std, "order"):
                 self.assertEqual(curve_jax.order, curve_std.order)
             # Check num_dofs if available
-            if hasattr(curve_jax, 'num_dofs') and hasattr(curve_std, 'num_dofs'):
+            if hasattr(curve_jax, "num_dofs") and hasattr(curve_std, "num_dofs"):
                 self.assertEqual(curve_jax.num_dofs(), curve_std.num_dofs())
 
     def test_curve_set_dofs_vs_set_by_name(self):
@@ -1081,6 +1375,7 @@ class Testing(unittest.TestCase):
         """
         from simsopt.geo.curvexyzfourier import CurveXYZFourier
         from simsopt.geo.curveplanarfourier import CurvePlanarFourier
+
         order = 3
         numquadpoints = 10
         # Test CurveXYZFourier
@@ -1096,10 +1391,30 @@ class Testing(unittest.TestCase):
             curve2.set(name, val)
         # 3. Use the direct .x assignment
         curve3.x = values.copy()
-        np.testing.assert_allclose(curve1.get_dofs(), curve2.get_dofs(), atol=1e-14, err_msg="Dofs set by set_dofs and set(name, value) should be identical")
-        np.testing.assert_allclose(curve1.get_dofs(), curve3.get_dofs(), atol=1e-14, err_msg="Dofs set by set_dofs and .x assignment should be identical")
-        np.testing.assert_allclose(curve1.gamma(), curve2.gamma(), atol=1e-14, err_msg="Gamma set by set_dofs and set(name, value) should be identical")
-        np.testing.assert_allclose(curve1.gamma(), curve3.gamma(), atol=1e-14, err_msg="Gamma set by set_dofs and .x assignment should be identical")
+        np.testing.assert_allclose(
+            curve1.get_dofs(),
+            curve2.get_dofs(),
+            atol=1e-14,
+            err_msg="Dofs set by set_dofs and set(name, value) should be identical",
+        )
+        np.testing.assert_allclose(
+            curve1.get_dofs(),
+            curve3.get_dofs(),
+            atol=1e-14,
+            err_msg="Dofs set by set_dofs and .x assignment should be identical",
+        )
+        np.testing.assert_allclose(
+            curve1.gamma(),
+            curve2.gamma(),
+            atol=1e-14,
+            err_msg="Gamma set by set_dofs and set(name, value) should be identical",
+        )
+        np.testing.assert_allclose(
+            curve1.gamma(),
+            curve3.gamma(),
+            atol=1e-14,
+            err_msg="Gamma set by set_dofs and .x assignment should be identical",
+        )
         # Test CurvePlanarFourier
         curve4 = CurvePlanarFourier(numquadpoints, order)
         curve5 = CurvePlanarFourier(numquadpoints, order)
@@ -1113,30 +1428,51 @@ class Testing(unittest.TestCase):
             curve5.set(name, val)
         # 3. Use the direct .x assignment
         curve6.x = values_p.copy()
-        np.testing.assert_allclose(curve4.get_dofs(), curve5.get_dofs(), atol=1e-14, err_msg="Dofs set by set_dofs and set(name, value) should be identical")
-        np.testing.assert_allclose(curve4.get_dofs(), curve6.get_dofs(), atol=1e-14, err_msg="Dofs set by set_dofs and .x assignment should be identical")
-        np.testing.assert_allclose(curve4.gamma(), curve5.gamma(), atol=1e-14, err_msg="Gamma set by set_dofs and set(name, value) should be identical")
-        np.testing.assert_allclose(curve4.gamma(), curve6.gamma(), atol=1e-14, err_msg="Gamma set by set_dofs and .x assignment should be identical")
+        np.testing.assert_allclose(
+            curve4.get_dofs(),
+            curve5.get_dofs(),
+            atol=1e-14,
+            err_msg="Dofs set by set_dofs and set(name, value) should be identical",
+        )
+        np.testing.assert_allclose(
+            curve4.get_dofs(),
+            curve6.get_dofs(),
+            atol=1e-14,
+            err_msg="Dofs set by set_dofs and .x assignment should be identical",
+        )
+        np.testing.assert_allclose(
+            curve4.gamma(),
+            curve5.gamma(),
+            atol=1e-14,
+            err_msg="Gamma set by set_dofs and set(name, value) should be identical",
+        )
+        np.testing.assert_allclose(
+            curve4.gamma(),
+            curve6.gamma(),
+            atol=1e-14,
+            err_msg="Gamma set by set_dofs and .x assignment should be identical",
+        )
 
     def test_setup_uniform_grid_in_bounding_box(self):
         """
         Robustly test _setup_uniform_grid_in_bounding_box for different field-period symmetry stellarators.
         Checks grid shape, radius, and that points are within expected bounds for nfp=1, 2, 3, 4.
-        Also checks that circular coils of radius R do not overlap with each other or the symmetry plane, 
+        Also checks that circular coils of radius R do not overlap with each other or the symmetry plane,
         for varying Nmin_factor and half_period_factor.
 
         Note that for half_period_factor small enough, these tests will fail! Also some configurations
-        will need to play with half_period_factor since it is a function of the surface geomtry and 
+        will need to play with half_period_factor since it is a function of the surface geomtry and
         the initial grid resolution.
         """
         from simsopt.field import apply_symmetries_to_curves
+
         TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
         nphi, ntheta = 4, 4
         nfp_file_map = {
-            1: 'input.circular_tokamak',
-            2: 'input.LandremanPaul2021_QA_reactorScale_lowres',
-            3: 'c09r00_B_axis_half_tesla_PM4Stell.plasma',
-            4: 'input.LandremanPaul2021_QH_reactorScale_lowres'
+            1: "input.circular_tokamak",
+            2: "input.LandremanPaul2021_QA_reactorScale_lowres",
+            3: "c09r00_B_axis_half_tesla_PM4Stell.plasma",
+            4: "input.LandremanPaul2021_QH_reactorScale_lowres",
         }
         Nmin_factors = [2.01, 3.0]
         for nfp, fname in nfp_file_map.items():
@@ -1147,13 +1483,20 @@ class Testing(unittest.TestCase):
                 else:
                     load_func = SurfaceRZFourier.from_vmec_input
                 s = load_func(file_nfp, range="half period", nphi=nphi, ntheta=ntheta)
-                s_outer = load_func(file_nfp, range="half period", nphi=nphi, ntheta=ntheta)
+                s_outer = load_func(
+                    file_nfp, range="half period", nphi=nphi, ntheta=ntheta
+                )
                 s_outer.extend_via_projected_normal(2.0)
-                Nx, Ny, Nz =  5, 5, 5,
+                Nx, Ny, Nz = (
+                    5,
+                    5,
+                    5,
+                )
                 for Nmin_factor in Nmin_factors:
                     print(f"nfp={nfp}, Nmin_factor={Nmin_factor}")
                     xyz_uniform, R = _setup_uniform_grid_in_bounding_box(
-                        s_outer, Nx, Ny, Nz, Nmin_factor=Nmin_factor)
+                        s_outer, Nx, Ny, Nz, Nmin_factor=Nmin_factor
+                    )
                     # Check shapes
                     self.assertEqual(xyz_uniform.shape[1], 3)
                     self.assertTrue(xyz_uniform.shape[0] > 0)
@@ -1166,11 +1509,14 @@ class Testing(unittest.TestCase):
                                 dist = np.linalg.norm(xyz_uniform[i] - xyz_uniform[j])
                                 if dist < dists[i]:
                                     dists[i] = dist
-                    print(f"Before symmetrization: min nearest distance = {np.min(dists):.6g}, max = {np.max(dists):.6g}, mean = {np.mean(dists):.6g}")
+                    print(
+                        f"Before symmetrization: min nearest distance = {np.min(dists):.6g}, max = {np.max(dists):.6g}, mean = {np.mean(dists):.6g}"
+                    )
                     for i, min_dist in enumerate(dists):
                         self.assertGreaterEqual(
-                            min_dist, 2*R - 1e-12,
-                            f"Coil {i} has min distance {min_dist:.6g} < 2R={2*R:.6g} to another coil center"
+                            min_dist,
+                            2 * R - 1e-12,
+                            f"Coil {i} has min distance {min_dist:.6g} < 2R={2 * R:.6g} to another coil center",
                         )
 
                     order = 0
@@ -1197,7 +1543,7 @@ class Testing(unittest.TestCase):
                         dofs[2 * order + 3] = calpha2 * sdelta2
                         dofs[2 * order + 4] = -salpha2 * sdelta2
                         # Now specify the center
-                        dofs[2 * order + 5:2 * order + 8] = xyz_uniform[ic, :]
+                        dofs[2 * order + 5 : 2 * order + 8] = xyz_uniform[ic, :]
                         curves[ic].set_dofs(dofs)
                     all_curves = apply_symmetries_to_curves(curves, s.nfp, s.stellsym)
                     ncoils = len(all_curves)
@@ -1207,14 +1553,23 @@ class Testing(unittest.TestCase):
                     for i in range(len(all_curves)):
                         for j in range(len(all_curves)):
                             if i != j:
-                                dist = np.min(np.linalg.norm(all_curves[i].centroid() - all_curves[j].centroid(), axis=-1))
+                                dist = np.min(
+                                    np.linalg.norm(
+                                        all_curves[i].centroid()
+                                        - all_curves[j].centroid(),
+                                        axis=-1,
+                                    )
+                                )
                                 if dist < dists[i]:
                                     dists[i] = dist
-                    print(f"After symmetrization: min nearest distance = {np.min(dists):.6g}, max = {np.max(dists):.6g}, mean = {np.mean(dists):.6g}")
+                    print(
+                        f"After symmetrization: min nearest distance = {np.min(dists):.6g}, max = {np.max(dists):.6g}, mean = {np.mean(dists):.6g}"
+                    )
                     for i, min_dist in enumerate(dists):
                         self.assertGreaterEqual(
-                            min_dist, 2*R - 1e-12,
-                            f"Coil {i} has min distance {min_dist:.6g} < 2R={2*R:.6g} to another coil center"
+                            min_dist,
+                            2 * R - 1e-12,
+                            f"Coil {i} has min distance {min_dist:.6g} < 2R={2 * R:.6g} to another coil center",
                         )
 
                     # Optionally plot coil centers in 3D
@@ -1233,96 +1588,123 @@ class Testing(unittest.TestCase):
 
         # Check that a warning is raised if Nmin_factor < 2
         import warnings
+
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             # Use a valid s and s_outer from above, but Nmin_factor < 2
-            _ = _setup_uniform_grid_in_bounding_box(s_outer, Nx, Ny, Nz, Nmin_factor=1.5)
-            assert any(issubclass(warn.category, UserWarning) for warn in w), "Expected a UserWarning for Nmin_factor < 2"
+            _ = _setup_uniform_grid_in_bounding_box(
+                s_outer, Nx, Ny, Nz, Nmin_factor=1.5
+            )
+            assert any(issubclass(warn.category, UserWarning) for warn in w), (
+                "Expected a UserWarning for Nmin_factor < 2"
+            )
 
     def test_curveplanarfourier_make_names(self):
         # Test that the _make_names function returns the correct dof names for a given order
         order = 3
         expected_names = [
-            'rc(0)', 'rc(1)', 'rc(2)', 'rc(3)',
-            'rs(1)', 'rs(2)', 'rs(3)',
-            'q0', 'qi', 'qj', 'qk',
-            'X', 'Y', 'Z'
+            "rc(0)",
+            "rc(1)",
+            "rc(2)",
+            "rc(3)",
+            "rs(1)",
+            "rs(2)",
+            "rs(3)",
+            "q0",
+            "qi",
+            "qj",
+            "qk",
+            "X",
+            "Y",
+            "Z",
         ]
         curve = CurvePlanarFourier(32, order)
-        self.assertEqual(curve._make_names(order), expected_names, "The dof names are not consistent with the order")
+        self.assertEqual(
+            curve._make_names(order),
+            expected_names,
+            "The dof names are not consistent with the order",
+        )
         curve2 = JaxCurvePlanarFourier(32, order)
-        self.assertEqual(curve._make_names(order), expected_names, "The dof names are not consistent with the order")
+        self.assertEqual(
+            curve._make_names(order),
+            expected_names,
+            "The dof names are not consistent with the order",
+        )
 
         # Test setting dofs by names
-        curve.set('rc(0)', 1)
-        curve.set('q0', 1)
-        curve.set('qi', 0)
-        curve.set('qj', 0)
-        curve.set('qk', 0)
-        curve.set('X', 7)   
-        curve.set('Y', 8)
-        curve.set('Z', 9)
+        curve.set("rc(0)", 1)
+        curve.set("q0", 1)
+        curve.set("qi", 0)
+        curve.set("qj", 0)
+        curve.set("qk", 0)
+        curve.set("X", 7)
+        curve.set("Y", 8)
+        curve.set("Z", 9)
 
-        curve2.set('rc(0)', 1)
-        curve2.set('q0', 1)
-        curve2.set('qi', 0)
-        curve2.set('qj', 0)
-        curve2.set('qk', 0)
-        curve2.set('X', 7)   
-        curve2.set('Y', 8)
-        curve2.set('Z', 9)
+        curve2.set("rc(0)", 1)
+        curve2.set("q0", 1)
+        curve2.set("qi", 0)
+        curve2.set("qj", 0)
+        curve2.set("qk", 0)
+        curve2.set("X", 7)
+        curve2.set("Y", 8)
+        curve2.set("Z", 9)
 
         # Test getting dofs by names
         assert np.allclose(curve.gamma()[:, 2], 9)
         assert curve.x[0] == 1
-        assert curve.x[2*order + 1] == 1
-        assert curve.x[2*order + 2] == 0
-        assert curve.x[2*order + 3] == 0
-        assert curve.x[2*order + 4] == 0
-        assert curve.x[2*order + 5] == 7
-        assert curve.x[2*order + 6] == 8
-        assert curve.x[2*order + 7] == 9
+        assert curve.x[2 * order + 1] == 1
+        assert curve.x[2 * order + 2] == 0
+        assert curve.x[2 * order + 3] == 0
+        assert curve.x[2 * order + 4] == 0
+        assert curve.x[2 * order + 5] == 7
+        assert curve.x[2 * order + 6] == 8
+        assert curve.x[2 * order + 7] == 9
 
         assert np.allclose(curve2.gamma()[:, 2], 9)
         assert curve2.x[0] == 1
-        assert curve2.x[2*order + 1] == 1
-        assert curve2.x[2*order + 2] == 0
-        assert curve2.x[2*order + 3] == 0
-        assert curve2.x[2*order + 4] == 0
-        assert curve2.x[2*order + 5] == 7
-        assert curve2.x[2*order + 6] == 8
-        assert curve2.x[2*order + 7] == 9
+        assert curve2.x[2 * order + 1] == 1
+        assert curve2.x[2 * order + 2] == 0
+        assert curve2.x[2 * order + 3] == 0
+        assert curve2.x[2 * order + 4] == 0
+        assert curve2.x[2 * order + 5] == 7
+        assert curve2.x[2 * order + 6] == 8
+        assert curve2.x[2 * order + 7] == 9
 
         # repeat test with order 0
         order = 0
-        expected_names = [
-            'rc(0)',
-            'q0', 'qi', 'qj', 'qk',
-            'X', 'Y', 'Z'
-        ]
+        expected_names = ["rc(0)", "q0", "qi", "qj", "qk", "X", "Y", "Z"]
         curve = CurvePlanarFourier(32, order)
         curve2 = JaxCurvePlanarFourier(32, order)
-        self.assertEqual(curve._make_names(order), expected_names, "The dof names are not consistent with the order")
-        self.assertEqual(curve2._make_names(order), expected_names, "The dof names are not consistent with the order")
+        self.assertEqual(
+            curve._make_names(order),
+            expected_names,
+            "The dof names are not consistent with the order",
+        )
+        self.assertEqual(
+            curve2._make_names(order),
+            expected_names,
+            "The dof names are not consistent with the order",
+        )
 
         # Test setting dofs by names
-        curve.set('rc(0)', 1)
-        curve.set('q0', 1)
-        curve.set('qi', 0)
-        curve.set('qj', 0)
-        curve.set('qk', 0)
-        curve.set('X', 7)   
-        curve.set('Y', 8)
-        curve.set('Z', 9)
+        curve.set("rc(0)", 1)
+        curve.set("q0", 1)
+        curve.set("qi", 0)
+        curve.set("qj", 0)
+        curve.set("qk", 0)
+        curve.set("X", 7)
+        curve.set("Y", 8)
+        curve.set("Z", 9)
 
-        curve2.set('rc(0)', 1)
-        curve2.set('q0', 1)
-        curve2.set('qi', 0)
-        curve2.set('qj', 0)
-        curve2.set('qk', 0)
-        curve2.set('X', 7)   
-        curve2.set('Y', 8)
-        curve2.set('Z', 9)
+        curve2.set("rc(0)", 1)
+        curve2.set("q0", 1)
+        curve2.set("qi", 0)
+        curve2.set("qj", 0)
+        curve2.set("qk", 0)
+        curve2.set("X", 7)
+        curve2.set("Y", 8)
+        curve2.set("Z", 9)
 
         # Test getting dofs by names
         assert np.allclose(curve.gamma()[:, 2], 9)
@@ -1344,6 +1726,7 @@ class Testing(unittest.TestCase):
         assert curve2.x[5] == 7
         assert curve2.x[6] == 8
         assert curve2.x[7] == 9
+
 
 if __name__ == "__main__":
     unittest.main()

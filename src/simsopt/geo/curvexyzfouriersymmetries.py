@@ -3,34 +3,50 @@ import numpy as np
 from .curve import JaxCurve
 from math import gcd
 
-__all__ = ['CurveXYZFourierSymmetries']
+__all__ = ["CurveXYZFourierSymmetries"]
 
 
 def jaxXYZFourierSymmetriescurve_pure(dofs, quadpoints, order, nfp, stellsym, ntor):
 
-    theta, m = jnp.meshgrid(quadpoints, jnp.arange(order + 1), indexing='ij')
+    theta, m = jnp.meshgrid(quadpoints, jnp.arange(order + 1), indexing="ij")
 
     if stellsym:
-        xc = dofs[:order+1]
-        ys = dofs[order+1:2*order+1]
-        zs = dofs[2*order+1:]
+        xc = dofs[: order + 1]
+        ys = dofs[order + 1 : 2 * order + 1]
+        zs = dofs[2 * order + 1 :]
 
-        xhat = np.sum(xc[None, :] * jnp.cos(2 * jnp.pi * nfp*m*theta), axis=1)
-        yhat = np.sum(ys[None, :] * jnp.sin(2 * jnp.pi * nfp*m[:, 1:]*theta[:, 1:]), axis=1)
+        xhat = np.sum(xc[None, :] * jnp.cos(2 * jnp.pi * nfp * m * theta), axis=1)
+        yhat = np.sum(
+            ys[None, :] * jnp.sin(2 * jnp.pi * nfp * m[:, 1:] * theta[:, 1:]), axis=1
+        )
 
-        z = jnp.sum(zs[None, :] * jnp.sin(2*jnp.pi*nfp * m[:, 1:]*theta[:, 1:]), axis=1)
+        z = jnp.sum(
+            zs[None, :] * jnp.sin(2 * jnp.pi * nfp * m[:, 1:] * theta[:, 1:]), axis=1
+        )
     else:
-        xc = dofs[0: order+1]
-        xs = dofs[order+1: 2*order+1]
-        yc = dofs[2*order+1: 3*order+2]
-        ys = dofs[3*order+2: 4*order+2]
-        zc = dofs[4*order+2: 5*order+3]
-        zs = dofs[5*order+3:]
+        xc = dofs[0 : order + 1]
+        xs = dofs[order + 1 : 2 * order + 1]
+        yc = dofs[2 * order + 1 : 3 * order + 2]
+        ys = dofs[3 * order + 2 : 4 * order + 2]
+        zc = dofs[4 * order + 2 : 5 * order + 3]
+        zs = dofs[5 * order + 3 :]
 
-        xhat = np.sum(xc[None, :] * jnp.cos(2*jnp.pi*nfp*m*theta), axis=1) + np.sum(xs[None, :] * jnp.sin(2*jnp.pi*nfp*m[:, 1:]*theta[:, 1:]), axis=1)
-        yhat = np.sum(yc[None, :] * jnp.cos(2*jnp.pi*nfp*m*theta), axis=1) + np.sum(ys[None, :] * jnp.sin(2*jnp.pi*nfp*m[:, 1:]*theta[:, 1:]), axis=1)
+        xhat = np.sum(
+            xc[None, :] * jnp.cos(2 * jnp.pi * nfp * m * theta), axis=1
+        ) + np.sum(
+            xs[None, :] * jnp.sin(2 * jnp.pi * nfp * m[:, 1:] * theta[:, 1:]), axis=1
+        )
+        yhat = np.sum(
+            yc[None, :] * jnp.cos(2 * jnp.pi * nfp * m * theta), axis=1
+        ) + np.sum(
+            ys[None, :] * jnp.sin(2 * jnp.pi * nfp * m[:, 1:] * theta[:, 1:]), axis=1
+        )
 
-        z = np.sum(zc[None, :] * jnp.cos(2*jnp.pi*nfp*m*theta), axis=1) + np.sum(zs[None, :] * jnp.sin(2*jnp.pi*nfp*m[:, 1:]*theta[:, 1:]), axis=1)
+        z = np.sum(
+            zc[None, :] * jnp.cos(2 * jnp.pi * nfp * m * theta), axis=1
+        ) + np.sum(
+            zs[None, :] * jnp.sin(2 * jnp.pi * nfp * m[:, 1:] * theta[:, 1:]), axis=1
+        )
 
     angle = 2 * jnp.pi * quadpoints * ntor
     x = jnp.cos(angle) * xhat - jnp.sin(angle) * yhat
@@ -44,7 +60,7 @@ def jaxXYZFourierSymmetriescurve_pure(dofs, quadpoints, order, nfp, stellsym, nt
 
 
 class CurveXYZFourierSymmetries(JaxCurve):
-    r'''A curve representation that allows for stellarator and discrete rotational symmetries.  This class can be used to
+    r"""A curve representation that allows for stellarator and discrete rotational symmetries.  This class can be used to
     represent a helical coil that does not lie on a torus.  The coordinates of the curve are given by:
 
     .. math::
@@ -83,16 +99,19 @@ class CurveXYZFourierSymmetries(JaxCurve):
               then then the curve actually has nfp_new:=nfp // gcd(nfp, ntor),
               and ntor_new:=ntor // gcd(nfp, ntor).  The operator `//` is integer division.
               To avoid confusion, we assert that ntor and nfp are coprime at instantiation.
-    '''
+    """
 
     def __init__(self, quadpoints, order, nfp, stellsym, ntor=1, **kwargs):
         if isinstance(quadpoints, int):
             quadpoints = np.linspace(0, 1, quadpoints, endpoint=False)
-        def pure(dofs, points): return jaxXYZFourierSymmetriescurve_pure(
-            dofs, points, order, nfp, stellsym, ntor)
+
+        def pure(dofs, points):
+            return jaxXYZFourierSymmetriescurve_pure(
+                dofs, points, order, nfp, stellsym, ntor
+            )
 
         if gcd(ntor, nfp) != 1:
-            raise Exception('nfp and ntor must be coprime')
+            raise Exception("nfp and ntor must be coprime")
 
         self.order = order
         self.nfp = nfp
@@ -109,30 +128,34 @@ class CurveXYZFourierSymmetries(JaxCurve):
 
     def _make_names(self, order):
         if self.stellsym:
-            x_cos_names = [f'xc({i})' for i in range(0, order + 1)]
+            x_cos_names = [f"xc({i})" for i in range(0, order + 1)]
             x_names = x_cos_names
-            y_sin_names = [f'ys({i})' for i in range(1, order + 1)]
+            y_sin_names = [f"ys({i})" for i in range(1, order + 1)]
             y_names = y_sin_names
-            z_sin_names = [f'zs({i})' for i in range(1, order + 1)]
+            z_sin_names = [f"zs({i})" for i in range(1, order + 1)]
             z_names = z_sin_names
         else:
-            x_names = ['xc(0)']
-            x_cos_names = [f'xc({i})' for i in range(1, order + 1)]
-            x_sin_names = [f'xs({i})' for i in range(1, order + 1)]
+            x_names = ["xc(0)"]
+            x_cos_names = [f"xc({i})" for i in range(1, order + 1)]
+            x_sin_names = [f"xs({i})" for i in range(1, order + 1)]
             x_names += x_cos_names + x_sin_names
-            y_names = ['yc(0)']
-            y_cos_names = [f'yc({i})' for i in range(1, order + 1)]
-            y_sin_names = [f'ys({i})' for i in range(1, order + 1)]
+            y_names = ["yc(0)"]
+            y_cos_names = [f"yc({i})" for i in range(1, order + 1)]
+            y_sin_names = [f"ys({i})" for i in range(1, order + 1)]
             y_names += y_cos_names + y_sin_names
-            z_names = ['zc(0)']
-            z_cos_names = [f'zc({i})' for i in range(1, order + 1)]
-            z_sin_names = [f'zs({i})' for i in range(1, order + 1)]
+            z_names = ["zc(0)"]
+            z_cos_names = [f"zc({i})" for i in range(1, order + 1)]
+            z_sin_names = [f"zs({i})" for i in range(1, order + 1)]
             z_names += z_cos_names + z_sin_names
 
         return x_names + y_names + z_names
 
     def num_dofs(self):
-        return (self.order+1) + self.order + self.order if self.stellsym else 3*(2*self.order+1)
+        return (
+            (self.order + 1) + self.order + self.order
+            if self.stellsym
+            else 3 * (2 * self.order + 1)
+        )
 
     def get_dofs(self):
         return self.coefficients

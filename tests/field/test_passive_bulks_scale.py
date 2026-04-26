@@ -304,11 +304,19 @@ def test_interior_field_cancellation() -> None:
     psc = PSCBulkArray(
         np.array([[0.0, 0.0, 0.0]]),
         np.array([[0.0, 0.0, 1.0]]),
-        np.array([0.05]), np.array([0.005]), [tf],
+        np.array([0.05]),
+        np.array([0.005]),
+        [tf],
         eval_points=np.array([[0.1, 0.0, 0.0]]),
-        m_fourier=3, l_zernike=6, k_chebyshev=3,
-        n_rho=10, n_phi=16, n_z=6,
-        nfp=1, stellsym=False, adaptive_self_reg=True,
+        m_fourier=3,
+        l_zernike=6,
+        k_chebyshev=3,
+        n_rho=10,
+        n_phi=16,
+        n_z=6,
+        nfp=1,
+        stellsym=False,
+        adaptive_self_reg=True,
         solver_mode="shell_l2",
     )
     ratio = _interior_field_ratio(psc, tf)

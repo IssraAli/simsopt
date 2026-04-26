@@ -3,7 +3,10 @@ from simsopt.configs.zoo import get_data
 
 __all__ = ["get_LHD_like_data"]
 
-def get_LHD_like_data(numquadpoints_circular=400, numquadpoints_helical=1000, numquadpoints_axis=30):
+
+def get_LHD_like_data(
+    numquadpoints_circular=400, numquadpoints_helical=1000, numquadpoints_axis=30
+):
     """Return the coils and axis for an LHD-like configuration.
 
     This coil set is a single-filament approximation of the coils in LHD, the
@@ -22,12 +25,12 @@ def get_LHD_like_data(numquadpoints_circular=400, numquadpoints_helical=1000, nu
     They produce a configuration similar to that used in Suzuki, Y., K. Y.
     Watanabe, and S. Sakakibara. "Theoretical studies of equilibrium beta limit
     in LHD plasmas." Physics of Plasmas 27, 10 (2020).
-    
+
     Typical usage::
 
         from simsopt.configs import get_LHD_like_data
         from simsopt.field import BiotSavart, Current, Coil
-        
+
         coils, currents, axis = get_LHD_like_data()
         coils = [
             Coil(curve, Current(current)) for curve, current in zip(coils, currents)
@@ -41,7 +44,7 @@ def get_LHD_like_data(numquadpoints_circular=400, numquadpoints_helical=1000, nu
 
     Returns:
         3 element tuple containing the curves, currents, and the magnetic axis.
-        
+
     .. deprecated:: 1.11.0
        Use :func:`get_data` instead:
        ``get_data('lhd_like', numquadpoints_circular=..., numquadpoints_helical=..., numquadpoints_axis=...)``.
@@ -53,13 +56,14 @@ def get_LHD_like_data(numquadpoints_circular=400, numquadpoints_helical=1000, nu
         f"{numquadpoints_helical}, numquadpoints_axis="
         f"{numquadpoints_axis}) instead.",
         DeprecationWarning,
-        stacklevel=2)
+        stacklevel=2,
+    )
 
     # call the unified loader, drop the extra outputs
     base_curves, base_currents, axis, _, _ = get_data(
         "lhd_like",
         numquadpoints_circular=numquadpoints_circular,
         numquadpoints_helical=numquadpoints_helical,
-        numquadpoints_axis=numquadpoints_axis
+        numquadpoints_axis=numquadpoints_axis,
     )
     return base_curves, base_currents, axis

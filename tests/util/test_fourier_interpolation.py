@@ -6,7 +6,6 @@ from simsopt.util.fourier_interpolation import fourier_interpolation
 
 
 class FourierInterpolationTests(unittest.TestCase):
-
     def test_constant(self):
         """
         If data is constant, the interpolated values should be equal to that constant
@@ -17,8 +16,10 @@ class FourierInterpolationTests(unittest.TestCase):
                 for nrequest in range(1, 5):
                     xrequest = np.random.rand(nrequest) * 20 - 10
                     y = fourier_interpolation(data, xrequest)
-                    #print('data:', data, ', xrequest:', xrequest, ', y:', y)
-                    np.testing.assert_allclose(y, np.full(nrequest, const), rtol=1e-10, atol=1e-10)
+                    # print('data:', data, ', xrequest:', xrequest, ', y:', y)
+                    np.testing.assert_allclose(
+                        y, np.full(nrequest, const), rtol=1e-10, atol=1e-10
+                    )
 
     def test_single_mode(self):
         """
@@ -33,8 +34,13 @@ class FourierInterpolationTests(unittest.TestCase):
                     for nrequest in range(1, 5):
                         xrequest = np.random.rand(nrequest) * 20 - 10
                         y = fourier_interpolation(data, xrequest)
-                        #print('data:', data, ', xrequest:', xrequest, ', y:', y)
-                        np.testing.assert_allclose(y, const + amp * np.cos(xrequest + phase), rtol=1e-10, atol=1e-10)
+                        # print('data:', data, ', xrequest:', xrequest, ', y:', y)
+                        np.testing.assert_allclose(
+                            y,
+                            const + amp * np.cos(xrequest + phase),
+                            rtol=1e-10,
+                            atol=1e-10,
+                        )
 
     def test_multiple_modes(self):
         """
@@ -58,7 +64,7 @@ class FourierInterpolationTests(unittest.TestCase):
                     for n in range(nmodes):
                         yexpected += amps[n] * np.cos(n * xrequest + phases[n])
 
-                    #print('data:', data, ', xrequest:', xrequest, ', y:', y)
+                    # print('data:', data, ', xrequest:', xrequest, ', y:', y)
                     np.testing.assert_allclose(y, yexpected, rtol=1e-10, atol=1e-10)
 
 

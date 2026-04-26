@@ -18,10 +18,15 @@ except ImportError:
 import numpy as np
 from simsopt._core.json import GSONDecoder, GSONEncoder, SIMSON
 
-from simsopt._core.optimizable import Optimizable, make_optimizable, \
-    ScaledOptimizable, OptimizableSum, load, save
-from simsopt.objectives.functions import Identity, Rosenbrock, TestObject1, \
-    Beale
+from simsopt._core.optimizable import (
+    Optimizable,
+    make_optimizable,
+    ScaledOptimizable,
+    OptimizableSum,
+    load,
+    save,
+)
+from simsopt.objectives.functions import Identity, Rosenbrock, TestObject1, Beale
 from simsopt.objectives.functions import Adder as FAdder
 
 
@@ -39,7 +44,7 @@ class Adder(Optimizable):
     def sum(self):
         return np.sum(self.local_full_x)
 
-    return_fn_map = {'sum': sum}
+    return_fn_map = {"sum": sum}
 
     # def as_dict(self) -> dict:
     #     d = super().as_dict()
@@ -62,19 +67,20 @@ class OptClassWithParents(Optimizable):
     def __init__(self, val, depends_on=None):
         if depends_on is None:
             depends_on = [Adder(3), Adder(2)]
-        super().__init__(x0=[val], names=['val'], depends_on=depends_on)
+        super().__init__(x0=[val], names=["val"], depends_on=depends_on)
 
     def f(self):
-        return (self.local_full_x[0] + 2 * self.parents[0](child=self)) \
-            / (10.0 + self.parents[1](child=self))
+        return (self.local_full_x[0] + 2 * self.parents[0](child=self)) / (
+            10.0 + self.parents[1](child=self)
+        )
 
-    return_fn_map = {'f': f}
+    return_fn_map = {"f": f}
 
     def as_dict(self) -> dict:
         d = super().as_dict()
         del d["x0"]
         del d["names"]
-        d['val'] = self.local_full_x[0]
+        d["val"] = self.local_full_x[0]
         return d
 
     @classmethod
@@ -99,29 +105,34 @@ class N_No(Optimizable):
     def product(self):
         return np.prod(self.local_full_x)
 
-    return_fn_map = {'sum': sum, 'prod': product}
+    return_fn_map = {"sum": sum, "prod": product}
 
 
 class OptClassWithParentsReturnFns(Optimizable):
     def __init__(self, val):
         self.opt1 = N_No(3, x0=[2, 3, 4])  # Computes to [9, 24]
-        self.opt2 = N_No(2, x0=[1, 2])    # Computes to [3, 2]
-        super().__init__(x0=[val], names=['val'],
-                         depends_on=[self.opt1, self.opt2],
-                         opt_return_fns=[['sum'], ['sum', 'prod']])
+        self.opt2 = N_No(2, x0=[1, 2])  # Computes to [3, 2]
+        super().__init__(
+            x0=[val],
+            names=["val"],
+            depends_on=[self.opt1, self.opt2],
+            opt_return_fns=[["sum"], ["sum", "prod"]],
+        )
 
     # Pay attention to the arguments passed in f1 and f2
     def f1(self):
-        return (self.local_full_x[0] + 2 * self.opt1(child=self)) \
-            / (10.0 + np.sum(self.opt2(child=self)))
+        return (self.local_full_x[0] + 2 * self.opt1(child=self)) / (
+            10.0 + np.sum(self.opt2(child=self))
+        )
 
     # If child=self is not passed, full return array is returned, because
     # parent class is not aware of the calling child class
     def f2(self):
-        return (self.local_full_x[0] + 2 * self.opt1()[0]) \
-            / (10.0 + np.sum(self.opt2()))
+        return (self.local_full_x[0] + 2 * self.opt1()[0]) / (
+            10.0 + np.sum(self.opt2())
+        )
 
-    return_fn_map = {'f1': f1, 'f2': f2}
+    return_fn_map = {"f1": f1, "f2": f2}
 
 
 class OptimizableTestsWithParentsReturnFns(unittest.TestCase):
@@ -132,9 +143,8 @@ class OptimizableTestsWithParentsReturnFns(unittest.TestCase):
         self.opt = None
 
     def test_name(self):
-        self.assertTrue('OptClassWithParentsReturnFns' in self.opt.name)
-        self.assertNotEqual(self.opt.name,
-                            OptClassWithParentsReturnFns(10).name)
+        self.assertTrue("OptClassWithParentsReturnFns" in self.opt.name)
+        self.assertNotEqual(self.opt.name, OptClassWithParentsReturnFns(10).name)
 
     def test_hash(self):
         hash1 = hash(self.opt)
@@ -146,15 +156,15 @@ class OptimizableTestsWithParentsReturnFns(unittest.TestCase):
 
     def test_get_return_fn_names(self):
         ret_fn_names = self.opt.get_return_fn_names()
-        self.assertEqual(ret_fn_names[0], 'f1')
-        self.assertEqual(ret_fn_names[1], 'f2')
+        self.assertEqual(ret_fn_names[0], "f1")
+        self.assertEqual(ret_fn_names[1], "f2")
 
     def test_add_return_fn_by_name(self):
         opt1 = self.opt.opt1
         self.assertEqual(len(opt1.return_fns[self.opt]), 1)
         opt2 = self.opt.opt2
         self.assertEqual(len(opt2.return_fns[self.opt]), 2)
-        opt1.add_return_fn(self.opt, 'prod')
+        opt1.add_return_fn(self.opt, "prod")
         self.assertEqual(len(opt1.return_fns[self.opt]), 2)
 
     def test_add_return_fn_by_reference(self):
@@ -167,31 +177,31 @@ class OptimizableTestsWithParentsReturnFns(unittest.TestCase):
 
     def test_call(self):
         # Test for leaf nodes
-        self.assertAlmostEqual(self.opt.f1(), 28.0/15)
-        self.assertAlmostEqual(self.opt.f2(), 28.0/15)
-        np.allclose(self.opt(), [28.0/15, 28.0/15])
+        self.assertAlmostEqual(self.opt.f1(), 28.0 / 15)
+        self.assertAlmostEqual(self.opt.f2(), 28.0 / 15)
+        np.allclose(self.opt(), [28.0 / 15, 28.0 / 15])
 
         # Change parent objects and see if the DOFs are propagated
         opt1 = self.opt.opt1
-        opt1.set('x1', 5)
+        opt1.set("x1", 5)
         opt2 = self.opt.opt2
-        opt2.set('x1', 4)
-        np.allclose(self.opt(), 34.0/24)
+        opt2.set("x1", 4)
+        np.allclose(self.opt(), 34.0 / 24)
 
 
 class OptClassWithDirectParentFnCalls(Optimizable):
     def __init__(self, val):
         self.opt1 = N_No(3, x0=[2, 3, 4])
         self.opt2 = N_No(2, x0=[1, 2])
-        super().__init__(x0=[val], names=['val'],
-                         depends_on=[self.opt1, self.opt2])
+        super().__init__(x0=[val], names=["val"], depends_on=[self.opt1, self.opt2])
 
     # The value returned by f3 should be identical to f1
     def f(self):
-        return (self.local_full_x[0] + 2 * self.opt1.sum()) \
-            / (10.0 + self.opt2.sum() + self.opt2.product())
+        return (self.local_full_x[0] + 2 * self.opt1.sum()) / (
+            10.0 + self.opt2.sum() + self.opt2.product()
+        )
 
-    return_fn_map = {'f': f}
+    return_fn_map = {"f": f}
 
 
 class OptimizableTestsWithDirectParentFnCalls(unittest.TestCase):
@@ -202,11 +212,10 @@ class OptimizableTestsWithDirectParentFnCalls(unittest.TestCase):
         self.opt = None
 
     def test_name(self):
-        self.assertTrue('OptClassWithDirectParentFnCalls' in self.opt.name)
+        self.assertTrue("OptClassWithDirectParentFnCalls" in self.opt.name)
 
     def test_equal(self):
-        self.assertNotEqual(self.opt.name,
-                            OptClassWithDirectParentFnCalls(10).name)
+        self.assertNotEqual(self.opt.name, OptClassWithDirectParentFnCalls(10).name)
 
     def test_hash(self):
         hash1 = hash(self.opt)
@@ -218,7 +227,7 @@ class OptimizableTestsWithDirectParentFnCalls(unittest.TestCase):
 
     def test_get_return_fn_names(self):
         ret_fn_names = self.opt.get_return_fn_names()
-        self.assertEqual(ret_fn_names[0], 'f')
+        self.assertEqual(ret_fn_names[0], "f")
 
     @unittest.skip
     def test_add_return_fn_by_name(self):
@@ -236,37 +245,41 @@ class OptimizableTestsWithDirectParentFnCalls(unittest.TestCase):
 
     def test_call(self):
         # Test for leaf nodes
-        self.assertAlmostEqual(self.opt.f(), 28.0/15)
-        np.allclose(self.opt(), 28.0/15)
+        self.assertAlmostEqual(self.opt.f(), 28.0 / 15)
+        np.allclose(self.opt(), 28.0 / 15)
 
         # Change parent objects and see if the DOFs are propagated
         opt1 = self.opt.opt1
-        opt1.set('x1', 5)
+        opt1.set("x1", 5)
         opt2 = self.opt.opt2
-        opt2.set('x1', 4)
-        np.allclose(self.opt(), 34.0/24)
+        opt2.set("x1", 4)
+        np.allclose(self.opt(), 34.0 / 24)
 
 
 class OptClassWithDirectRegisterParentFn(Optimizable):
     def __init__(self, val):
         self.opt1 = N_No(3, x0=[2, 3, 4])
         self.opt2 = N_No(2, x0=[1, 2])
-        super().__init__(x0=[val], names=['val'],
-                         funcs_in=[self.opt1.sum, self.opt2.sum,
-                                   self.opt2.product])
+        super().__init__(
+            x0=[val],
+            names=["val"],
+            funcs_in=[self.opt1.sum, self.opt2.sum, self.opt2.product],
+        )
 
     # Pay attention to the arguments passed in f1 and f2
     def f1(self):
-        return (self.local_full_x[0] + 2 * self.opt1(child=self)) \
-            / (10.0 + np.sum(self.opt2(child=self)))
+        return (self.local_full_x[0] + 2 * self.opt1(child=self)) / (
+            10.0 + np.sum(self.opt2(child=self))
+        )
 
     # If child=self is not passed, full return array is returned, because
     # parent class is not aware of the calling child class
     def f2(self):
-        return (self.local_full_x[0] + 2 * self.opt1()[0]) \
-            / (10.0 + np.sum(self.opt2()))
+        return (self.local_full_x[0] + 2 * self.opt1()[0]) / (
+            10.0 + np.sum(self.opt2())
+        )
 
-    return_fn_map = {'f1': f1, 'f2': f2}
+    return_fn_map = {"f1": f1, "f2": f2}
 
 
 class OptimizableTestsWithDirectRegisterParentFns(unittest.TestCase):
@@ -277,9 +290,8 @@ class OptimizableTestsWithDirectRegisterParentFns(unittest.TestCase):
         self.opt = None
 
     def test_name(self):
-        self.assertTrue('OptClassWithDirectRegisterParentFn' in self.opt.name)
-        self.assertNotEqual(self.opt.name,
-                            OptClassWithDirectRegisterParentFn(10).name)
+        self.assertTrue("OptClassWithDirectRegisterParentFn" in self.opt.name)
+        self.assertNotEqual(self.opt.name, OptClassWithDirectRegisterParentFn(10).name)
 
     def test_hash(self):
         hash1 = hash(self.opt)
@@ -291,15 +303,15 @@ class OptimizableTestsWithDirectRegisterParentFns(unittest.TestCase):
 
     def test_get_return_fn_names(self):
         ret_fn_names = self.opt.get_return_fn_names()
-        self.assertEqual(ret_fn_names[0], 'f1')
-        self.assertEqual(ret_fn_names[1], 'f2')
+        self.assertEqual(ret_fn_names[0], "f1")
+        self.assertEqual(ret_fn_names[1], "f2")
 
     def test_add_return_fn_by_name(self):
         opt1 = self.opt.opt1
         self.assertEqual(len(opt1.return_fns[self.opt]), 1)
         opt2 = self.opt.opt2
         self.assertEqual(len(opt2.return_fns[self.opt]), 2)
-        opt1.add_return_fn(self.opt, 'prod')
+        opt1.add_return_fn(self.opt, "prod")
         self.assertEqual(len(opt1.return_fns[self.opt]), 2)
 
     def test_add_return_fn_by_reference(self):
@@ -312,22 +324,22 @@ class OptimizableTestsWithDirectRegisterParentFns(unittest.TestCase):
 
     def test_call(self):
         # Test for leaf nodes
-        self.assertAlmostEqual(self.opt.f1(), 28.0/15)
-        self.assertAlmostEqual(self.opt.f2(), 28.0/15)
-        np.allclose(self.opt(), [28.0/15, 28.0/15])
+        self.assertAlmostEqual(self.opt.f1(), 28.0 / 15)
+        self.assertAlmostEqual(self.opt.f2(), 28.0 / 15)
+        np.allclose(self.opt(), [28.0 / 15, 28.0 / 15])
 
         # Change parent objects and see if the DOFs are propagated
         opt1 = self.opt.opt1
-        opt1.set('x1', 5)
+        opt1.set("x1", 5)
         opt2 = self.opt.opt2
-        opt2.set('x1', 4)
-        np.allclose(self.opt(), 34.0/24)
+        opt2.set("x1", 4)
+        np.allclose(self.opt(), 34.0 / 24)
 
 
 class OptClassWith2LevelParents(Optimizable):
     def __init__(self, val1, val2):
         x = [val1, val2]
-        names = ['v1', 'v2']
+        names = ["v1", "v2"]
         opts = [OptClassWithParents(0.0), Adder(2)]
         super().__init__(x0=x, names=names, depends_on=opts)
 
@@ -339,7 +351,7 @@ class OptClassWith2LevelParents(Optimizable):
         a = self.parents[1](self)
         return v1 + a * np.cos(v2 + t)
 
-    return_fn_map = {'f': f}
+    return_fn_map = {"f": f}
 
 
 class OptWithInputParent(Optimizable):
@@ -360,7 +372,7 @@ class TwoDofOpt(Optimizable):
 class OptimizableTests(unittest.TestCase):
     def setUp(self) -> None:
         self.iden = Identity(x=10)
-        self.adder = Adder(n=3, names=['x', 'y', 'z'])
+        self.adder = Adder(n=3, names=["x", "y", "z"])
         self.rosen = Rosenbrock()
 
     def tearDown(self) -> None:
@@ -369,9 +381,9 @@ class OptimizableTests(unittest.TestCase):
         self.rosen = None
 
     def test_name(self):
-        self.assertTrue('Identity' in self.iden.name)
-        self.assertTrue('Adder' in self.adder.name)
-        self.assertTrue('Rosenbrock' in self.rosen.name)
+        self.assertTrue("Identity" in self.iden.name)
+        self.assertTrue("Adder" in self.adder.name)
+        self.assertTrue("Rosenbrock" in self.rosen.name)
         self.assertNotEqual(self.iden.name, Identity().name)
         self.assertNotEqual(self.adder.name, Adder().name)
         self.assertNotEqual(self.rosen.name, Rosenbrock().name)
@@ -390,7 +402,7 @@ class OptimizableTests(unittest.TestCase):
             opt_with_parents()
 
         opt_with_parents.add_parent(1, opt2)
-        self.assertAlmostEqual(opt_with_parents(), 28.0/13.0)
+        self.assertAlmostEqual(opt_with_parents(), 28.0 / 13.0)
 
     def test_append_parent(self):
         opt1 = Adder(3, x0=[2, 3, 4])
@@ -401,7 +413,7 @@ class OptimizableTests(unittest.TestCase):
             opt_with_parents()
 
         opt_with_parents.append_parent(opt2)
-        self.assertAlmostEqual(opt_with_parents(), 28.0/13.0)
+        self.assertAlmostEqual(opt_with_parents(), 28.0 / 13.0)
 
     def test_append_parent_dof_sizes(self):
         # vmec is the parent, prob is the child
@@ -426,7 +438,7 @@ class OptimizableTests(unittest.TestCase):
         opt_with_parents = OptClassWithParents(10, depends_on=[opt1, opt2])
 
         self.assertEqual(len(opt_with_parents.parents), 2)
-        self.assertAlmostEqual(opt_with_parents(), 28.0/13.0)
+        self.assertAlmostEqual(opt_with_parents(), 28.0 / 13.0)
         opt_with_parents.pop_parent()
         self.assertEqual(len(opt_with_parents.parents), 1)
         with self.assertRaises(IndexError):  # Missing second parent
@@ -438,7 +450,7 @@ class OptimizableTests(unittest.TestCase):
         opt_with_parents = OptClassWithParents(10, depends_on=[opt1, opt2])
 
         self.assertEqual(len(opt_with_parents.parents), 2)
-        self.assertAlmostEqual(opt_with_parents(), 28.0/13.0)
+        self.assertAlmostEqual(opt_with_parents(), 28.0 / 13.0)
         opt_with_parents.remove_parent(opt1)
         self.assertEqual(len(opt_with_parents.parents), 1)
         with self.assertRaises(IndexError):  # Missing second parent
@@ -449,7 +461,8 @@ class OptimizableTests(unittest.TestCase):
         class EmptyOptimizable(Optimizable):
             def f(self):
                 return 0
-            return_fn_map = {'f': f}
+
+            return_fn_map = {"f": f}
 
         opt = EmptyOptimizable()
         self.assertEqual(opt.dof_size, 0)
@@ -465,9 +478,9 @@ class OptimizableTests(unittest.TestCase):
         test_obj = OptClassWithParents(10)
         self.assertEqual(test_obj.dof_size, 6)
 
-        test_obj1 = OptClassWithParents(10,
-                                        depends_on=[Identity(x=10, dof_fixed=True),
-                                                    Adder(n=3, x0=[1, 2, 3])])
+        test_obj1 = OptClassWithParents(
+            10, depends_on=[Identity(x=10, dof_fixed=True), Adder(n=3, x0=[1, 2, 3])]
+        )
         self.assertEqual(test_obj1.dof_size, 4)
 
     def test_full_dof_size(self):
@@ -491,9 +504,9 @@ class OptimizableTests(unittest.TestCase):
         test_obj = OptClassWithParents(10)
         self.assertEqual(test_obj.full_dof_size, 6)
 
-        test_obj1 = OptClassWithParents(10,
-                                        depends_on=[Identity(x=10, dof_fixed=True),
-                                                    Adder(3)])
+        test_obj1 = OptClassWithParents(
+            10, depends_on=[Identity(x=10, dof_fixed=True), Adder(3)]
+        )
         self.assertEqual(test_obj1.full_dof_size, 5)
 
     def test_local_dof_size(self):
@@ -516,9 +529,9 @@ class OptimizableTests(unittest.TestCase):
         test_obj = OptClassWithParents(10)
         self.assertEqual(test_obj.local_dof_size, 1)
 
-        test_obj1 = OptClassWithParents(10,
-                                        depends_on=[Identity(x=10, dof_fixed=True),
-                                                    Adder(3)])
+        test_obj1 = OptClassWithParents(
+            10, depends_on=[Identity(x=10, dof_fixed=True), Adder(3)]
+        )
         self.assertEqual(test_obj1.local_dof_size, 1)
 
     def test_local_full_dof_size(self):
@@ -541,14 +554,14 @@ class OptimizableTests(unittest.TestCase):
         test_obj = OptClassWithParents(10)
         self.assertEqual(test_obj.local_full_dof_size, 1)
 
-        test_obj1 = OptClassWithParents(10,
-                                        depends_on=[Identity(x=10, dof_fixed=True),
-                                                    Adder(3)])
+        test_obj1 = OptClassWithParents(
+            10, depends_on=[Identity(x=10, dof_fixed=True), Adder(3)]
+        )
         self.assertEqual(test_obj1.local_full_dof_size, 1)
 
     def test_x(self):
         # Check with leaf type Optimizable objects
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'])
+        adder = Adder(n=3, x0=[1, 2, 3], names=["x", "y", "z"])
         iden = Identity(x=10, dof_fixed=True)
         adder_dofs = adder.x
         iden_dofs = iden.x
@@ -562,7 +575,12 @@ class OptimizableTests(unittest.TestCase):
         self.assertAlmostEqual(adder.local_x[1], 5)
         self.assertAlmostEqual(adder.local_x[2], 6)
         with self.assertRaises(ValueError):
-            iden.x = np.array([11, ], dtype=float)
+            iden.x = np.array(
+                [
+                    11,
+                ],
+                dtype=float,
+            )
         self.assertAlmostEqual(iden.full_x[0], 10)
 
         # Check with Optimizable objects containing parents
@@ -593,7 +611,7 @@ class OptimizableTests(unittest.TestCase):
 
     def test_local_x(self):
         # Check with leaf type Optimizable objects
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'])
+        adder = Adder(n=3, x0=[1, 2, 3], names=["x", "y", "z"])
         iden = Identity(x=10, dof_fixed=True)
         adder_x = adder.local_x
         iden_x = iden.local_x
@@ -604,7 +622,12 @@ class OptimizableTests(unittest.TestCase):
 
         adder.local_x = [4, 5, 6]
         with self.assertRaises(ValueError):
-            iden.local_x = np.array([11, ], dtype=float)
+            iden.local_x = np.array(
+                [
+                    11,
+                ],
+                dtype=float,
+            )
         self.assertAlmostEqual(iden.full_x[0], 10)
 
         # Check with Optimizable objects containing parents
@@ -620,7 +643,7 @@ class OptimizableTests(unittest.TestCase):
 
     def test_full_x(self):
         # Check with leaf type Optimizable objects
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'])
+        adder = Adder(n=3, x0=[1, 2, 3], names=["x", "y", "z"])
         iden = Identity(x=10, dof_fixed=True)
         adder_full_x = adder.full_x
         self.assertAlmostEqual(adder_full_x[0], 1)
@@ -644,7 +667,7 @@ class OptimizableTests(unittest.TestCase):
         self.assertTrue(np.allclose(full_x, new_vals))
 
     def test_full_fix(self):
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'])
+        adder = Adder(n=3, x0=[1, 2, 3], names=["x", "y", "z"])
         iden = Identity(x=10, dof_fixed=True)
         test_obj = OptClassWithParents(20, depends_on=[iden, adder])
         full_x = test_obj.full_x
@@ -663,7 +686,7 @@ class OptimizableTests(unittest.TestCase):
     def test_local_full_x(self):
         # Check with leaf type Optimizable objects
         # Check with Optimizable objects containing parents
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'])
+        adder = Adder(n=3, x0=[1, 2, 3], names=["x", "y", "z"])
         iden = Identity(x=10, dof_fixed=True)
         adder_local_full_x = adder.local_full_x
         self.assertAlmostEqual(adder_local_full_x[0], 1)
@@ -682,29 +705,32 @@ class OptimizableTests(unittest.TestCase):
         self.assertTrue(np.allclose(local_full_x, np.array([25])))
 
     def test_get(self):
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      dof_fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], dof_fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
 
-        self.assertAlmostEqual(adder.get(0), 1.)
-        self.assertAlmostEqual(adder.get('y'), 2.)
-        self.assertAlmostEqual(iden.get('x0'), 10.)
+        self.assertAlmostEqual(adder.get(0), 1.0)
+        self.assertAlmostEqual(adder.get("y"), 2.0)
+        self.assertAlmostEqual(iden.get("x0"), 10.0)
 
     def test_set(self):
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      dof_fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], dof_fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
 
         adder.set(0, 2)
-        adder.set('y', 20)
-        iden.set('x0', 20)
+        adder.set("y", 20)
+        iden.set("x0", 20)
         self.assertAlmostEqual(adder.full_x[0], 2)
         self.assertAlmostEqual(adder.full_x[1], 20)
         self.assertAlmostEqual(iden.full_x[0], 20)
 
     def test_dofs_free_status(self):
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
         test_obj = OptClassWithParents(20, depends_on=[iden, adder])
 
@@ -715,20 +741,23 @@ class OptimizableTests(unittest.TestCase):
         self.assertTrue(np.equal(test_obj.dofs_free_status, obj_status).all())
 
     def test_local_dofs_free_status(self):
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
 
         self.assertTrue(
-            np.equal(adder.local_dofs_free_status, [False, True, True]).all())
+            np.equal(adder.local_dofs_free_status, [False, True, True]).all()
+        )
         self.assertTrue(np.equal(iden.local_dofs_free_status, [False]).all())
 
     def test_call(self):
         # Test for leaf nodes
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         self.assertAlmostEqual(adder(), 6.0)
-        adder.fix('y')
+        adder.fix("y")
         self.assertAlmostEqual(adder(), 6.0)
 
         iden = Identity(x=10, dof_fixed=True)
@@ -753,7 +782,7 @@ class OptimizableTests(unittest.TestCase):
         self.assertAlmostEqual(iden(), 20)
 
         # Fix dofs and now call
-        adder.fix('x')
+        adder.fix("x")
         self.assertAlmostEqual(adder([1, 2]), 13)
         adder.local_fix_all()
         self.assertAlmostEqual(adder(), 13)
@@ -761,8 +790,9 @@ class OptimizableTests(unittest.TestCase):
         self.assertAlmostEqual(iden(), 20)
 
         # Check with Optimizable objects containing parents
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
         test_obj1 = OptClassWithParents(20, depends_on=[iden, adder])
         # Value returned by test_obj1 is (val + 2*iden())/(10.0 + adder())
@@ -787,12 +817,12 @@ class OptimizableTests(unittest.TestCase):
 
     def test_bounds(self):
         """
-        Test the getting and setting of fixed and free variables from 
+        Test the getting and setting of fixed and free variables from
         an Optimizable.
         """
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'])
-        adder.fix('y')
-        adder.fix('z')
+        adder = Adder(n=3, x0=[1, 2, 3], names=["x", "y", "z"])
+        adder.fix("y")
+        adder.fix("z")
 
         # set the bounds of all dofs
         adder.lower_bounds = np.zeros(1)
@@ -811,36 +841,42 @@ class OptimizableTests(unittest.TestCase):
         self.assertAlmostEqual(adder.local_upper_bounds, np.array([18]))
 
         # set a bound one at a time
-        adder.set_lower_bound('x', 0)
-        adder.set_upper_bound('x', 1)
-        adder.set_lower_bound('z', 7)  # set a fixed variable
+        adder.set_lower_bound("x", 0)
+        adder.set_upper_bound("x", 1)
+        adder.set_lower_bound("z", 7)  # set a fixed variable
         self.assertTrue(np.allclose(adder.full_lower_bounds, np.array([0, -np.inf, 7])))
-        self.assertTrue(np.allclose(adder.full_upper_bounds, np.array([1, np.inf, np.inf])))
+        self.assertTrue(
+            np.allclose(adder.full_upper_bounds, np.array([1, np.inf, np.inf]))
+        )
 
     def test_local_bounds(self):
         pass
 
     def test_full_bounds(self):
         """
-        Test the getting and setting of fixed and free variables from 
+        Test the getting and setting of fixed and free variables from
         an Optimizable with ancestors
         """
         iden = Identity(x=10, dof_fixed=False)
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'])
-        adder.fix('y')
-        adder.fix('z')
+        adder = Adder(n=3, x0=[1, 2, 3], names=["x", "y", "z"])
+        adder.fix("y")
+        adder.fix("z")
         opt = iden + adder
 
         # check free variables
-        adder.set_lower_bound('x', 0.0)
+        adder.set_lower_bound("x", 0.0)
         iden.upper_bounds = np.ones(1)
         self.assertTrue(np.allclose(opt.lower_bounds, np.array([0, -np.inf])))
         self.assertTrue(np.allclose(opt.upper_bounds, np.array([np.inf, 1])))
 
         # check free and fixed variables
-        adder.set_lower_bound('z', 5)  # fixed
-        self.assertTrue(np.allclose(opt.full_lower_bounds, np.array([0, -np.inf, 5, -np.inf])))
-        self.assertTrue(np.allclose(opt.full_upper_bounds, np.array([np.inf, np.inf, np.inf, 1])))
+        adder.set_lower_bound("z", 5)  # fixed
+        self.assertTrue(
+            np.allclose(opt.full_lower_bounds, np.array([0, -np.inf, 5, -np.inf]))
+        )
+        self.assertTrue(
+            np.allclose(opt.full_upper_bounds, np.array([np.inf, np.inf, np.inf, 1]))
+        )
 
     def test_lower_bounds(self):
         pass
@@ -871,7 +907,7 @@ class OptimizableTests(unittest.TestCase):
         for name in test_obj.dof_names:
             self.assertTrue(comb_patt.match(name))
 
-        test_obj.fix('val')
+        test_obj.fix("val")
         self.assertEqual(len(test_obj.dof_names), 3)
         for name in test_obj.dof_names:
             self.assertTrue(comb_patt.match(name))
@@ -879,7 +915,7 @@ class OptimizableTests(unittest.TestCase):
         for name in test_obj.dof_names:
             self.assertFalse(exc_patt.match(name))
 
-        adder.fix('x1')
+        adder.fix("x1")
         self.assertEqual(len(test_obj.dof_names), 2)
         for name in test_obj.dof_names:
             self.assertTrue(comb_patt.match(name))
@@ -912,9 +948,9 @@ class OptimizableTests(unittest.TestCase):
 
         test_obj = OptClassWithParents(10, depends_on=[iden, adder])
         self.assertEqual(len(test_obj.full_dof_names), 5)
-        test_obj.fix('val')
+        test_obj.fix("val")
         self.assertEqual(len(test_obj.full_dof_names), 5)
-        adder.fix('x1')
+        adder.fix("x1")
         self.assertEqual(len(test_obj.full_dof_names), 5)
 
         test_obj2 = OptClassWith2LevelParents(10, 20)
@@ -938,30 +974,32 @@ class OptimizableTests(unittest.TestCase):
 
     def test_is_fixed(self):
         iden = Identity(x=10, dof_fixed=True)
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         self.assertTrue(adder.is_fixed(0))
-        self.assertTrue(adder.is_fixed('x'))
+        self.assertTrue(adder.is_fixed("x"))
         self.assertFalse(adder.is_fixed(1))
-        self.assertFalse(adder.is_fixed('y'))
+        self.assertFalse(adder.is_fixed("y"))
         self.assertTrue(iden.is_fixed(0))
-        self.assertTrue(iden.is_fixed('x0'))
+        self.assertTrue(iden.is_fixed("x0"))
 
     def test_is_free(self):
         iden = Identity(x=10, dof_fixed=True)
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         self.assertFalse(adder.is_free(0))
-        self.assertFalse(adder.is_free('x'))
+        self.assertFalse(adder.is_free("x"))
         self.assertTrue(adder.is_free(1))
-        self.assertTrue(adder.is_free('y'))
+        self.assertTrue(adder.is_free("y"))
         self.assertFalse(iden.is_free(0))
-        self.assertFalse(iden.is_free('x0'))
+        self.assertFalse(iden.is_free("x0"))
 
     def test_fix(self):
         self.iden.fix(0)
-        self.adder.fix('x')
-        self.rosen.fix('y')
+        self.adder.fix("x")
+        self.rosen.fix("y")
 
         self.assertEqual(self.iden.dof_size, 0)
         self.assertEqual(self.adder.dof_size, 2)
@@ -977,8 +1015,9 @@ class OptimizableTests(unittest.TestCase):
         self.assertEqual(self.rosen.dof_size, 0)
 
     def test_fix_all(self):
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=False)
         adder_x = adder.x
         iden_x = iden.x
@@ -998,8 +1037,9 @@ class OptimizableTests(unittest.TestCase):
         self.assertEqual(adder.dof_size, 0)
 
         # Check with Optimizable objects containing parents
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=False)
         test_obj = OptClassWithParents(10, depends_on=[iden, adder])
 
@@ -1019,8 +1059,9 @@ class OptimizableTests(unittest.TestCase):
 
     def test_local_unfix_all(self):
         # Test with leaf nodes
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
         adder_x = adder.x
         iden_x = iden.x
@@ -1043,8 +1084,9 @@ class OptimizableTests(unittest.TestCase):
         self.assertEqual(adder.dof_size, 3)
 
         # Check with Optimizable objects containing parents
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
         test_obj = OptClassWithParents(10, depends_on=[iden, adder])
 
@@ -1069,8 +1111,9 @@ class OptimizableTests(unittest.TestCase):
 
     def test_unfix_all(self):
         # Test with leaf nodes
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
         adder_x = adder.x
         iden_x = iden.x
@@ -1093,11 +1136,12 @@ class OptimizableTests(unittest.TestCase):
         self.assertEqual(adder.dof_size, 3)
 
         # Check with Optimizable objects containing parents
-        adder = Adder(n=3, x0=[1, 2, 3], names=['x', 'y', 'z'],
-                      fixed=[True, False, False])
+        adder = Adder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, False]
+        )
         iden = Identity(x=10, dof_fixed=True)
         test_obj = OptClassWithParents(10, depends_on=[iden, adder])
-        test_obj.fix('val')
+        test_obj.fix("val")
 
         with self.assertRaises(ValueError):
             test_obj.x = np.array([20, 4, 5, 6, 25])
@@ -1127,8 +1171,10 @@ class OptimizableTests(unittest.TestCase):
         ancestors = test_obj2._get_ancestors()
         self.assertEqual(len(ancestors), 4)
 
-    @unittest.skipIf(matplotlib is None or pygraphviz is None or networkx is None,
-                     "Plotting libraries are missing")
+    @unittest.skipIf(
+        matplotlib is None or pygraphviz is None or networkx is None,
+        "Plotting libraries are missing",
+    )
     def test_plot(self):
         """
         Verify that a DAG can be plotted.
@@ -1156,8 +1202,9 @@ class OptimizableTests(unittest.TestCase):
 class OptClassExternalDofs(Optimizable):
     def __init__(self):
         self.vals = [1, 2]
-        Optimizable.__init__(self, external_dof_setter=OptClassExternalDofs.set_dofs,
-                             x0=self.get_dofs())
+        Optimizable.__init__(
+            self, external_dof_setter=OptClassExternalDofs.set_dofs, x0=self.get_dofs()
+        )
 
     def get_dofs(self):
         return self.vals
@@ -1199,13 +1246,13 @@ class OptimizableTestsExternalDofs(unittest.TestCase):
 class TestMakeOptimizable(unittest.TestCase):
     def setUp(self) -> None:
         def arb_fun_dofs_noopts(a, b, c):
-            return a ** 2 + 2 * b ** 2 + 3 * c ** 2 - 10
+            return a**2 + 2 * b**2 + 3 * c**2 - 10
 
         def arb_fun_nodofs_opts(adder):
-            return adder.sum()**2 - 10
+            return adder.sum() ** 2 - 10
 
         def arb_fun_dofs_opts(a, b, adder):
-            return a**2 + b**2 + adder.sum()**2 - 10
+            return a**2 + b**2 + adder.sum() ** 2 - 10
 
         self.arb_fun_dofs_noopts = arb_fun_dofs_noopts
         self.arb_fun_nodofs_opts = arb_fun_nodofs_opts
@@ -1213,20 +1260,18 @@ class TestMakeOptimizable(unittest.TestCase):
 
     def test_arb_func_dofs_noopts(self):
         x, y, z = 1, 2, 3
-        opt = make_optimizable(self.arb_fun_dofs_noopts,
-                               x, y, z,
-                               dof_indicators=["dof", "dof", "dof"])
+        opt = make_optimizable(
+            self.arb_fun_dofs_noopts, x, y, z, dof_indicators=["dof", "dof", "dof"]
+        )
         self.assertAlmostEqual(opt.J(), 26.0)
         opt.x = np.array([1.2, 0.8, 0.5])
         self.assertAlmostEqual(opt.J(), -6.53)
 
     def test_arb_func_nodofs_opts(self):
         adder = Adder(n=3, x0=[1.0, 2.0, 3.0])
-        opt = make_optimizable(self.arb_fun_nodofs_opts,
-                               adder,
-                               dof_indicators=["opt"])
+        opt = make_optimizable(self.arb_fun_nodofs_opts, adder, dof_indicators=["opt"])
         self.assertAlmostEqual(opt.J(), 26.0)
-        x = opt.x   # Length of x is 3
+        x = opt.x  # Length of x is 3
         opt.x = x / 2.0
         self.assertAlmostEqual(opt.J(), -1.0)
 
@@ -1238,7 +1283,7 @@ class TestMakeOptimizable(unittest.TestCase):
         adder = Adder(n=3, x0=[1.0, 2.0, 3.0])
         opt = make_optimizable(self.arb_fun_dofs_opts, a, b, adder)
         self.assertAlmostEqual(opt.J(), 39.0)
-        x = opt.x   # Length of x is 3
+        x = opt.x  # Length of x is 3
         self.assertEqual(len(x), 3)
         opt.x = x / 2.0
         self.assertAlmostEqual(opt.J(), 12.0)
@@ -1249,9 +1294,13 @@ class TestMakeOptimizable(unittest.TestCase):
         a = 2.0
         b = 3.0
         adder = Adder(n=3, x0=[1.0, 2.0, 3.0])
-        opt = make_optimizable(self.arb_fun_dofs_opts,
-                               a, b, adder,
-                               dof_indicators=['dof', 'non-dof', 'opt'])
+        opt = make_optimizable(
+            self.arb_fun_dofs_opts,
+            a,
+            b,
+            adder,
+            dof_indicators=["dof", "non-dof", "opt"],
+        )
         self.assertAlmostEqual(opt.J(), 39.0)
         x = opt.x  # Length of x is 4
         self.assertEqual(len(x), 4)
@@ -1266,26 +1315,27 @@ class TestOptimizableSerialize(unittest.TestCase):
     """
 
     def test_adder_serialize(self):
-        adder_orig = FAdder(n=3, x0=[1, 2, 3], names=["x", "y", "z"],
-                            fixed=[True, False, True])
+        adder_orig = FAdder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, True]
+        )
         s = json.dumps(SIMSON(adder_orig), cls=GSONEncoder)
         adder = json.loads(s, cls=GSONDecoder)
         self.assertEqual(adder.n, adder_orig.n)
         self.assertTrue(np.allclose(adder.full_x, adder_orig.full_x))
-        self.assertTrue(np.array_equal(adder.dofs_free_status,
-                                       adder_orig.dofs_free_status))
-        self.assertEqual(adder.local_full_dof_names,
-                         adder_orig.local_full_dof_names)
+        self.assertTrue(
+            np.array_equal(adder.dofs_free_status, adder_orig.dofs_free_status)
+        )
+        self.assertEqual(adder.local_full_dof_names, adder_orig.local_full_dof_names)
 
     def test_identity_serialize(self):
         iden_orig = Identity(x=10.0, dof_name="x", dof_fixed=False)
         s = json.dumps(SIMSON(iden_orig), cls=GSONEncoder)
         iden = json.loads(s, cls=GSONDecoder)
         self.assertAlmostEqual(iden.x[0], iden_orig.x[0])
-        self.assertEqual(iden.local_full_dof_names[0],
-                         iden_orig.local_full_dof_names[0])
-        self.assertEqual(iden.dofs_free_status[0],
-                         iden_orig.dofs_free_status[0])
+        self.assertEqual(
+            iden.local_full_dof_names[0], iden_orig.local_full_dof_names[0]
+        )
+        self.assertEqual(iden.dofs_free_status[0], iden_orig.dofs_free_status[0])
 
     def test_rosenbrock_serialize(self):
         r_orig = Rosenbrock(b=100.0, x=10.0, y=20.0)
@@ -1295,8 +1345,9 @@ class TestOptimizableSerialize(unittest.TestCase):
         self.assertAlmostEqual(r.term2, r_orig.term2)
 
     def test_twolevel_serialize(self):
-        adder1 = FAdder(n=3, x0=[1, 2, 3], names=["x", "y", "z"],
-                        fixed=[True, False, True])
+        adder1 = FAdder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, True]
+        )
         adder2 = FAdder(n=2, x0=[10, 11], names=["a", "b"], fixed=[True, False])
         test_opt_orig = TestObject1(100.0, depends_on=[adder1, adder2])
         s = json.dumps(SIMSON(test_opt_orig), cls=GSONEncoder)
@@ -1308,11 +1359,12 @@ class TestOptimizableSerialize(unittest.TestCase):
         scaled_beale = ScaledOptimizable(2.0, beale)
         s = json.dumps(SIMSON(scaled_beale), cls=GSONEncoder)
         scaled_beale_regen = json.loads(s, cls=GSONDecoder)
-        self.assertTrue(np.allclose(scaled_beale_regen.J(), 2*beale.J()))
+        self.assertTrue(np.allclose(scaled_beale_regen.J(), 2 * beale.J()))
 
     def test_optimizable_sum_serializer(self):
-        adder1 = FAdder(n=3, x0=[1, 2, 3], names=["x", "y", "z"],
-                        fixed=[True, False, True])
+        adder1 = FAdder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, True]
+        )
         adder2 = FAdder(n=2, x0=[10, 11], names=["a", "b"], fixed=[True, False])
         opt_sum = OptimizableSum(opts=[adder1, adder2])
         s = json.dumps(SIMSON(opt_sum), cls=GSONEncoder)
@@ -1323,8 +1375,9 @@ class TestOptimizableSerialize(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        adder1 = FAdder(n=3, x0=[1, 2, 3], names=["x", "y", "z"],
-                        fixed=[True, False, True])
+        adder1 = FAdder(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[True, False, True]
+        )
         adder2 = FAdder(n=2, x0=[10, 11], names=["a", "b"], fixed=[True, False])
         with tempfile.TemporaryDirectory() as tmpdir:
             fpath = Path(tmpdir) / "adders.json"
@@ -1345,7 +1398,7 @@ class TestOptimizableSerialize(unittest.TestCase):
             adder1_file_regen = FAdder.from_file(fpath)
             self.assertAlmostEqual(adder1.J(), adder1_file_regen.J())
 
-        adder_str1 = adder1.save(fmt='json', indent=2)
+        adder_str1 = adder1.save(fmt="json", indent=2)
         adder1_str_regen1 = Optimizable.from_str(adder_str1)
         self.assertAlmostEqual(adder1.J(), adder1_str_regen1.J())
 
@@ -1371,8 +1424,9 @@ class TestOptimizableSharedDOFs(unittest.TestCase):
     """
 
     def test_adder_dofs_shared_change_vals(self):
-        adder_orig = OptClassSharedDOFs(x0=[1, 2, 3], names=["x", "y", "z"],
-                                        fixed=[False, False, True])
+        adder_orig = OptClassSharedDOFs(
+            x0=[1, 2, 3], names=["x", "y", "z"], fixed=[False, False, True]
+        )
         adder_shared_dofs = OptClassSharedDOFs(dofs=adder_orig.dofs)
         self.assertEqual(adder_orig.J(), adder_shared_dofs.J())
         adder_orig.x = [11, 12]
@@ -1387,8 +1441,9 @@ class TestOptimizableSharedDOFs(unittest.TestCase):
         self.assertEqual(adder_orig.J(), adder_shared_dofs.J())
 
     def test_adder_dofs_shared_fix_unfix(self):
-        adder_orig = OptClassSharedDOFs(x0=[1, 2, 3], names=["x", "y", "z"],
-                                        fixed=[False, False, True])
+        adder_orig = OptClassSharedDOFs(
+            x0=[1, 2, 3], names=["x", "y", "z"], fixed=[False, False, True]
+        )
         adder_shared_dofs = OptClassSharedDOFs(dofs=adder_orig.dofs)
         self.assertEqual(adder_orig.J(), adder_shared_dofs.J())
 
@@ -1411,52 +1466,61 @@ class TestOptimizableSharedDOFs(unittest.TestCase):
         self.assertTrue(len(adder_shared_dofs.x) == 0)
 
     def test_derivative(self):
-        adder_orig = OptClassSharedDOFs(x0=[1, 2, 3], names=["x", "y", "z"],
-                                        fixed=[False, False, True])
+        adder_orig = OptClassSharedDOFs(
+            x0=[1, 2, 3], names=["x", "y", "z"], fixed=[False, False, True]
+        )
 
         adder_shared_dofs = OptClassSharedDOFs(dofs=adder_orig.dofs)
         sum_obj = adder_orig + adder_shared_dofs
 
         # test that the Derivative class is correctly combining the derivatives
-        self.assertTrue((adder_orig.dJ()*2 == sum_obj.dJ()).all())
+        self.assertTrue((adder_orig.dJ() * 2 == sum_obj.dJ()).all())
         self.assertTrue((sum_obj.dJ(partials=True)(adder_orig) == sum_obj.dJ()).all())
-        self.assertTrue((sum_obj.dJ(partials=True)(adder_shared_dofs) == sum_obj.dJ()).all())
+        self.assertTrue(
+            (sum_obj.dJ(partials=True)(adder_shared_dofs) == sum_obj.dJ()).all()
+        )
 
     def test_as_derivative1(self):
         # this test checks that you can restrict the Derivative dictionary
         # to the proper subset of Optimizables when as_derivative=True
 
-        optA = OptClassSharedDOFs(x0=[1, 2, 3], names=["x", "y", "z"],
-                                  fixed=[False, False, True])
+        optA = OptClassSharedDOFs(
+            x0=[1, 2, 3], names=["x", "y", "z"], fixed=[False, False, True]
+        )
         optA_shared_dofs = OptClassSharedDOFs(dofs=optA.dofs)
 
-        optB = OptClassSharedDOFs(x0=[np.pi, 1, 1.21], names=["xx", "yy", "zz"],
-                                  fixed=[False, False, True])
+        optB = OptClassSharedDOFs(
+            x0=[np.pi, 1, 1.21], names=["xx", "yy", "zz"], fixed=[False, False, True]
+        )
         sum_opt = optA + optA_shared_dofs + optB
         deriv = sum_opt.dJ(partials=True)(sum_opt, as_derivative=True)
 
         # restrict to optA
-        np.testing.assert_allclose(deriv(optA), optA.dJ()*2, atol=1e-14)
+        np.testing.assert_allclose(deriv(optA), optA.dJ() * 2, atol=1e-14)
         # restrict to optA_shared_dofs
-        np.testing.assert_allclose(deriv(optA_shared_dofs), optA.dJ()*2, atol=1e-14)
+        np.testing.assert_allclose(deriv(optA_shared_dofs), optA.dJ() * 2, atol=1e-14)
         # restrict to sum_opt
-        np.testing.assert_allclose(deriv(sum_opt), np.concatenate((optA.dJ()*2, optB.dJ())), atol=1e-14)
+        np.testing.assert_allclose(
+            deriv(sum_opt), np.concatenate((optA.dJ() * 2, optB.dJ())), atol=1e-14
+        )
 
     def test_as_derivative2(self):
         # this test checks that when you sum a Derivative dictionary generated using as_derivative=True,
         # to another that things work as expected when some DOFs are fixed.
 
-        opt = OptClassSharedDOFs(x0=[1, 2, 3], names=["x", "y", "z"],
-                                 fixed=[False, False, True])
+        opt = OptClassSharedDOFs(
+            x0=[1, 2, 3], names=["x", "y", "z"], fixed=[False, False, True]
+        )
         deriv = opt.dJ(partials=True)(opt, as_derivative=True) + opt.dJ(partials=True)
-        np.testing.assert_allclose(deriv(opt), opt.dJ()*2, atol=1e-14)
+        np.testing.assert_allclose(deriv(opt), opt.dJ() * 2, atol=1e-14)
 
     def test_load_save(self):
         import tempfile
         from pathlib import Path
 
-        adder1 = OptClassSharedDOFs(n=3, x0=[1, 2, 3], names=["x", "y", "z"],
-                                    fixed=[False, False, True])
+        adder1 = OptClassSharedDOFs(
+            n=3, x0=[1, 2, 3], names=["x", "y", "z"], fixed=[False, False, True]
+        )
         adder2 = OptClassSharedDOFs(dofs=adder1.dofs)
         self.assertAlmostEqual(adder1.J(), adder2.J())
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1478,14 +1542,15 @@ class TestOptimizableSharedDOFs(unittest.TestCase):
             adder1_file_regen = FAdder.from_file(fpath)
             self.assertAlmostEqual(adder1.J(), adder1_file_regen.J())
 
-        adder_str1 = adder1.save(fmt='json', indent=2)
+        adder_str1 = adder1.save(fmt="json", indent=2)
         adder1_str_regen1 = Optimizable.from_str(adder_str1)
         self.assertAlmostEqual(adder1.J(), adder1_str_regen1.J())
 
     def test_dof_lengths(self):
 
-        adder_orig = OptClassSharedDOFs(x0=[1, 2, 3], names=["x", "y", "z"],
-                                        fixed=[False, False, True])
+        adder_orig = OptClassSharedDOFs(
+            x0=[1, 2, 3], names=["x", "y", "z"], fixed=[False, False, True]
+        )
         adder_shared_dofs = OptClassSharedDOFs(dofs=adder_orig.dofs)
         sum_obj = adder_orig + adder_shared_dofs
         self.assertEqual(sum_obj.dof_size, 2)

@@ -7,13 +7,10 @@ import simsoptpp as sopp
 from .._core.types import RealArray
 
 
-__all__ = ['relax_and_split', 'GPMO']
+__all__ = ["relax_and_split", "GPMO"]
 
 
-def prox_l0(m: RealArray,
-            mmax: RealArray,
-            reg_l0: float,
-            nu: float):
+def prox_l0(m: RealArray, mmax: RealArray, reg_l0: float, nu: float):
     r"""
     Proximal operator for L0 regularization.
 
@@ -61,7 +58,11 @@ def prox_l1(m, mmax, reg_l1, nu):
     ndipoles = len(m) // 3
     mmax_vec = np.array([mmax, mmax, mmax]).T
     m_normalized = (np.abs(m).reshape(ndipoles, 3) / mmax_vec).reshape(ndipoles * 3)
-    return np.sign(m) * np.maximum(np.abs(m_normalized) - reg_l1 * nu, 0) * np.ravel(mmax_vec)
+    return (
+        np.sign(m)
+        * np.maximum(np.abs(m_normalized) - reg_l1 * nu, 0)
+        * np.ravel(mmax_vec)
+    )
 
 
 def projection_L2_balls(x, mmax):
@@ -79,7 +80,7 @@ def projection_L2_balls(x, mmax):
     """
     N = len(x) // 3
     x_shaped = x.reshape(N, 3)
-    denom_fac = np.sqrt(np.sum(x_shaped ** 2, axis=-1)) / mmax
+    denom_fac = np.sqrt(np.sum(x_shaped**2, axis=-1)) / mmax
     denom = np.maximum(np.ones(len(denom_fac)), denom_fac)
     return np.divide(x_shaped, np.array([denom, denom, denom]).T).reshape(3 * N)
 
@@ -101,16 +102,16 @@ def setup_initial_condition(pm_opt, m0=None):
     if m0 is not None:
         if len(m0) != pm_opt.ndipoles * 3:
             raise ValueError(
-                'Initial dipole guess is incorrect shape --'
-                ' guess must be 1D with shape (ndipoles * 3).'
+                "Initial dipole guess is incorrect shape --"
+                " guess must be 1D with shape (ndipoles * 3)."
             )
         m0_temp = projection_L2_balls(m0, pm_opt.m_maxima)
         # check if m0 lies inside the hypersurface spanned by
         # L2 balls, which we require it does
         if not np.allclose(m0, m0_temp):
             raise ValueError(
-                'Initial dipole guess must contain values '
-                'that are satisfy the maximum bound constraints.'
+                "Initial dipole guess must contain values "
+                "that are satisfy the maximum bound constraints."
             )
         pm_opt.m0 = m0
 
@@ -204,11 +205,13 @@ def relax_and_split(pm_opt, m0=None, **kwargs):
     reg_l0 = kwargs.get("reg_l0", 0.0)
     reg_l1 = kwargs.get("reg_l1", 0.0)
 
-    max_iter_RS = kwargs.pop('max_iter_RS', 1)
-    epsilon_RS = kwargs.pop('epsilon_RS', 1e-3)
+    max_iter_RS = kwargs.pop("max_iter_RS", 1)
+    epsilon_RS = kwargs.pop("epsilon_RS", 1e-3)
 
-    if (not np.isclose(reg_l0, 0.0, atol=1e-16)) and (not np.isclose(reg_l1, 0.0, atol=1e-16)):
-        raise ValueError(' L0 and L1 loss terms cannot be used concurrently.')
+    if (not np.isclose(reg_l0, 0.0, atol=1e-16)) and (
+        not np.isclose(reg_l1, 0.0, atol=1e-16)
+    ):
+        raise ValueError(" L0 and L1 loss terms cannot be used concurrently.")
     elif not np.isclose(reg_l0, 0.0, atol=1e-16):
         prox = prox_l0
         reg_rs = reg_l0
@@ -225,7 +228,7 @@ def relax_and_split(pm_opt, m0=None, **kwargs):
     mmax = pm_opt.m_maxima
     if reg_rs > 0.0:
         m_proxy = prox(m_proxy, mmax, reg_rs, nu)
-    kwargs['alpha'] = alpha_max
+    kwargs["alpha"] = alpha_max
 
     # Begin optimization
     if reg_rs > 0.0:
@@ -238,9 +241,11 @@ def relax_and_split(pm_opt, m0=None, **kwargs):
                 b_obj=pm_opt.b_obj,
                 ATb=ATb,
                 m_proxy=np.ascontiguousarray(m_proxy.reshape(pm_opt.ndipoles, 3)),
-                m0=np.ascontiguousarray(m.reshape(pm_opt.ndipoles, 3)),  # note updated m is new guess
+                m0=np.ascontiguousarray(
+                    m.reshape(pm_opt.ndipoles, 3)
+                ),  # note updated m is new guess
                 m_maxima=mmax,
-                **kwargs
+                **kwargs,
             )
             m_history.append(m)
             m = np.ravel(m)
@@ -251,7 +256,7 @@ def relax_and_split(pm_opt, m0=None, **kwargs):
             m_proxy = prox(m, mmax, reg_rs, nu)
             m_proxy_history.append(m_proxy)
             if np.linalg.norm(m - m_proxy) < epsilon_RS:
-                print('Relax-and-split finished early, at iteration ', i)
+                print("Relax-and-split finished early, at iteration ", i)
                 break
     else:
         m0 = np.ascontiguousarray(m0.reshape(pm_opt.ndipoles, 3))
@@ -264,7 +269,7 @@ def relax_and_split(pm_opt, m0=None, **kwargs):
             m_proxy=m0,
             m0=m0,
             m_maxima=mmax,
-            **kwargs
+            **kwargs,
         )
         m = np.ravel(m)
         m_proxy = m
@@ -275,7 +280,7 @@ def relax_and_split(pm_opt, m0=None, **kwargs):
     return errors, m_history, m_proxy_history
 
 
-def GPMO(pm_opt, algorithm='baseline', **kwargs):
+def GPMO(pm_opt, algorithm="baseline", **kwargs):
     r"""
     GPMO is a greedy algorithm for the permanent magnet optimization problem.
 
@@ -304,7 +309,7 @@ def GPMO(pm_opt, algorithm='baseline', **kwargs):
             ArbVec_backtracking:
                 same as above but w/ backtracking.
 
-            Easiest algorithm to use is 'baseline' but most effective 
+            Easiest algorithm to use is 'baseline' but most effective
             algorithm is 'ArbVec_backtracking'.
         kwargs:
             Keyword arguments for the GPMO algorithm and its variants.
@@ -363,8 +368,10 @@ def GPMO(pm_opt, algorithm='baseline', **kwargs):
 
     """
     if not hasattr(pm_opt, "A_obj"):
-        raise ValueError("The PermanentMagnetClass needs to use geo_setup() or "
-                         "geo_setup_from_famus() before calling optimization routines.")
+        raise ValueError(
+            "The PermanentMagnetClass needs to use geo_setup() or "
+            "geo_setup_from_famus() before calling optimization routines."
+        )
 
     # Begin the various algorithms
     errors = []
@@ -377,96 +384,119 @@ def GPMO(pm_opt, algorithm='baseline', **kwargs):
     mmax_vec = contig(np.array([mmax, mmax, mmax]).T.reshape(pm_opt.ndipoles * 3))
     A_obj = pm_opt.A_obj * mmax_vec
 
-    if (algorithm != 'baseline' and algorithm != 'mutual_coherence' and algorithm != 'ArbVec') and 'dipole_grid_xyz' not in kwargs:
-        raise ValueError('GPMO variants require dipole_grid_xyz to be defined.')
+    if (
+        algorithm != "baseline"
+        and algorithm != "mutual_coherence"
+        and algorithm != "ArbVec"
+    ) and "dipole_grid_xyz" not in kwargs:
+        raise ValueError("GPMO variants require dipole_grid_xyz to be defined.")
 
     # Set the L2 regularization if it is included in the kwargs
     reg_l2 = kwargs.pop("reg_l2", 0.0)
 
     # check that algorithm can generate K binary dipoles if no backtracking done
     if "K" in kwargs:
-        if (algorithm not in ['backtracking', 'ArbVec_backtracking']) and kwargs["K"] > pm_opt.ndipoles:
+        if (algorithm not in ["backtracking", "ArbVec_backtracking"]) and kwargs[
+            "K"
+        ] > pm_opt.ndipoles:
             warnings.warn(
-                'Parameter K to GPMO algorithm is greater than the total number of dipole locations '
-                ' so the algorithm will set K = the total number and proceed.')
+                "Parameter K to GPMO algorithm is greater than the total number of dipole locations "
+                " so the algorithm will set K = the total number and proceed."
+            )
             kwargs["K"] = pm_opt.ndipoles
-        print('Number of binary dipoles to use in GPMO algorithm = ', kwargs["K"])
+        print("Number of binary dipoles to use in GPMO algorithm = ", kwargs["K"])
 
     if "nhistory" in kwargs and "K" in kwargs:
-        if kwargs['nhistory'] > kwargs['K']:
-            raise ValueError('nhistory must be less than K for the GPMO algorithm.')
+        if kwargs["nhistory"] > kwargs["K"]:
+            raise ValueError("nhistory must be less than K for the GPMO algorithm.")
 
-    Nnorms = contig(np.ravel(np.sqrt(np.sum(pm_opt.plasma_boundary.normal() ** 2, axis=-1))))
+    Nnorms = contig(
+        np.ravel(np.sqrt(np.sum(pm_opt.plasma_boundary.normal() ** 2, axis=-1)))
+    )
 
     # Note, only baseline method has the f_m loss term implemented!
-    if algorithm == 'baseline':  # GPMO
+    if algorithm == "baseline":  # GPMO
         algorithm_history, Bn_history, m_history, m = sopp.GPMO_baseline(
             A_obj=contig(A_obj.T),
             b_obj=contig(pm_opt.b_obj),
-            mmax=np.sqrt(reg_l2)*mmax_vec,
+            mmax=np.sqrt(reg_l2) * mmax_vec,
             normal_norms=Nnorms,
-            **kwargs
+            **kwargs,
         )
-    elif algorithm == 'ArbVec':  # GPMO with arbitrary polarization vectors
+    elif algorithm == "ArbVec":  # GPMO with arbitrary polarization vectors
         algorithm_history, Bn_history, m_history, m = sopp.GPMO_ArbVec(
             A_obj=contig(A_obj.T),
             b_obj=contig(pm_opt.b_obj),
-            mmax=np.sqrt(reg_l2)*mmax_vec,
+            mmax=np.sqrt(reg_l2) * mmax_vec,
             normal_norms=Nnorms,
             pol_vectors=contig(pm_opt.pol_vectors),
-            **kwargs
+            **kwargs,
         )
-    elif algorithm == 'backtracking':  # GPMOb
-        algorithm_history, Bn_history, m_history, num_nonzeros, m = sopp.GPMO_backtracking(
-            A_obj=contig(A_obj.T),
-            b_obj=contig(pm_opt.b_obj),
-            mmax=np.sqrt(reg_l2)*mmax_vec,
-            normal_norms=Nnorms,
-            **kwargs
+    elif algorithm == "backtracking":  # GPMOb
+        algorithm_history, Bn_history, m_history, num_nonzeros, m = (
+            sopp.GPMO_backtracking(
+                A_obj=contig(A_obj.T),
+                b_obj=contig(pm_opt.b_obj),
+                mmax=np.sqrt(reg_l2) * mmax_vec,
+                normal_norms=Nnorms,
+                **kwargs,
+            )
         )
         pm_opt.num_nonzeros = num_nonzeros[num_nonzeros != 0]
-    elif algorithm == 'ArbVec_backtracking':  # GPMOb with arbitrary vectors
-        if pm_opt.coordinate_flag != 'cartesian':
-            raise ValueError('ArbVec_backtracking algorithm currently '
-                             'only supports dipole grids with \n'
-                             'moment vectors in the Cartesian basis.')
-        nGridPoints = int(A_obj.shape[1]/3)
+    elif algorithm == "ArbVec_backtracking":  # GPMOb with arbitrary vectors
+        if pm_opt.coordinate_flag != "cartesian":
+            raise ValueError(
+                "ArbVec_backtracking algorithm currently "
+                "only supports dipole grids with \n"
+                "moment vectors in the Cartesian basis."
+            )
+        nGridPoints = int(A_obj.shape[1] / 3)
         if "m_init" in kwargs.keys():
             if kwargs["m_init"].shape[0] != nGridPoints:
-                raise ValueError('Initialization vector `m_init` must have '
-                                 'as many rows as there are dipoles in the '
-                                 'grid')
+                raise ValueError(
+                    "Initialization vector `m_init` must have "
+                    "as many rows as there are dipoles in the "
+                    "grid"
+                )
             elif kwargs["m_init"].shape[1] != 3:
-                raise ValueError('Initialization vector `m_init` must have '
-                                 'three columns')
-            kwargs["x_init"] = contig(kwargs["m_init"]
-                                      / (mmax_vec.reshape(pm_opt.ndipoles, 3)))
+                raise ValueError(
+                    "Initialization vector `m_init` must have three columns"
+                )
+            kwargs["x_init"] = contig(
+                kwargs["m_init"] / (mmax_vec.reshape(pm_opt.ndipoles, 3))
+            )
             kwargs.pop("m_init")
         else:
             kwargs["x_init"] = contig(np.zeros((nGridPoints, 3)))
-        algorithm_history, Bn_history, m_history, num_nonzeros, m = sopp.GPMO_ArbVec_backtracking(
-            A_obj=contig(A_obj.T),
-            b_obj=contig(pm_opt.b_obj),
-            mmax=np.sqrt(reg_l2)*mmax_vec,
-            normal_norms=Nnorms,
-            pol_vectors=contig(pm_opt.pol_vectors),
-            **kwargs
+        algorithm_history, Bn_history, m_history, num_nonzeros, m = (
+            sopp.GPMO_ArbVec_backtracking(
+                A_obj=contig(A_obj.T),
+                b_obj=contig(pm_opt.b_obj),
+                mmax=np.sqrt(reg_l2) * mmax_vec,
+                normal_norms=Nnorms,
+                pol_vectors=contig(pm_opt.pol_vectors),
+                **kwargs,
+            )
         )
-    elif algorithm == 'multi':  # GPMOm
+    elif algorithm == "multi":  # GPMOm
         algorithm_history, Bn_history, m_history, m = sopp.GPMO_multi(
             A_obj=contig(A_obj.T),
             b_obj=contig(pm_opt.b_obj),
-            mmax=np.sqrt(reg_l2)*mmax_vec,
+            mmax=np.sqrt(reg_l2) * mmax_vec,
             normal_norms=Nnorms,
-            **kwargs
+            **kwargs,
         )
     else:
-        raise NotImplementedError('Requested algorithm variant is incorrect or not yet implemented')
+        raise NotImplementedError(
+            "Requested algorithm variant is incorrect or not yet implemented"
+        )
 
     # rescale m and m_history
     m = m * (mmax_vec.reshape(pm_opt.ndipoles, 3))
-    print('Number of binary dipoles returned by GPMO algorithm = ',
-          np.count_nonzero(np.sum(m, axis=-1)))
+    print(
+        "Number of binary dipoles returned by GPMO algorithm = ",
+        np.count_nonzero(np.sum(m, axis=-1)),
+    )
 
     # rescale the m that have been saved every Nhistory iterations
     for i in range(m_history.shape[-1]):

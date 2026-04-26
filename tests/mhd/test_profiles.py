@@ -8,8 +8,13 @@ try:
 except ImportError:
     matplotlib = None
 
-from simsopt.mhd import (ProfilePolynomial, ProfileScaled, ProfileSpline,
-                         ProfilePressure, ProfileSpec)
+from simsopt.mhd import (
+    ProfilePolynomial,
+    ProfileScaled,
+    ProfileSpline,
+    ProfilePressure,
+    ProfileSpec,
+)
 
 logger = logging.getLogger(__name__)
 # logging.basicConfig(level=logging.DEBUG)
@@ -50,12 +55,11 @@ class ProfilesTests(unittest.TestCase):
         # Function: f(s) = 3 * (1 - s^3)
         prof = ProfilePolynomial([3, 0, 0, -3])
         s = np.linspace(0, 1, 10)
-        np.testing.assert_allclose(prof.f(s), 3 * (1 - s ** 3))
-        np.testing.assert_allclose(prof(s), 3 * (1 - s ** 3))
-        np.testing.assert_allclose(prof.dfds(s), 3 * (- 3 * s ** 2))
+        np.testing.assert_allclose(prof.f(s), 3 * (1 - s**3))
+        np.testing.assert_allclose(prof(s), 3 * (1 - s**3))
+        np.testing.assert_allclose(prof.dfds(s), 3 * (-3 * s**2))
 
-    @unittest.skipIf(matplotlib is None,
-                     "Matplotlib python module not found")
+    @unittest.skipIf(matplotlib is None, "Matplotlib python module not found")
     def test_plot(self):
         """
         Test the plotting function.
@@ -93,9 +97,7 @@ class ProfilesTests(unittest.TestCase):
         np.testing.assert_allclose(profile(s), f)
         np.testing.assert_allclose(profile.dfds(s), 0.7 + 2 * 0.3 * s)
         np.testing.assert_allclose(profile(s_fine), f_fine)
-        np.testing.assert_allclose(
-            profile.dfds(s_fine),
-            0.7 + 2 * 0.3 * s_fine)
+        np.testing.assert_allclose(profile.dfds(s_fine), 0.7 + 2 * 0.3 * s_fine)
 
         # Try changing the dofs
         f2 = -2.1 - 0.4 * s + 0.7 * s * s
@@ -105,22 +107,19 @@ class ProfilesTests(unittest.TestCase):
         np.testing.assert_allclose(profile(s), f2)
         np.testing.assert_allclose(profile.dfds(s), -0.4 + 2 * 0.7 * s)
         np.testing.assert_allclose(profile(s_fine), f2_fine)
-        np.testing.assert_allclose(
-            profile.dfds(s_fine), -0.4 + 2 * 0.7 * s_fine)
+        np.testing.assert_allclose(profile.dfds(s_fine), -0.4 + 2 * 0.7 * s_fine)
 
         profile2 = profile.resample(s_fine)
         self.assertEqual(profile2.degree, profile.degree)
         np.testing.assert_allclose(profile2.full_x, f2_fine)
         np.testing.assert_allclose(profile2(s_fine), f2_fine)
-        np.testing.assert_allclose(
-            profile2.dfds(s_fine), -0.4 + 2 * 0.7 * s_fine)
+        np.testing.assert_allclose(profile2.dfds(s_fine), -0.4 + 2 * 0.7 * s_fine)
 
         profile2 = profile.resample(s_fine, degree=4)
         self.assertEqual(profile2.degree, 4)
         np.testing.assert_allclose(profile2.full_x, f2_fine)
         np.testing.assert_allclose(profile2(s_fine), f2_fine)
-        np.testing.assert_allclose(
-            profile2.dfds(s_fine), -0.4 + 2 * 0.7 * s_fine)
+        np.testing.assert_allclose(profile2.dfds(s_fine), -0.4 + 2 * 0.7 * s_fine)
 
         # Try a case with extrapolation
         s = np.linspace(0.1, 0.9, 2)
@@ -130,15 +129,13 @@ class ProfilesTests(unittest.TestCase):
         np.testing.assert_allclose(profile3(s), f)
         np.testing.assert_allclose(profile3.dfds(s), -0.5 * np.ones_like(s))
         np.testing.assert_allclose(profile3(s_fine), f_fine)
-        np.testing.assert_allclose(
-            profile3.dfds(s_fine), -0.5 * np.ones_like(s_fine))
+        np.testing.assert_allclose(profile3.dfds(s_fine), -0.5 * np.ones_like(s_fine))
 
         profile4 = profile3.resample(s_fine)
         self.assertEqual(profile4.degree, 1)
         np.testing.assert_allclose(profile4.full_x, f_fine)
         np.testing.assert_allclose(profile4(s_fine), f_fine)
-        np.testing.assert_allclose(
-            profile4.dfds(s_fine), -0.5 * np.ones_like(s_fine))
+        np.testing.assert_allclose(profile4.dfds(s_fine), -0.5 * np.ones_like(s_fine))
 
     def test_pressure(self):
         """
@@ -153,12 +150,12 @@ class ProfilesTests(unittest.TestCase):
 
         s = np.linspace(0, 1, 20)
         atol = 1e-14
+        np.testing.assert_allclose(pressure(s), ne(s) * (Te(s) + TH(s)), atol=atol)
         np.testing.assert_allclose(
-            pressure(s), ne(s) * (Te(s) + TH(s)), atol=atol)
-        np.testing.assert_allclose(pressure.dfds(s),
-                                   ne.dfds(s) * (Te(s) + TH(s))
-                                   + ne(s) * (Te.dfds(s) + TH.dfds(s)),
-                                   atol=atol)
+            pressure.dfds(s),
+            ne.dfds(s) * (Te(s) + TH(s)) + ne(s) * (Te.dfds(s) + TH.dfds(s)),
+            atol=atol,
+        )
 
         # Now try a case with 3 species:
         nD = ProfileScaled(ne, 0.55)
@@ -174,14 +171,18 @@ class ProfilesTests(unittest.TestCase):
         TT.local_unfix_all()
         for j in range(2):
             np.testing.assert_allclose(
-                pressure(s),
-                ne(s) * Te(s) + nD(s) * TD(s) + nT(s) * TT(s),
-                atol=atol)
+                pressure(s), ne(s) * Te(s) + nD(s) * TD(s) + nT(s) * TT(s), atol=atol
+            )
             np.testing.assert_allclose(
                 pressure.dfds(s),
-                ne.dfds(s) * Te(s) + nT.dfds(s) * TT(s) + nD.dfds(s) * TD(s) +
-                ne(s) * Te.dfds(s) + nT(s) * TT.dfds(s) + nD(s) * TD.dfds(s),
-                atol=atol)
+                ne.dfds(s) * Te(s)
+                + nT.dfds(s) * TT(s)
+                + nD.dfds(s) * TD(s)
+                + ne(s) * Te.dfds(s)
+                + nT(s) * TT.dfds(s)
+                + nD(s) * TD.dfds(s),
+                atol=atol,
+            )
             # Try changing some dofs before the 2nd loop iteration:
             ne.x = 2.0e20 * np.array([1.0, 0.0, 0.0, -1.0, 0.0])
             nD.local_x = [0.51]

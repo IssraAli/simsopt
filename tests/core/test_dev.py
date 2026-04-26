@@ -17,10 +17,11 @@ class TestClass(Optimizable):
         super().__init__(x0=x, fixed=fixed)
 
     def J(self):
-        return np.exp(self.full_x[0] ** 2 - np.exp(self.full_x[1])
-                      + np.sin(self.full_x[2]))
+        return np.exp(
+            self.full_x[0] ** 2 - np.exp(self.full_x[1]) + np.sin(self.full_x[2])
+        )
 
-    return_fn_map = {'J': J}
+    return_fn_map = {"J": J}
 
 
 class SimsoptRequiresTest(unittest.TestCase):
@@ -29,5 +30,5 @@ class SimsoptRequiresTest(unittest.TestCase):
         self.assertTrue(issubclass(type(tf), Optimizable))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

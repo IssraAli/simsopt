@@ -10,7 +10,7 @@ from simsopt.geo.curveobjectives import CurveLength
 from simsopt.objectives.least_squares import LeastSquaresProblem
 from simsopt.solve.serial import least_squares_serial_solve
 
-parameters['jit'] = False
+parameters["jit"] = False
 
 # MJL 2025-01-24: Eventually we should get this test working,
 # but for some reason the objective is giving NaNs in
@@ -19,7 +19,6 @@ parameters['jit'] = False
 
 @unittest.skip
 class Testing(unittest.TestCase):
-
     def subtest_curve_length_optimisation(self, rotated):
         nquadrature = 100
         nfourier = 4
@@ -30,7 +29,7 @@ class Testing(unittest.TestCase):
         x0 = np.random.rand(curve.dof_size) - 0.5
         x0[0] = 3.0
         curve.x = x0
-        print('Initial curve dofs: ', curve.x)
+        print("Initial curve dofs: ", curve.x)
 
         # Tell the curve object that the first Fourier mode is fixed, whereas
         # all the other dofs are not.
@@ -46,7 +45,7 @@ class Testing(unittest.TestCase):
         # For now, we need to add this attribute to CurveLength. Eventually
         # this would hopefully be done in simsgeo, but for now I'll put it here.
 
-        print('Initial curve length: ', obj.J())
+        print("Initial curve length: ", obj.J())
 
         # Each target function is then equipped with a shift and weight, to
         # become a term in a least-squares objective function.
@@ -71,11 +70,11 @@ class Testing(unittest.TestCase):
         with ScratchDir("."):
             least_squares_serial_solve(prob, ftol=1e-10, xtol=1e-10, gtol=1e-10)
 
-        print('At the optimum, x: ', prob.x)
-        print(' Final curve dofs: ', curve.local_full_x)
-        print(' Final curve length:    ', obj.J())
-        print(' Expected final length: ', 2 * np.pi * x0[0])
-        print(' objective function: ', prob.objective())
+        print("At the optimum, x: ", prob.x)
+        print(" Final curve dofs: ", curve.local_full_x)
+        print(" Final curve length:    ", obj.J())
+        print(" Expected final length: ", 2 * np.pi * x0[0])
+        print(" objective function: ", prob.objective())
         np.testing.assert_allclose(obj.J(), 2 * np.pi * x0[0], rtol=0, atol=1e-8)
 
     def test_curve_length_optimization(self):

@@ -3,6 +3,7 @@ import unittest
 
 from monty.tempfile import ScratchDir
 import numpy as np
+
 try:
     from mpi4py import MPI
 except:
@@ -11,11 +12,12 @@ except:
 from simsopt._core.optimizable import Optimizable
 from simsopt._core import ObjectiveFailure
 from simsopt.objectives.least_squares import LeastSquaresProblem
+
 if MPI is not None:
     from simsopt.util.mpi import MpiPartition
     from simsopt.solve.mpi import least_squares_mpi_solve
 
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -26,10 +28,11 @@ class TestFunction1(Optimizable):
         super().__init__(x0=x, fixed=fixed)
 
     def J(self):
-        return np.exp(self.full_x[0] ** 2 - np.exp(self.full_x[1])
-                      + np.sin(self.full_x[2]))
+        return np.exp(
+            self.full_x[0] ** 2 - np.exp(self.full_x[1]) + np.sin(self.full_x[2])
+        )
 
-    return_fn_map = {'J': J}
+    return_fn_map = {"J": J}
 
 
 class TestFunction2(Optimizable):
@@ -50,7 +53,7 @@ class TestFunction2(Optimizable):
     def f3(self):
         return np.exp(3 + self.full_x[0] ** 2 - np.exp(self.full_x[1]))
 
-    return_fn_map = {'f0': f0, 'f1': f1, 'f2': f2, 'f3': f3}
+    return_fn_map = {"f0": f0, "f1": f1, "f2": f2, "f3": f3}
 
 
 class TestFunction3(Optimizable):
@@ -85,7 +88,7 @@ class TestFunction3(Optimizable):
         print(f"TestFunction3.f1 called {self.f1_call_cnt} times")
         return self.local_full_x[0] ** 2 - self.local_full_x[1]
 
-    return_fn_map = {'f0': f0, 'f1': f1}
+    return_fn_map = {"f0": f0, "f1": f1}
 
 
 class FailingOptimizable(Optimizable):
@@ -96,7 +99,6 @@ class FailingOptimizable(Optimizable):
 
 @unittest.skipIf(MPI is None, "Requires mpi4py")
 class MPISolveTests(unittest.TestCase):
-
     def test_parallel_optimization_without_grad(self):
         """
         Test a full least-squares optimization.
@@ -126,8 +128,10 @@ class MPISolveTests(unittest.TestCase):
 
                     for rel_step in rel_steps:
                         for diff_method in ["forward", "centered"]:
-                            logger.debug(f'ngroups={ngroups} abs_step={abs_step} '
-                                         f'rel_step={rel_step} diff_method={diff_method}')
+                            logger.debug(
+                                f"ngroups={ngroups} abs_step={abs_step} "
+                                f"rel_step={rel_step} diff_method={diff_method}"
+                            )
                             mpi = MpiPartition(ngroups=ngroups)
                             o = TestFunction3(mpi.comm_groups)
                             term1 = (o.f0, 0, 1)
@@ -137,10 +141,14 @@ class MPISolveTests(unittest.TestCase):
                             # because otherwise abs_step=0 causes step
                             # size to be 0.
                             prob.x = [-0.1, 0.2]
-                            least_squares_mpi_solve(prob, mpi, grad=True,
-                                                    diff_method=diff_method,
-                                                    abs_step=abs_step,
-                                                    rel_step=rel_step)
+                            least_squares_mpi_solve(
+                                prob,
+                                mpi,
+                                grad=True,
+                                diff_method=diff_method,
+                                abs_step=abs_step,
+                                rel_step=rel_step,
+                            )
                             self.assertAlmostEqual(prob.x[0], 1)
                             self.assertAlmostEqual(prob.x[1], 1)
 
@@ -154,8 +162,6 @@ class MPISolveTests(unittest.TestCase):
 
                 opt = FailingOptimizable(x0=np.array([5, 6, 7, 8.0]))
 
-                prob = LeastSquaresProblem.from_tuples(
-                    [(opt.residuals, 0, 1)]
-                )
+                prob = LeastSquaresProblem.from_tuples([(opt.residuals, 0, 1)])
 
                 least_squares_mpi_solve(prob, mpi, grad=True)

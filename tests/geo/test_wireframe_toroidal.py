@@ -2,8 +2,12 @@ import unittest
 from pathlib import Path
 from monty.tempfile import ScratchDir
 import numpy as np
-from simsopt.geo import SurfaceRZFourier, ToroidalWireframe, CircularPort, \
-    windowpane_wireframe
+from simsopt.geo import (
+    SurfaceRZFourier,
+    ToroidalWireframe,
+    CircularPort,
+    windowpane_wireframe,
+)
 from simsopt.field.wireframefield import WireframeField, enclosed_current
 from simsopt.geo.curvexyzfourier import CurveXYZFourier
 
@@ -40,10 +44,10 @@ def subtended_angle(x, y):
     """
 
     if len(x) < 2 or len(y) < 2:
-        raise ValueError('x and y must have at least two elements each')
+        raise ValueError("x and y must have at least two elements each")
 
     if len(x) != len(y):
-        raise ValueError('x and y must have the same number of elements')
+        raise ValueError("x and y must have the same number of elements")
 
     n = len(x)
 
@@ -52,7 +56,7 @@ def subtended_angle(x, y):
 
     # Formula for the subtended angle between two points
     def subtended(i, j):
-        ratio = (x[i]*x[j] + y[i]*y[j])/(dists[i]*dists[j])
+        ratio = (x[i] * x[j] + y[i] * y[j]) / (dists[i] * dists[j])
         if np.abs(ratio) > 1:
             return np.arccos(np.sign(ratio))
         else:
@@ -64,14 +68,12 @@ def subtended_angle(x, y):
     angle = subtended(ind0, ind1)
 
     for i in range(2, n):
-
         # Angles subtended between test point and reference points
         angle_0 = subtended(i, ind0)
         angle_1 = subtended(i, ind1)
 
         # If test point subtends a larger angle, replace a reference point
         if angle_0 > angle or angle_1 > angle:
-
             if angle_0 > angle_1:
                 angle = angle_0
                 ind1 = i
@@ -83,10 +85,9 @@ def subtended_angle(x, y):
 
 
 class ToroidalWireframeTests(unittest.TestCase):
-
     def test_toroidal_wireframe_constructor(self):
         """
-        Runs a few consistency checks for errors in construction of a 
+        Runs a few consistency checks for errors in construction of a
         ToroidalWireframe class instance
         """
 
@@ -100,22 +101,22 @@ class ToroidalWireframeTests(unittest.TestCase):
 
         wf = ToroidalWireframe(surf_wf, n_phi, n_theta)
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Check basic class instance quantities
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         self.assertEqual(wf.nfp, nfp)
         self.assertEqual(wf.n_segments, len(wf.segments))
-        self.assertEqual(wf.n_segments, 2*n_phi*n_theta)
+        self.assertEqual(wf.n_segments, 2 * n_phi * n_theta)
         self.assertEqual(wf.n_tor_segments, wf.n_pol_segments)
         self.assertEqual(wf.n_segments, wf.n_tor_segments + wf.n_pol_segments)
-        self.assertEqual(len(wf.nodes), 2*nfp)
+        self.assertEqual(len(wf.nodes), 2 * nfp)
 
         # Verify that nodes for each half-period are toroidally localized
-        for i in range(nfp*2):
+        for i in range(nfp * 2):
             self.assertEqual(wf.n_nodes, np.shape(wf.nodes[i])[0])
             angle = subtended_angle(wf.nodes[i][:, 0], wf.nodes[i][:, 1])
-            self.assertAlmostEqual(angle, np.pi/nfp)
+            self.assertAlmostEqual(angle, np.pi / nfp)
 
         # Verify no more than 4 segments connected to each node
         node_count = np.zeros(wf.n_nodes, dtype=np.int64)
@@ -124,9 +125,9 @@ class ToroidalWireframeTests(unittest.TestCase):
             node_count[wf.segments[i, 1]] += 1
         self.assertTrue(np.max(node_count) == 4)
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Segment array
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         # Correctness of node connections for interior segments
         self.assertFalse(np.any(wf.segments[7, :] - np.array([7, 11])))
@@ -136,86 +137,95 @@ class ToroidalWireframeTests(unittest.TestCase):
         self.assertFalse(np.any(wf.segments[14, :] - np.array([14, 18])))
         self.assertFalse(np.any(wf.segments[31, :] - np.array([17, 18])))
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Segment connection matrix
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         # Correctness of connections for interior nodes
-        self.assertFalse(np.any(wf.connected_segments[4, :]
-                                - np.array([0, 21, 4, 18])))
-        self.assertFalse(np.any(wf.connected_segments[9, :]
-                                - np.array([5, 22, 9, 23])))
+        self.assertFalse(np.any(wf.connected_segments[4, :] - np.array([0, 21, 4, 18])))
+        self.assertFalse(np.any(wf.connected_segments[9, :] - np.array([5, 22, 9, 23])))
 
         # Correctness of connections for a node on a symmetry plane
-        self.assertFalse(np.any(wf.connected_segments[1, :]
-                                - np.array([3, 16, 1, 17])))
+        self.assertFalse(np.any(wf.connected_segments[1, :] - np.array([3, 16, 1, 17])))
 
         # Correctness of connections for a node on a symmetry plane at z=0
-        self.assertFalse(np.any(wf.connected_segments[2, :]
-                                - np.array([2, 17, 2, 17])))
+        self.assertFalse(np.any(wf.connected_segments[2, :] - np.array([2, 17, 2, 17])))
 
         # Verify that no node is connected to more than 4 segments
         for i in range(wf.n_nodes):
-            count_i = np.sum(wf.segments[wf.connected_segments[i, :], 0] == i) + \
-                np.sum(wf.segments[wf.connected_segments[i, :], 1] == i)
-            if i > 0 and i < n_theta/2 \
-                    or i > wf.n_nodes-n_theta and i < wf.n_nodes-n_theta/2:
+            count_i = np.sum(wf.segments[wf.connected_segments[i, :], 0] == i) + np.sum(
+                wf.segments[wf.connected_segments[i, :], 1] == i
+            )
+            if (
+                i > 0
+                and i < n_theta / 2
+                or i > wf.n_nodes - n_theta
+                and i < wf.n_nodes - n_theta / 2
+            ):
                 self.assertEqual(count_i, 3)
-            elif i > n_theta/2 and i < n_theta \
-                    or i > wf.n_nodes-n_theta/2 and i < wf.n_nodes:
+            elif (
+                i > n_theta / 2
+                and i < n_theta
+                or i > wf.n_nodes - n_theta / 2
+                and i < wf.n_nodes
+            ):
                 self.assertEqual(count_i, 1)
             else:
                 self.assertEqual(count_i, 4)
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Cell key
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         n_cells = wf.cell_key.shape[0]
 
         # Verify that adjacent segments around cells share nodes
         for i in range(n_cells):
-
-            if i >= np.round(wf.n_theta/2) and i < wf.n_theta:
+            if i >= np.round(wf.n_theta / 2) and i < wf.n_theta:
                 # Index offset for mirrored segments on symmetry plane
-                self.assertEqual(wf.segments[wf.cell_key[i, 0], 0],
-                                 (wf.n_theta - wf.segments[wf.cell_key[i, 3], 1]) % wf.n_theta)
-                self.assertEqual(wf.segments[wf.cell_key[i, 2], 0],
-                                 (wf.n_theta - wf.segments[wf.cell_key[i, 3], 0]) % wf.n_theta)
+                self.assertEqual(
+                    wf.segments[wf.cell_key[i, 0], 0],
+                    (wf.n_theta - wf.segments[wf.cell_key[i, 3], 1]) % wf.n_theta,
+                )
+                self.assertEqual(
+                    wf.segments[wf.cell_key[i, 2], 0],
+                    (wf.n_theta - wf.segments[wf.cell_key[i, 3], 0]) % wf.n_theta,
+                )
 
             else:
                 # Non-mirrored or interior cells (no index offset needed)
-                self.assertEqual(wf.segments[wf.cell_key[i, 0], 0],
-                                 wf.segments[wf.cell_key[i, 3], 0])
-                self.assertEqual(wf.segments[wf.cell_key[i, 2], 0],
-                                 wf.segments[wf.cell_key[i, 3], 1])
+                self.assertEqual(
+                    wf.segments[wf.cell_key[i, 0], 0], wf.segments[wf.cell_key[i, 3], 0]
+                )
+                self.assertEqual(
+                    wf.segments[wf.cell_key[i, 2], 0], wf.segments[wf.cell_key[i, 3], 1]
+                )
 
-            if i >= n_cells - np.round(wf.n_theta/2):
+            if i >= n_cells - np.round(wf.n_theta / 2):
                 # Correction for mirrored segments on symmetry plane
                 node_symmPlane = wf.n_nodes - wf.n_theta
                 symmPlane_node_0 = wf.segments[wf.cell_key[i, 1], 0] % wf.n_theta
                 symmPlane_node_1 = wf.segments[wf.cell_key[i, 1], 1] % wf.n_theta
-                offs_0 = node_symmPlane \
-                    + (wf.n_theta - symmPlane_node_0) % wf.n_theta
-                offs_1 = node_symmPlane \
-                    + (wf.n_theta - symmPlane_node_1) % wf.n_theta
+                offs_0 = node_symmPlane + (wf.n_theta - symmPlane_node_0) % wf.n_theta
+                offs_1 = node_symmPlane + (wf.n_theta - symmPlane_node_1) % wf.n_theta
                 self.assertEqual(wf.segments[wf.cell_key[i, 0], 1], offs_1)
                 self.assertEqual(offs_0, wf.segments[wf.cell_key[i, 2], 1])
 
             else:
                 # Non-mirrored or interior cells (no index offset needed)
-                self.assertEqual(wf.segments[wf.cell_key[i, 0], 1],
-                                 wf.segments[wf.cell_key[i, 1], 0])
-                self.assertEqual(wf.segments[wf.cell_key[i, 1], 1],
-                                 wf.segments[wf.cell_key[i, 2], 1])
+                self.assertEqual(
+                    wf.segments[wf.cell_key[i, 0], 1], wf.segments[wf.cell_key[i, 1], 0]
+                )
+                self.assertEqual(
+                    wf.segments[wf.cell_key[i, 1], 1], wf.segments[wf.cell_key[i, 2], 1]
+                )
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Cell neighbors
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         # Verify that neighboring cells share segments in common
         for i in range(n_cells):
-
             # Indices of neighboring cells (rows of cell_key)
             [nbr_npol, nbr_ptor, nbr_ppol, nbr_ntor] = wf.cell_neighbors[i, :]
 
@@ -226,18 +236,14 @@ class ToroidalWireframeTests(unittest.TestCase):
             i_share_p_tor = 1 if i >= (n_cells - wf.n_theta) else 3
             i_share_n_tor = 3 if i < wf.n_theta else 1
 
-            self.assertEqual(wf.cell_key[i, 0],
-                             wf.cell_key[nbr_npol, i_share_n_pol])
-            self.assertEqual(wf.cell_key[i, 1],
-                             wf.cell_key[nbr_ptor, i_share_p_tor])
-            self.assertEqual(wf.cell_key[i, 2],
-                             wf.cell_key[nbr_ppol, i_share_p_pol])
-            self.assertEqual(wf.cell_key[i, 3],
-                             wf.cell_key[nbr_ntor, i_share_n_tor])
+            self.assertEqual(wf.cell_key[i, 0], wf.cell_key[nbr_npol, i_share_n_pol])
+            self.assertEqual(wf.cell_key[i, 1], wf.cell_key[nbr_ptor, i_share_p_tor])
+            self.assertEqual(wf.cell_key[i, 2], wf.cell_key[nbr_ppol, i_share_p_pol])
+            self.assertEqual(wf.cell_key[i, 3], wf.cell_key[nbr_ntor, i_share_n_tor])
 
     def test_toroidal_wireframe_constraints(self):
         """
-        Consistency checks for the constraint handling functionality in the 
+        Consistency checks for the constraint handling functionality in the
         ToroidalWireframe class
         """
 
@@ -252,7 +258,7 @@ class ToroidalWireframeTests(unittest.TestCase):
         wf = ToroidalWireframe(surf_wf, n_phi, n_theta)
 
         # Check number of continuity constraints (added on construction)
-        self.assertEqual(len(wf.constraints.keys()), n_phi*n_theta - 2)
+        self.assertEqual(len(wf.constraints.keys()), n_phi * n_theta - 2)
 
         # An isolated current-carrying segment violates continuity
         test_cur = 1e6
@@ -274,9 +280,9 @@ class ToroidalWireframeTests(unittest.TestCase):
         for i in [0, 4, 18, 21]:
             self.assertTrue(i in csegs)
             if i == 21:
-                self.assertTrue('implicit_segment_%d' % (i) in wf.constraints)
+                self.assertTrue("implicit_segment_%d" % (i) in wf.constraints)
             else:
-                self.assertTrue('segment_%d' % (i) in wf.constraints)
+                self.assertTrue("segment_%d" % (i) in wf.constraints)
 
         # Removing explicit constraint should remove associated implicit constr.
         wf.set_segments_free([4])
@@ -284,7 +290,7 @@ class ToroidalWireframeTests(unittest.TestCase):
         self.assertEqual(len(csegs), 2)
         for i in [0, 18]:
             self.assertTrue(i in csegs)
-            self.assertTrue('segment_%d' % (i) in wf.constraints)
+            self.assertTrue("segment_%d" % (i) in wf.constraints)
 
         # Current loop through constrained segments should violate constraints
         wf.currents[18:22] = test_cur
@@ -297,10 +303,10 @@ class ToroidalWireframeTests(unittest.TestCase):
         # Consistency checks for the poloidal current constraint
         wf.add_poloidal_current_constraint(test_cur)
         self.assertFalse(wf.check_constraints())
-        ntf = int(n_phi/2)
+        ntf = int(n_phi / 2)
         with self.assertRaises(ValueError):
-            wf.add_tfcoil_currents(ntf, 2*test_cur*(1/(2*ntf*wf.nfp)))
-        wf.add_tfcoil_currents(ntf, test_cur*(1/(2*ntf*wf.nfp)))
+            wf.add_tfcoil_currents(ntf, 2 * test_cur * (1 / (2 * ntf * wf.nfp)))
+        wf.add_tfcoil_currents(ntf, test_cur * (1 / (2 * ntf * wf.nfp)))
         self.assertTrue(wf.check_constraints())
         wf.remove_poloidal_current_constraint()
         wf.currents[:] = 0
@@ -308,22 +314,22 @@ class ToroidalWireframeTests(unittest.TestCase):
 
         # Consistency checks for the toroidal current constraint
         wf.add_toroidal_current_constraint(test_cur)
-        wf.currents[1:wf.n_tor_segments:wf.n_theta] = test_cur
+        wf.currents[1 : wf.n_tor_segments : wf.n_theta] = test_cur
         self.assertFalse(wf.check_constraints())  # violates continuity when
         # enforcing stell symm
-        wf.currents[1:wf.n_tor_segments:wf.n_theta] = test_cur
-        wf.currents[3:wf.n_tor_segments:wf.n_theta] = test_cur
+        wf.currents[1 : wf.n_tor_segments : wf.n_theta] = test_cur
+        wf.currents[3 : wf.n_tor_segments : wf.n_theta] = test_cur
         self.assertFalse(wf.check_constraints())  # wrong total current
-        wf.currents[1:wf.n_tor_segments:wf.n_theta] = 0.5*test_cur
-        wf.currents[3:wf.n_tor_segments:wf.n_theta] = 0.5*test_cur
+        wf.currents[1 : wf.n_tor_segments : wf.n_theta] = 0.5 * test_cur
+        wf.currents[3 : wf.n_tor_segments : wf.n_theta] = 0.5 * test_cur
         self.assertTrue(wf.check_constraints())
         wf.remove_toroidal_current_constraint()
         wf.currents[:] = 0
         self.assertTrue(wf.check_constraints())
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Check correctness of the toroidal break feature
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         with self.assertRaises(ValueError):
             wf.set_toroidal_breaks(2, 1)
@@ -356,9 +362,9 @@ class ToroidalWireframeTests(unittest.TestCase):
             wf.set_toroidal_breaks(1, 2)
         wf.remove_toroidal_current_constraint()
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Check that poloidal currents play nicely with toroidal breaks
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         wf.add_tfcoil_currents(1, test_cur)
         wf.set_toroidal_breaks(1, 1, allow_pol_current=False)
@@ -374,12 +380,12 @@ class ToroidalWireframeTests(unittest.TestCase):
         wf.currents[:] = 0
         wf.free_all_segments()
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Check correctness of the get_free_cells method
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         wf.set_toroidal_breaks(1, 2)
-        free_cells = wf.get_free_cells(form='indices')
+        free_cells = wf.get_free_cells(form="indices")
         free_cells_logical = wf.get_free_cells()
         self.assertEqual(len(free_cells), 8)
         for i in range(16):
@@ -411,41 +417,41 @@ class ToroidalWireframeTests(unittest.TestCase):
 
         wf = ToroidalWireframe(surf_wf, n_phi, n_theta)
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Baseline case: with no added constraints (only continuity constraints)
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         # Basic properties of matrices with only continuity constraints
         B0, d0 = wf.constraint_matrices()
         self.assertAlmostEqual(np.max(np.abs(d0)), 0)
-        self.assertEqual(B0.shape[0], n_phi*n_theta-2)
-        self.assertEqual(B0.shape[1], 2*n_phi*n_theta)
+        self.assertEqual(B0.shape[0], n_phi * n_theta - 2)
+        self.assertEqual(B0.shape[1], 2 * n_phi * n_theta)
         self.assertEqual(d0.shape[0], B0.shape[0])
         self.assertEqual(d0.shape[1], 1)
         # This next test fails on GitHub Actions for some reason
-        #self.assertEqual(np.linalg.matrix_rank(B0), n_phi*n_theta-2)
+        # self.assertEqual(np.linalg.matrix_rank(B0), n_phi*n_theta-2)
 
         # No constraints should be redundant
         B1, d1 = wf.constraint_matrices(remove_redundancies=False)
         self.assertEqual(B0.shape, B1.shape)
         self.assertEqual(d0.shape, d1.shape)
-        self.assertFalse(np.any(B0-B1))
-        self.assertFalse(np.any(d0-d1))
+        self.assertFalse(np.any(B0 - B1))
+        self.assertFalse(np.any(d0 - d1))
 
         # There should be no constrained segments to remove
         B2, d2 = wf.constraint_matrices(remove_redundancies=True)
         self.assertEqual(B0.shape, B2.shape)
         self.assertEqual(d0.shape, d2.shape)
-        self.assertFalse(np.any(B0-B2))
-        self.assertFalse(np.any(d0-d2))
+        self.assertFalse(np.any(B0 - B2))
+        self.assertFalse(np.any(d0 - d2))
 
         # Attempting to assume no crossings should produce an error
         with self.assertRaises(RuntimeError):
             B3, d3 = wf.constraint_matrices(assume_no_crossings=True)
 
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
         # Case with enough constrained segments to have no crossings
-        #-----------------------------------------------------------------------
+        # -----------------------------------------------------------------------
 
         wf.set_segments_constrained(np.arange(wf.n_tor_segments))
         wf.set_segments_constrained([16, 17, 22, 23, 24, 25, 30, 31])
@@ -455,13 +461,14 @@ class ToroidalWireframeTests(unittest.TestCase):
         B0, d0 = wf.constraint_matrices(assume_no_crossings=True)
         self.assertEqual(np.max(np.abs(d0)), 0)
         self.assertEqual(B0.shape[0], n_const + 6)
-        self.assertEqual(B0.shape[1], 2*n_phi*n_theta)
+        self.assertEqual(B0.shape[1], 2 * n_phi * n_theta)
         self.assertEqual(d0.shape[0], B0.shape[0])
         self.assertEqual(d0.shape[1], 1)
 
         # No crossings + constrained segments removed
-        B1, d1 = wf.constraint_matrices(assume_no_crossings=True,
-                                        remove_constrained_segments=True)
+        B1, d1 = wf.constraint_matrices(
+            assume_no_crossings=True, remove_constrained_segments=True
+        )
         self.assertEqual(B1.shape[0], 6)
         self.assertEqual(B1.shape[1], 8)
         self.assertEqual(d1.shape[0], 6)
@@ -470,13 +477,13 @@ class ToroidalWireframeTests(unittest.TestCase):
         B2, d2 = wf.constraint_matrices()
         self.assertEqual(np.max(np.abs(d2)), 0)
         self.assertEqual(B2.shape[0], n_const + 8)
-        self.assertEqual(B2.shape[1], 2*n_phi*n_theta)
+        self.assertEqual(B2.shape[1], 2 * n_phi * n_theta)
 
         # Including all constraints, including the redundant ones
         B3, d3 = wf.constraint_matrices(remove_redundancies=False)
         self.assertEqual(np.max(np.abs(d3)), 0)
-        self.assertEqual(B3.shape[0], n_phi*n_theta-2 + n_const)
-        self.assertEqual(B3.shape[1], 2*n_phi*n_theta)
+        self.assertEqual(B3.shape[0], n_phi * n_theta - 2 + n_const)
+        self.assertEqual(B3.shape[1], 2 * n_phi * n_theta)
         self.assertEqual(d3.shape[0], B3.shape[0])
         self.assertEqual(d3.shape[1], 1)
 
@@ -497,8 +504,9 @@ class ToroidalWireframeTests(unittest.TestCase):
         wf = ToroidalWireframe(surf_wf, n_phi, n_theta)
 
         # A port whose end lies near (but does not cover) a node
-        p1 = CircularPort(ox=2, oy=0, oz=0, ax=0, ay=0, az=1, ir=0.001,
-                          thick=0.001, l0=0, l1=0.999)
+        p1 = CircularPort(
+            ox=2, oy=0, oz=0, ax=0, ay=0, az=1, ir=0.001, thick=0.001, l0=0, l1=0.999
+        )
         wf.constrain_colliding_segments(p1.collides)
         self.assertEqual(len(wf.constrained_segments()), 0)
 
@@ -511,15 +519,16 @@ class ToroidalWireframeTests(unittest.TestCase):
         wf.free_all_segments()
 
         # A port that encloses all segments
-        p2 = CircularPort(ox=0, oy=0, oz=0, ax=0, ay=0, az=1, ir=3.5, thick=0,
-                          l0=-1.5, l1=1.5)
+        p2 = CircularPort(
+            ox=0, oy=0, oz=0, ax=0, ay=0, az=1, ir=3.5, thick=0, l0=-1.5, l1=1.5
+        )
         wf.constrain_colliding_segments(p2.collides)
         self.assertEqual(len(wf.unconstrained_segments()), 0)
         wf.free_all_segments()
 
     def test_toroidal_wireframe_plotting(self):
         """
-        Tests wireframe plotting functions. 
+        Tests wireframe plotting functions.
         """
 
         import matplotlib.pyplot as pl
@@ -536,26 +545,26 @@ class ToroidalWireframeTests(unittest.TestCase):
 
         # Testing the make_plot_2d method
         ax, lc, cb = wf.make_plot_2d()
-        ax, lc, cb = wf.make_plot_2d(quantity='currents', extent='half period')
-        ax, lc, cb = wf.make_plot_2d(quantity='nonzero currents',
-                                     extent='field period')
-        ax, lc, cb = wf.make_plot_2d(quantity='constrained segments',
-                                     extent='full torus')
-        ax, lc, cb = wf.make_plot_2d(coordinates='degrees')
-        ax, lc, cb = wf.make_plot_2d(coordinates='radians')
-        pl.close('all')
+        ax, lc, cb = wf.make_plot_2d(quantity="currents", extent="half period")
+        ax, lc, cb = wf.make_plot_2d(quantity="nonzero currents", extent="field period")
+        ax, lc, cb = wf.make_plot_2d(
+            quantity="constrained segments", extent="full torus"
+        )
+        ax, lc, cb = wf.make_plot_2d(coordinates="degrees")
+        ax, lc, cb = wf.make_plot_2d(coordinates="radians")
+        pl.close("all")
 
         # Testing plot_cells_2d
         cell_values = np.zeros(wf.get_cell_key().shape[0])
         wf.plot_cells_2d(cell_values)
-        pl.close('all')
+        pl.close("all")
 
         # Testing the make_plot_3d method using matplotlib
-        wf.make_plot_3d(engine='matplotlib')
-        wf.make_plot_3d(engine='matplotlib', to_show='active')
-        wf.make_plot_3d(engine='matplotlib', extent='half period')
-        wf.make_plot_3d(engine='matplotlib', extent='field period')
-        pl.close('all')
+        wf.make_plot_3d(engine="matplotlib")
+        wf.make_plot_3d(engine="matplotlib", to_show="active")
+        wf.make_plot_3d(engine="matplotlib", extent="half period")
+        wf.make_plot_3d(engine="matplotlib", extent="field period")
+        pl.close("all")
 
         # Testing the make_plot_3d method using mayavi (if available)
         try:
@@ -565,9 +574,9 @@ class ToroidalWireframeTests(unittest.TestCase):
 
         if mlab is not None:
             wf.make_plot_3d()
-            wf.make_plot_3d(to_show='active')
-            wf.make_plot_3d(extent='half period')
-            wf.make_plot_3d(extent='field period', tube_radius=0.1)
+            wf.make_plot_3d(to_show="active")
+            wf.make_plot_3d(extent="half period")
+            wf.make_plot_3d(extent="field period", tube_radius=0.1)
             mlab.close(all=True)
 
     def test_toroidal_wireframe_windowpane(self):
@@ -586,11 +595,12 @@ class ToroidalWireframeTests(unittest.TestCase):
         size_pol = 2
         gap_tor = 2
         gap_pol = 2
-        wf = windowpane_wireframe(surf_wf, n_coils_tor, n_coils_pol, size_tor,
-                                  size_pol, gap_tor, gap_pol)
+        wf = windowpane_wireframe(
+            surf_wf, n_coils_tor, n_coils_pol, size_tor, size_pol, gap_tor, gap_pol
+        )
 
         usegs = wf.unconstrained_segments()
-        n_usegs = 2*(size_tor + size_pol)*n_coils_tor*n_coils_pol
+        n_usegs = 2 * (size_tor + size_pol) * n_coils_tor * n_coils_pol
         self.assertEqual(len(usegs), n_usegs)
 
     @unittest.skipIf(pyevtk is None, "pyevtk not found")
@@ -608,13 +618,13 @@ class ToroidalWireframeTests(unittest.TestCase):
             wf.to_vtk("test_wf")
             self.assertTrue(os.path.exists("test_wf.vtu"))
         with ScratchDir("."):
-            wf.to_vtk("test_wf", extent='torus')
+            wf.to_vtk("test_wf", extent="torus")
             self.assertTrue(os.path.exists("test_wf.vtu"))
         with ScratchDir("."):
-            wf.to_vtk("test_wf", extent='field period')
+            wf.to_vtk("test_wf", extent="field period")
             self.assertTrue(os.path.exists("test_wf.vtu"))
         with ScratchDir("."):
-            wf.to_vtk("test_wf", extent='half period')
+            wf.to_vtk("test_wf", extent="half period")
             self.assertTrue(os.path.exists("test_wf.vtu"))
 
     def test_wireframefield_valueerrors(self):
@@ -631,6 +641,7 @@ class ToroidalWireframeTests(unittest.TestCase):
         # For enclosed_current: curve must be CurveXYZFourier
         class DummyCurve:
             pass
+
         dummy_curve = DummyCurve()
         field = wf_field  # WireframeField is a MagneticField
         with self.assertRaises(ValueError):

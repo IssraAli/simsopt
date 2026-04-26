@@ -3,6 +3,7 @@ import numpy as np
 
 from simsopt.geo import CurveHelical
 
+
 class Tests(unittest.TestCase):
     def test_dof_names(self):
         """Check the names of the dofs."""
@@ -23,10 +24,17 @@ class Tests(unittest.TestCase):
             "CurveHelical dof values are not as expected",
         )
         np.testing.assert_allclose(
-            [curve.get("A_0"), curve.get("A_1"), curve.get("A_2"), curve.get("B_1"), curve.get("B_2")],
+            [
+                curve.get("A_0"),
+                curve.get("A_1"),
+                curve.get("A_2"),
+                curve.get("B_1"),
+                curve.get("B_2"),
+            ],
             [1.1, 2.2, 3.3, 4.4, 5.5],
             err_msg="CurveHelical dof values from get() are not as expected",
         )
+
 
 if __name__ == "__main__":
     unittest.main()

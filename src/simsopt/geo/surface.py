@@ -24,7 +24,13 @@ from .._core.dev import SimsoptRequires
 from .plotting import fix_matplotlib_3d
 from .._core.json import GSONable
 
-__all__ = ['Surface', 'signed_distance_from_surface', 'SurfaceClassifier', 'SurfaceScaled', 'best_nphi_over_ntheta']
+__all__ = [
+    "Surface",
+    "signed_distance_from_surface",
+    "SurfaceClassifier",
+    "SurfaceScaled",
+    "best_nphi_over_ntheta",
+]
 
 
 class Surface(Optimizable):
@@ -46,8 +52,7 @@ class Surface(Optimizable):
         super().__init__(**kwargs)
 
     @classmethod
-    def from_nphi_ntheta(cls, nphi=61, ntheta=62, range="full torus", nfp=1,
-                         **kwargs):
+    def from_nphi_ntheta(cls, nphi=61, ntheta=62, range="full torus", nfp=1, **kwargs):
         r"""
         Initializes surface classes from the specified number of grid
         points along toroidal, :math:`\phi`, and poloidal, :math:`\theta`,
@@ -73,15 +78,17 @@ class Surface(Optimizable):
 
         """
         quadpoints_phi, quadpoints_theta = Surface.get_quadpoints(
-            nphi, ntheta, nfp=nfp, range=range)
-        return cls(quadpoints_phi=quadpoints_phi,
-                   quadpoints_theta=quadpoints_theta, nfp=nfp, **kwargs)
+            nphi, ntheta, nfp=nfp, range=range
+        )
+        return cls(
+            quadpoints_phi=quadpoints_phi,
+            quadpoints_theta=quadpoints_theta,
+            nfp=nfp,
+            **kwargs,
+        )
 
     @staticmethod
-    def get_quadpoints(nphi=None,
-                       ntheta=None,
-                       range=None,
-                       nfp=1):
+    def get_quadpoints(nphi=None, ntheta=None, range=None, nfp=1):
         r"""
         Sets the theta and phi grid points for Surface subclasses.
         It is typically called in when constructing Surface subclasses.
@@ -109,8 +116,10 @@ class Surface(Optimizable):
             - **quadpoints_phi**: List of grid points :math:`\phi_j`.
             - **quadpoints_theta**: List of grid points :math:`\theta_j`.
         """
-        return (Surface.get_phi_quadpoints(nphi=nphi, range=range, nfp=nfp),
-                Surface.get_theta_quadpoints(ntheta=ntheta))
+        return (
+            Surface.get_phi_quadpoints(nphi=nphi, range=range, nfp=nfp),
+            Surface.get_theta_quadpoints(ntheta=ntheta),
+        )
 
     @staticmethod
     def get_theta_quadpoints(ntheta=None):
@@ -151,8 +160,11 @@ class Surface(Optimizable):
 
         if range is None:
             range = Surface.RANGE_FULL_TORUS
-        assert range in (Surface.RANGE_FULL_TORUS, Surface.RANGE_HALF_PERIOD,
-                         Surface.RANGE_FIELD_PERIOD)
+        assert range in (
+            Surface.RANGE_FULL_TORUS,
+            Surface.RANGE_HALF_PERIOD,
+            Surface.RANGE_FIELD_PERIOD,
+        )
         if range == Surface.RANGE_FULL_TORUS:
             div = 1
         else:
@@ -172,8 +184,18 @@ class Surface(Optimizable):
 
         return list(quadpoints_phi)
 
-    def plot(self, engine="matplotlib", ax=None, show=True, close=False, axis_equal=True,
-             plot_normal=False, plot_derivative=False, wireframe=True, **kwargs):
+    def plot(
+        self,
+        engine="matplotlib",
+        ax=None,
+        show=True,
+        close=False,
+        axis_equal=True,
+        plot_normal=False,
+        plot_derivative=False,
+        wireframe=True,
+        **kwargs,
+    ):
         """
         Plot the surface in 3D using matplotlib/mayavi/plotly.
 
@@ -253,15 +275,41 @@ class Surface(Optimizable):
 
             mlab.mesh(gamma[:, :, 0], gamma[:, :, 1], gamma[:, :, 2], **kwargs)
             if wireframe:
-                mlab.mesh(gamma[:, :, 0], gamma[:, :, 1], gamma[:, :, 2], representation='wireframe', color=(0, 0, 0),
-                          opacity=0.5)
+                mlab.mesh(
+                    gamma[:, :, 0],
+                    gamma[:, :, 1],
+                    gamma[:, :, 2],
+                    representation="wireframe",
+                    color=(0, 0, 0),
+                    opacity=0.5,
+                )
 
             if plot_derivative:
-                mlab.quiver3d(gamma[:, :, 0], gamma[:, :, 1], gamma[:, :, 2], dg1[:, :, 0], dg1[:, :, 1], dg1[:, :, 2])
-                mlab.quiver3d(gamma[:, :, 0], gamma[:, :, 1], gamma[:, :, 2], dg2[:, :, 0], dg2[:, :, 1], dg2[:, :, 2])
+                mlab.quiver3d(
+                    gamma[:, :, 0],
+                    gamma[:, :, 1],
+                    gamma[:, :, 2],
+                    dg1[:, :, 0],
+                    dg1[:, :, 1],
+                    dg1[:, :, 2],
+                )
+                mlab.quiver3d(
+                    gamma[:, :, 0],
+                    gamma[:, :, 1],
+                    gamma[:, :, 2],
+                    dg2[:, :, 0],
+                    dg2[:, :, 1],
+                    dg2[:, :, 2],
+                )
             if plot_normal:
-                mlab.quiver3d(gamma[:, :, 0], gamma[:, :, 1], gamma[:, :, 2], normal[:, :, 0], normal[:, :, 1],
-                              normal[:, :, 2])
+                mlab.quiver3d(
+                    gamma[:, :, 0],
+                    gamma[:, :, 1],
+                    gamma[:, :, 2],
+                    normal[:, :, 0],
+                    normal[:, :, 1],
+                    normal[:, :, 2],
+                )
             if show:
                 mlab.show()
 
@@ -276,12 +324,18 @@ class Surface(Optimizable):
             # for plotly, ax is actually the figure
             if ax is None:
                 ax = go.Figure()
-            ax.add_trace(go.Surface(x=gamma[:, :, 0], y=gamma[:, :, 1], z=gamma[:, :, 2], **kwargs))
+            ax.add_trace(
+                go.Surface(
+                    x=gamma[:, :, 0], y=gamma[:, :, 1], z=gamma[:, :, 2], **kwargs
+                )
+            )
             ax.update_layout(scene_aspectmode="data")
             if show:
                 ax.show()
         else:
-            raise ValueError("Invalid engine option! Please use one of {matplotlib, mayavi, plotly}.")
+            raise ValueError(
+                "Invalid engine option! Please use one of {matplotlib, mayavi, plotly}."
+            )
         return ax
 
     @SimsoptRequires(gridToVTK is not None, "to_vtk method requires pyevtk module")
@@ -308,7 +362,11 @@ class Surface(Optimizable):
         pointData = {
             "dphi x dtheta": (contig(n[..., 0]), contig(n[..., 1]), contig(n[..., 2])),
             "dphi": (contig(dphi[..., 0]), contig(dphi[..., 1]), contig(dphi[..., 2])),
-            "dtheta": (contig(dtheta[..., 0]), contig(dtheta[..., 1]), contig(dtheta[..., 2])),
+            "dtheta": (
+                contig(dtheta[..., 0]),
+                contig(dtheta[..., 1]),
+                contig(dtheta[..., 2]),
+            ),
         }
         if extra_data is not None:
             pointData = {**pointData, **extra_data}
@@ -333,20 +391,20 @@ class Surface(Optimizable):
 
         Args:
             phi (float):
-                The standard cylindrical angle (toroidal angle) normalized by :math:`2\pi`, i.e. :math:`\phi=0, 1` 
+                The standard cylindrical angle (toroidal angle) normalized by :math:`2\pi`, i.e. :math:`\phi=0, 1`
                 corresponds to the standard cylindrical angle :math:`0, 2\pi`, respectively.
             thetas (int, array, optional):
                 An optional argument indicating at which poloidal angle the cross section should be calculated. If ``thetas`` is an ``int``, the cross
                 section will be calculated at the poloidal angles in the array ``np.linspace(0, 1, thetas, endpoint=False)``. ``thetas`` can also be an array
                 of poloidal angles between :math:`0` and :math:`1`. If ``thetas`` is not provided, then the cross section will be calculated at the positions given by
                 ``Surface.quadpoints_theta``. Defaults to ``None``.
-            tol (float): 
+            tol (float):
                 The tolerance for the bisection root-finding. Defaults to ``1e-13``.
 
         Returns:
             ``(ntheta, 3)`` array of the Cartesian coordinates along the cross-section at each of the ``ntheta`` poloidal angles.
         """
-        
+
         if thetas is None:
             thetas = np.asarray(self.quadpoints_theta)
         elif isinstance(thetas, int):
@@ -354,33 +412,34 @@ class Surface(Optimizable):
         elif isinstance(thetas, np.ndarray) or isinstance(thetas, list):
             thetas = np.asarray(thetas)
             if thetas.ndim > 1:
-                raise ValueError('thetas must be an int, a 1d array, or None.')
+                raise ValueError("thetas must be an int, a 1d array, or None.")
         else:
-            raise ValueError('thetas must be an int, a 1d array, or None.')
-        
+            raise ValueError("thetas must be an int, a 1d array, or None.")
+
         # shift phi_prime to lie on [0, 1)
         phi_prime = phi + np.ceil(-phi)
 
         # no need to do bisection for SurfaceRZFourier
         from simsopt.geo import SurfaceRZFourier
+
         if isinstance(self, SurfaceRZFourier):
             xs = np.zeros((thetas.size, 3))
-            self.gamma_lin(xs, phi_prime*np.ones(thetas.size), thetas)
+            self.gamma_lin(xs, phi_prime * np.ones(thetas.size), thetas)
             return xs
 
         # sample the surface when varphi=0, and theta=thetas
         gamma = np.zeros((thetas.size, 3))
         self.gamma_lin(gamma, np.zeros(thetas.size), thetas)
-        
+
         # shift target phi_prime by phi0
-        phi0 = np.arctan2(gamma[:, 1], gamma[:, 0])/(2*np.pi)
-        phi_prime = phi_prime*np.ones(thetas.size)-phi0
+        phi0 = np.arctan2(gamma[:, 1], gamma[:, 0]) / (2 * np.pi)
+        phi_prime = phi_prime * np.ones(thetas.size) - phi0
         phi_prime += np.ceil(-phi_prime)
-        
+
         def varphi2phi(varphi_in, phi0):
             """
             Convert varphi to phi, where phi=varphi2phi(varphi, phi0) is a continuous function in varphi that satisfies:
-            
+
             varphi2phi(0, phi0) = 0
             0 <= varphi2phi(varphi, phi0) < 1.0 when 0 <= varphi < 1
 
@@ -397,26 +456,28 @@ class Surface(Optimizable):
             """
             gamma = np.zeros((varphi_in.size, 3))
             self.gamma_lin(gamma, varphi_in, thetas)
-            angle = np.arctan2(gamma[:, 1], gamma[:, 0])/(2*np.pi) - phi0
+            angle = np.arctan2(gamma[:, 1], gamma[:, 0]) / (2 * np.pi) - phi0
             angle += np.ceil(-angle)
             return angle
-        
+
         # set the initial brackets for bisection
         varphia = np.zeros(thetas.size)
         phia = np.zeros(thetas.size)
         varphic = np.ones(thetas.size)
         phic = np.ones(thetas.size)
-        
+
         err = np.inf
         while err > tol:
-            varphib = (varphia + varphic) / 2.
+            varphib = (varphia + varphic) / 2.0
             phib = varphi2phi(varphib, phi0)
-            
+
             if not np.all((phia <= phib) & (phib <= phic)):
-                raise Exception("An error occured during calculation of the cross section.  \
+                raise Exception(
+                    "An error occured during calculation of the cross section.  \
                         This happens when a surface 'goes back' on itself. \
                         The cylindrical angle is assumed to be monotonically increasing \
-                        with varphi, which is not the case for this surface.")
+                        with varphi, which is not the case for this surface."
+                )
 
             flag = (phib - phi_prime) * (phic - phi_prime) > 0
             # if flag is true,  then root lies on interval [a,b)
@@ -426,16 +487,21 @@ class Surface(Optimizable):
             varphia = np.where(flag, varphia, varphib)
             varphic = np.where(flag, varphib, varphic)
             err = np.max(np.abs(varphia - varphic))
-        
-        varphi_root = (varphia + varphic) / 2.
+
+        varphi_root = (varphia + varphic) / 2.0
         cross_section = np.zeros((varphi_root.size, 3))
         self.gamma_lin(cross_section, varphi_root, thetas)
-        
+
         return cross_section
 
-    @SimsoptRequires(get_context is not None, "is_self_intersecting requires ground package")
-    @SimsoptRequires(contour_self_intersects is not None, "is_self_intersecting requires the bentley_ottmann package")
-    def is_self_intersecting(self, angle=0., thetas=None):
+    @SimsoptRequires(
+        get_context is not None, "is_self_intersecting requires ground package"
+    )
+    @SimsoptRequires(
+        contour_self_intersects is not None,
+        "is_self_intersecting requires the bentley_ottmann package",
+    )
+    def is_self_intersecting(self, angle=0.0, thetas=None):
         r"""
         This function computes a cross section of self at the input cylindrical angle.  Then,
         approximating the cross section as a piecewise linear polyline, the Bentley-Ottmann algorithm
@@ -449,7 +515,7 @@ class Surface(Optimizable):
                    that angle is assumed to be in radians, and not divided by 2*pi.
             thetas (int, array, optional):
                 can be (1) an integer indicating that the cross section should be calculated at the poloidal angles in the array
-                np.linspace(0, 1, thetas, endpoint=False), or (2) an array containing the poloidal positions at which the cross section 
+                np.linspace(0, 1, thetas, endpoint=False), or (2) an array containing the poloidal positions at which the cross section
                 should be computed, between 0 and 1.  If thetas is not provided, then the cross section will be calculated at the positions given by
                 self.quadpoints_theta.
         Returns:
@@ -457,7 +523,7 @@ class Surface(Optimizable):
         """
 
         cs = self.cross_section(angle, thetas=thetas)
-        R = np.sqrt(cs[:, 0]**2 + cs[:, 1]**2)
+        R = np.sqrt(cs[:, 0] ** 2 + cs[:, 1] ** 2)
         Z = cs[:, 2]
 
         context = get_context()
@@ -489,7 +555,7 @@ class Surface(Optimizable):
 
         R_minor = self.minor_radius()
         R_major = self.major_radius()
-        AR = R_major/R_minor
+        AR = R_major / R_minor
         return AR
 
     def daspect_ratio_by_dcoeff(self):
@@ -499,7 +565,10 @@ class Surface(Optimizable):
 
         R_minor = self.minor_radius()
         R_major = self.major_radius()
-        dAR_ds = (self.dmajor_radius_by_dcoeff()*R_minor - self.dminor_radius_by_dcoeff() * R_major)/R_minor**2
+        dAR_ds = (
+            self.dmajor_radius_by_dcoeff() * R_minor
+            - self.dminor_radius_by_dcoeff() * R_major
+        ) / R_minor**2
         return dAR_ds
 
     def d2aspect_ratio_by_dcoeff_dcoeff(self):
@@ -515,7 +584,13 @@ class Surface(Optimizable):
         dR_dt = self.dmajor_radius_by_dcoeff()[None, :]
         d2R_dsdt = self.d2major_radius_by_dcoeff_dcoeff()
 
-        return (2*R*dr_dt*dr_ds)/r**3 - (dR_dt*dr_ds)/r**2 - (dr_dt*dR_ds)/r**2 - (R*d2r_dsdt)/r**2 + d2R_dsdt/r
+        return (
+            (2 * R * dr_dt * dr_ds) / r**3
+            - (dR_dt * dr_ds) / r**2
+            - (dr_dt * dR_ds) / r**2
+            - (R * d2r_dsdt) / r**2
+            + d2R_dsdt / r
+        )
 
     def minor_radius(self):
         r"""
@@ -537,7 +612,11 @@ class Surface(Optimizable):
 
         """
 
-        return (0.5/np.pi)*self.dmean_cross_sectional_area_by_dcoeff()/np.sqrt(self.mean_cross_sectional_area() / np.pi)
+        return (
+            (0.5 / np.pi)
+            * self.dmean_cross_sectional_area_by_dcoeff()
+            / np.sqrt(self.mean_cross_sectional_area() / np.pi)
+        )
 
     def d2minor_radius_by_dcoeff_dcoeff(self):
         """
@@ -548,7 +627,9 @@ class Surface(Optimizable):
         dA_ds = self.dmean_cross_sectional_area_by_dcoeff()[:, None]
         dA_dt = self.dmean_cross_sectional_area_by_dcoeff()[None, :]
         d2A_ds2 = self.d2mean_cross_sectional_area_by_dcoeff_dcoeff()
-        return (-(dA_dt*dA_ds) + 2*A*d2A_ds2)/(4*np.sqrt(np.pi)*A**(3/2))
+        return (-(dA_dt * dA_ds) + 2 * A * d2A_ds2) / (
+            4 * np.sqrt(np.pi) * A ** (3 / 2)
+        )
 
     def major_radius(self):
         r"""
@@ -563,7 +644,7 @@ class Surface(Optimizable):
         """
 
         R_minor = self.minor_radius()
-        R_major = np.abs(self.volume()) / (2. * np.pi**2 * R_minor**2)
+        R_major = np.abs(self.volume()) / (2.0 * np.pi**2 * R_minor**2)
         return R_major
 
     def dmajor_radius_by_dcoeff(self):
@@ -574,8 +655,10 @@ class Surface(Optimizable):
         mean_area = self.mean_cross_sectional_area()
         dmean_area_ds = self.dmean_cross_sectional_area_by_dcoeff()
 
-        dR_major_ds = (-self.volume() * dmean_area_ds + self.dvolume_by_dcoeff() * mean_area) / mean_area**2
-        return dR_major_ds * np.sign(self.volume()) / (2. * np.pi)
+        dR_major_ds = (
+            -self.volume() * dmean_area_ds + self.dvolume_by_dcoeff() * mean_area
+        ) / mean_area**2
+        return dR_major_ds * np.sign(self.volume()) / (2.0 * np.pi)
 
     def d2major_radius_by_dcoeff_dcoeff(self):
         """
@@ -590,9 +673,17 @@ class Surface(Optimizable):
         dr_dt = self.dminor_radius_by_dcoeff()[None, :]
         d2r_dsdt = self.d2minor_radius_by_dcoeff_dcoeff()
 
-        return ((6*V*dr_dt*dr_ds)/r**4 - (2*dV_dt*dr_ds)/r**3 -
-                (2*dr_dt*dV_ds)/r**3 - (2*V*d2r_dsdt)/r**3 +
-                d2V_dsdt/r**2) * np.sign(V)/(2*np.pi**2)
+        return (
+            (
+                (6 * V * dr_dt * dr_ds) / r**4
+                - (2 * dV_dt * dr_ds) / r**3
+                - (2 * dr_dt * dV_ds) / r**3
+                - (2 * V * d2r_dsdt) / r**3
+                + d2V_dsdt / r**2
+            )
+            * np.sign(V)
+            / (2 * np.pi**2)
+        )
 
     def mean_cross_sectional_area(self):
         r"""
@@ -657,16 +748,24 @@ class Surface(Optimizable):
 
         # compute the average cross sectional area
         J = np.zeros((xyz.shape[0], xyz.shape[1], 2, 2))
-        J[:, :, 0, 0] = (xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]) / x2y2
-        J[:, :, 0, 1] = (xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]) / x2y2
-        J[:, :, 1, 0] = 0.
-        J[:, :, 1, 1] = 1.
+        J[:, :, 0, 0] = (
+            xyz[:, :, 0] * dgamma1[:, :, 1] - xyz[:, :, 1] * dgamma1[:, :, 0]
+        ) / x2y2
+        J[:, :, 0, 1] = (
+            xyz[:, :, 0] * dgamma2[:, :, 1] - xyz[:, :, 1] * dgamma2[:, :, 0]
+        ) / x2y2
+        J[:, :, 1, 0] = 0.0
+        J[:, :, 1, 1] = 1.0
 
         detJ = np.linalg.det(J)
         Jinv = np.linalg.inv(J)
 
-        dZ_dtheta = dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
-        mean_cross_sectional_area = np.abs(np.mean(np.sqrt(x2y2) * dZ_dtheta * detJ))/(2 * np.pi)
+        dZ_dtheta = (
+            dgamma1[:, :, 2] * Jinv[:, :, 0, 1] + dgamma2[:, :, 2] * Jinv[:, :, 1, 1]
+        )
+        mean_cross_sectional_area = np.abs(
+            np.mean(np.sqrt(x2y2) * dZ_dtheta * detJ)
+        ) / (2 * np.pi)
         return mean_cross_sectional_area
 
     def dmean_cross_sectional_area_by_dcoeff(self):
@@ -688,8 +787,8 @@ class Surface(Optimizable):
         dx_ds = dg_ds[:, :, 0, :]
         dy_ds = dg_ds[:, :, 1, :]
 
-        r = np.sqrt(x**2+y**2)
-        dr_ds = (x*dx_ds+y*dy_ds)/r
+        r = np.sqrt(x**2 + y**2)
+        dr_ds = (x * dx_ds + y * dy_ds) / r
 
         xvarphi = g1[:, :, 0, None]
         yvarphi = g1[:, :, 1, None]
@@ -707,9 +806,45 @@ class Surface(Optimizable):
         dytheta_ds = dg2_ds[:, :, 1, :]
         dztheta_ds = dg2_ds[:, :, 2, :]
 
-        mean_area = np.mean((1/r) * (ztheta*(x*yvarphi-y*xvarphi)-zvarphi*(x*ytheta-y*xtheta)))/(2.*np.pi)
-        dmean_area_ds = np.mean((1/(r**2))*((xvarphi * y * ztheta - xtheta * y * zvarphi + x * (-yvarphi * ztheta + ytheta * zvarphi)) * dr_ds + r * (-zvarphi * (ytheta * dx_ds - y * dxtheta_ds - xtheta * dy_ds + x * dytheta_ds) + ztheta * (yvarphi * dx_ds - y * dxvarphi_ds - xvarphi * dy_ds + x * dyvarphi_ds) + (-xvarphi * y + x * yvarphi) * dztheta_ds + (xtheta * y - x * ytheta) * dzvarphi_ds)), axis=(0, 1))
-        return np.sign(mean_area) * dmean_area_ds/(2*np.pi)
+        mean_area = np.mean(
+            (1 / r)
+            * (
+                ztheta * (x * yvarphi - y * xvarphi)
+                - zvarphi * (x * ytheta - y * xtheta)
+            )
+        ) / (2.0 * np.pi)
+        dmean_area_ds = np.mean(
+            (1 / (r**2))
+            * (
+                (
+                    xvarphi * y * ztheta
+                    - xtheta * y * zvarphi
+                    + x * (-yvarphi * ztheta + ytheta * zvarphi)
+                )
+                * dr_ds
+                + r
+                * (
+                    -zvarphi
+                    * (
+                        ytheta * dx_ds
+                        - y * dxtheta_ds
+                        - xtheta * dy_ds
+                        + x * dytheta_ds
+                    )
+                    + ztheta
+                    * (
+                        yvarphi * dx_ds
+                        - y * dxvarphi_ds
+                        - xvarphi * dy_ds
+                        + x * dyvarphi_ds
+                    )
+                    + (-xvarphi * y + x * yvarphi) * dztheta_ds
+                    + (xtheta * y - x * ytheta) * dzvarphi_ds
+                )
+            ),
+            axis=(0, 1),
+        )
+        return np.sign(mean_area) * dmean_area_ds / (2 * np.pi)
 
     def d2mean_cross_sectional_area_by_dcoeff_dcoeff(self):
         """
@@ -733,10 +868,14 @@ class Surface(Optimizable):
         dx_dt = dg_ds[:, :, 0, None, :]
         dy_dt = dg_ds[:, :, 1, None, :]
 
-        r = np.sqrt(x**2+y**2)
-        dr_ds = (x*dx_ds+y*dy_ds)/r
-        dr_dt = (x*dx_dt+y*dy_dt)/r
-        dr2_dsdt = -((2*x*dx_dt + 2*y*dy_dt)*(2*x*dx_ds + 2*y*dy_ds))/(4*(x**2 + y**2)**(3/2)) + (2*dx_dt*dx_ds + 2*dy_dt*dy_ds)/(2*r)
+        r = np.sqrt(x**2 + y**2)
+        dr_ds = (x * dx_ds + y * dy_ds) / r
+        dr_dt = (x * dx_dt + y * dy_dt) / r
+        dr2_dsdt = -(
+            (2 * x * dx_dt + 2 * y * dy_dt) * (2 * x * dx_ds + 2 * y * dy_ds)
+        ) / (4 * (x**2 + y**2) ** (3 / 2)) + (2 * dx_dt * dx_ds + 2 * dy_dt * dy_ds) / (
+            2 * r
+        )
 
         xvarphi = g1[:, :, 0, None, None]
         yvarphi = g1[:, :, 1, None, None]
@@ -762,36 +901,115 @@ class Surface(Optimizable):
         dytheta_dt = dg2_ds[:, :, 1, None, :]
         dztheta_dt = dg2_ds[:, :, 2, None, :]
 
-        mean_area = np.mean((1/r) * (ztheta*(x*yvarphi-y*xvarphi)-zvarphi*(x*ytheta-y*xtheta)))/(2.*np.pi)
-        d2mean_area_ds2 = np.sign(mean_area)*np.mean((2*(-(xvarphi*y*ztheta) + xtheta*y*zvarphi + x*(yvarphi*ztheta -
-                                                     ytheta*zvarphi))*dr_dt*dr_ds - r*((yvarphi*ztheta -
-                                                     ytheta*zvarphi)*dx_dt + y*zvarphi*dxtheta_dt - y*ztheta*dxvarphi_dt -
-                                                     xvarphi*ztheta*dy_dt + xtheta*zvarphi*dy_dt - xvarphi*y*dztheta_dt +
-                                                     xtheta*y*dzvarphi_dt + x*(-(zvarphi*dytheta_dt) + ztheta*dyvarphi_dt
-                                                     + yvarphi*dztheta_dt - ytheta*dzvarphi_dt))*dr_ds -
-                                                     r*dr_dt*((yvarphi*ztheta - ytheta*zvarphi)*dx_ds +
-                                                     y*zvarphi*dxtheta_ds - y*ztheta*dxvarphi_ds - xvarphi*ztheta*dy_ds +
-                                                     xtheta*zvarphi*dy_ds - xvarphi*y*dztheta_ds + xtheta*y*dzvarphi_ds +
-                                                     x*(-(zvarphi*dytheta_ds) + ztheta*dyvarphi_ds + yvarphi*dztheta_ds -
-                                                     ytheta*dzvarphi_ds)) + r**2*((-(zvarphi*dytheta_dt) +
-                                                     ztheta*dyvarphi_dt + yvarphi*dztheta_dt - ytheta*dzvarphi_dt)*dx_ds +
-                                                     zvarphi*dy_dt*dxtheta_ds + y*dzvarphi_dt*dxtheta_ds -
-                                                     ztheta*dy_dt*dxvarphi_ds - y*dztheta_dt*dxvarphi_ds +
-                                                     zvarphi*dxtheta_dt*dy_ds - ztheta*dxvarphi_dt*dy_ds -
-                                                     xvarphi*dztheta_dt*dy_ds + xtheta*dzvarphi_dt*dy_ds -
-                                                     y*dxvarphi_dt*dztheta_ds - xvarphi*dy_dt*dztheta_ds +
-                                                     y*dxtheta_dt*dzvarphi_ds + xtheta*dy_dt*dzvarphi_ds +
-                                                     dx_dt*(-(zvarphi*dytheta_ds) + ztheta*dyvarphi_ds +
-                                                     yvarphi*dztheta_ds - ytheta*dzvarphi_ds) +
-                                                     x*(-(dzvarphi_dt*dytheta_ds) + dztheta_dt*dyvarphi_ds +
-                                                     dyvarphi_dt*dztheta_ds - dytheta_dt*dzvarphi_ds)) +
-                                                     r*(xvarphi*y*ztheta - xtheta*y*zvarphi + x*(-(yvarphi*ztheta) +
-                                                     ytheta*zvarphi))*dr2_dsdt)/r**3, axis=(0, 1))/(2*np.pi)  # noqa
+        mean_area = np.mean(
+            (1 / r)
+            * (
+                ztheta * (x * yvarphi - y * xvarphi)
+                - zvarphi * (x * ytheta - y * xtheta)
+            )
+        ) / (2.0 * np.pi)
+        d2mean_area_ds2 = (
+            np.sign(mean_area)
+            * np.mean(
+                (
+                    2
+                    * (
+                        -(xvarphi * y * ztheta)
+                        + xtheta * y * zvarphi
+                        + x * (yvarphi * ztheta - ytheta * zvarphi)
+                    )
+                    * dr_dt
+                    * dr_ds
+                    - r
+                    * (
+                        (yvarphi * ztheta - ytheta * zvarphi) * dx_dt
+                        + y * zvarphi * dxtheta_dt
+                        - y * ztheta * dxvarphi_dt
+                        - xvarphi * ztheta * dy_dt
+                        + xtheta * zvarphi * dy_dt
+                        - xvarphi * y * dztheta_dt
+                        + xtheta * y * dzvarphi_dt
+                        + x
+                        * (
+                            -(zvarphi * dytheta_dt)
+                            + ztheta * dyvarphi_dt
+                            + yvarphi * dztheta_dt
+                            - ytheta * dzvarphi_dt
+                        )
+                    )
+                    * dr_ds
+                    - r
+                    * dr_dt
+                    * (
+                        (yvarphi * ztheta - ytheta * zvarphi) * dx_ds
+                        + y * zvarphi * dxtheta_ds
+                        - y * ztheta * dxvarphi_ds
+                        - xvarphi * ztheta * dy_ds
+                        + xtheta * zvarphi * dy_ds
+                        - xvarphi * y * dztheta_ds
+                        + xtheta * y * dzvarphi_ds
+                        + x
+                        * (
+                            -(zvarphi * dytheta_ds)
+                            + ztheta * dyvarphi_ds
+                            + yvarphi * dztheta_ds
+                            - ytheta * dzvarphi_ds
+                        )
+                    )
+                    + r**2
+                    * (
+                        (
+                            -(zvarphi * dytheta_dt)
+                            + ztheta * dyvarphi_dt
+                            + yvarphi * dztheta_dt
+                            - ytheta * dzvarphi_dt
+                        )
+                        * dx_ds
+                        + zvarphi * dy_dt * dxtheta_ds
+                        + y * dzvarphi_dt * dxtheta_ds
+                        - ztheta * dy_dt * dxvarphi_ds
+                        - y * dztheta_dt * dxvarphi_ds
+                        + zvarphi * dxtheta_dt * dy_ds
+                        - ztheta * dxvarphi_dt * dy_ds
+                        - xvarphi * dztheta_dt * dy_ds
+                        + xtheta * dzvarphi_dt * dy_ds
+                        - y * dxvarphi_dt * dztheta_ds
+                        - xvarphi * dy_dt * dztheta_ds
+                        + y * dxtheta_dt * dzvarphi_ds
+                        + xtheta * dy_dt * dzvarphi_ds
+                        + dx_dt
+                        * (
+                            -(zvarphi * dytheta_ds)
+                            + ztheta * dyvarphi_ds
+                            + yvarphi * dztheta_ds
+                            - ytheta * dzvarphi_ds
+                        )
+                        + x
+                        * (
+                            -(dzvarphi_dt * dytheta_ds)
+                            + dztheta_dt * dyvarphi_ds
+                            + dyvarphi_dt * dztheta_ds
+                            - dytheta_dt * dzvarphi_ds
+                        )
+                    )
+                    + r
+                    * (
+                        xvarphi * y * ztheta
+                        - xtheta * y * zvarphi
+                        + x * (-(yvarphi * ztheta) + ytheta * zvarphi)
+                    )
+                    * dr2_dsdt
+                )
+                / r**3,
+                axis=(0, 1),
+            )
+            / (2 * np.pi)
+        )  # noqa
         return d2mean_area_ds2
 
     def arclength_poloidal_angle(self):
         """
-        Computes a poloidal (angle) coordinate θ on a surface for which 
+        Computes a poloidal (angle) coordinate θ on a surface for which
         the arclength ∂|r|/∂θ is independent of θ in each φ plane.
         In other words, this function computes the uniform-arclength
         poloidal coordinate. The returned poloidal coordinate is in the
@@ -804,7 +1022,9 @@ class Surface(Optimizable):
         gamma = self.gamma()
         nphi = gamma.shape[0]
         dr = np.linalg.norm(gamma[:, 1:, :] - gamma[:, :-1, :], axis=2)
-        dr_boundary = np.linalg.norm(gamma[:, 0, :] - gamma[:, -1, :], axis=1).reshape((-1, 1))
+        dr_boundary = np.linalg.norm(gamma[:, 0, :] - gamma[:, -1, :], axis=1).reshape(
+            (-1, 1)
+        )
 
         dr = np.concatenate((dr, dr_boundary), axis=1)
         L = np.sum(dr, axis=1)
@@ -835,17 +1055,11 @@ class Surface(Optimizable):
         theta_arclength = self.arclength_poloidal_angle()
         # Add a repeated point at the end to ensure periodicity
         theta_arclength_big = np.concatenate(
-            (
-                theta_arclength,
-                theta_arclength[:, 0:1] + 1
-            ),
+            (theta_arclength, theta_arclength[:, 0:1] + 1),
             axis=1,
         )
         function_big = np.concatenate(
-            (
-                function,
-                function[:, 0:1]
-            ),
+            (function, function[:, 0:1]),
             axis=1,
         )
         function_interpolated = np.zeros_like(theta_evaluate)
@@ -868,26 +1082,30 @@ class Surface(Optimizable):
         To do the conversion accurately, make sure the surface has both a
         sufficient number of quadrature points and a sufficiently large number
         of basis functions. More basis functions may be needed to represent the
-        shape than for the original theta coordinate.        
+        shape than for the original theta coordinate.
         """
         gamma = self.gamma()
         nphi = gamma.shape[0]
         gamma_new = np.empty_like(gamma)
         theta_evaluate = self.quadpoints_theta[None, :] * np.ones((nphi, 1))
         for j_xyz in range(3):
-            gamma_new[:, :, j_xyz] = self.interpolate_on_arclength_grid(gamma[:, :, j_xyz], theta_evaluate)
+            gamma_new[:, :, j_xyz] = self.interpolate_on_arclength_grid(
+                gamma[:, :, j_xyz], theta_evaluate
+            )
 
         self.least_squares_fit(gamma_new)
 
     @property
     def deduced_range(self):
         """
-        The quadpoints of a surface can be anything, but are often set to 
-        'full torus', 'field period' or 'half period'. 
+        The quadpoints of a surface can be anything, but are often set to
+        'full torus', 'field period' or 'half period'.
         Since this is not stored in the object, but often useful to know
         this function deduces the range from the quadpoints
         """
-        if np.isclose(self.quadpoints_phi[-1], 1-1/len(self.quadpoints_phi), atol=1e-10):
+        if np.isclose(
+            self.quadpoints_phi[-1], 1 - 1 / len(self.quadpoints_phi), atol=1e-10
+        ):
             return Surface.RANGE_FULL_TORUS
         elif self.quadpoints_phi[0] == 0:
             return Surface.RANGE_FIELD_PERIOD
@@ -902,6 +1120,7 @@ def signed_distance_from_surface(xyz, surface):
     """
     gammas = surface.gamma().reshape((-1, 3))
     from scipy.spatial import KDTree
+
     tree = KDTree(gammas)
     _, mins = tree.query(xyz, k=1)  # find closest points on the surface
 
@@ -913,16 +1132,18 @@ def signed_distance_from_surface(xyz, surface):
     # a plane through that node with the appropriate normal and then compute
     # the distance from the point to that plane
     # https://stackoverflow.com/questions/55189333/how-to-get-distance-from-point-to-plane-in-3d
-    mindist = np.sum((xyz-gammamins) * nmins, axis=1)
+    mindist = np.sum((xyz - gammamins) * nmins, axis=1)
 
     a_point_in_the_surface = np.mean(surface.gamma()[0, :, :], axis=0)
-    sign_of_interiorpoint = np.sign(np.sum((a_point_in_the_surface-gammas[0, :])*n[0, :]))
+    sign_of_interiorpoint = np.sign(
+        np.sum((a_point_in_the_surface - gammas[0, :]) * n[0, :])
+    )
 
     signed_dists = mindist * sign_of_interiorpoint
     return signed_dists
 
 
-class SurfaceClassifier():
+class SurfaceClassifier:
     r"""
     Takes in a toroidal surface and constructs an interpolant of the signed distance function
     :math:`f:R^3\to R` that is positive inside the volume contained by the surface,
@@ -939,7 +1160,7 @@ class SurfaceClassifier():
         gammas = surface.gamma()
         r = np.linalg.norm(gammas[:, :, :2], axis=2)
         z = gammas[:, :, 2]
-        rmin = max(np.min(r) - 0.1, 0.)
+        rmin = max(np.min(r) - 0.1, 0.0)
         rmax = np.max(r) + 0.1
         zmin = np.min(z) - 0.1
         zmax = np.max(z) + 0.1
@@ -947,9 +1168,9 @@ class SurfaceClassifier():
         self.zrange = (zmin, zmax)
         self.rrange = (rmin, rmax)
 
-        nr = int((self.rrange[1]-self.rrange[0])/h)
-        nphi = int(2*np.pi/h)
-        nz = int((self.zrange[1]-self.zrange[0])/h)
+        nr = int((self.rrange[1] - self.rrange[0]) / h)
+        nphi = int(2 * np.pi / h)
+        nz = int((self.zrange[1] - self.zrange[0]) / h)
 
         def fbatch(rs, phis, zs):
             xyz = np.zeros((len(rs), 3))
@@ -960,13 +1181,14 @@ class SurfaceClassifier():
 
         rule = sopp.UniformInterpolationRule(p)
         self.dist = sopp.RegularGridInterpolant3D(
-            rule, [rmin, rmax, nr], [0., 2*np.pi, nphi], [zmin, zmax, nz], 1, True)
+            rule, [rmin, rmax, nr], [0.0, 2 * np.pi, nphi], [zmin, zmax, nz], 1, True
+        )
         self.dist.interpolate_batch(fbatch)
 
     def evaluate_xyz(self, xyz):
         rphiz = np.zeros_like(xyz)
         rphiz[:, 0] = np.linalg.norm(xyz[:, :2], axis=1)
-        rphiz[:, 1] = np.mod(np.arctan2(xyz[:, 1], xyz[:, 0]), 2*np.pi)
+        rphiz[:, 1] = np.mod(np.arctan2(xyz[:, 1], xyz[:, 0]), 2 * np.pi)
         rphiz[:, 2] = xyz[:, 2]
         # initialize to -1 since the regular grid interpolant will just keep
         # that value when evaluated outside of bounds
@@ -981,15 +1203,14 @@ class SurfaceClassifier():
         self.dist.evaluate_batch(rphiz, d)
         return d
 
-    @SimsoptRequires(gridToVTK is not None,
-                     "to_vtk method requires pyevtk module")
+    @SimsoptRequires(gridToVTK is not None, "to_vtk method requires pyevtk module")
     def to_vtk(self, filename, h=0.01):
 
-        nr = int((self.rrange[1]-self.rrange[0])/h)
-        nphi = int(2*np.pi/h)
-        nz = int((self.zrange[1]-self.zrange[0])/h)
+        nr = int((self.rrange[1] - self.rrange[0]) / h)
+        nphi = int(2 * np.pi / h)
+        nz = int((self.zrange[1] - self.zrange[0]) / h)
         rs = np.linspace(self.rrange[0], self.rrange[1], nr)
-        phis = np.linspace(0, 2*np.pi, nphi)
+        phis = np.linspace(0, 2 * np.pi, nphi)
         zs = np.linspace(self.zrange[0], self.zrange[1], nz)
 
         R, Phi, Z = np.meshgrid(rs, phis, zs)

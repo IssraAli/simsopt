@@ -14,7 +14,7 @@ except ImportError as e:
     py_spec = None
     logger.debug(str(e))
 
-__all__ = ['NormalField', 'CoilNormalField']
+__all__ = ["NormalField", "CoilNormalField"]
 
 
 class NormalField(Optimizable):
@@ -23,11 +23,11 @@ class NormalField(Optimizable):
     computational boundary of SPEC free-boundary.
 
     It consists a surface (the computational boundary), and a set of Fourier harmonics that describe
-    the normal component of an externally provided field. 
+    the normal component of an externally provided field.
 
-    The Fourier harmonics are the degees of freedom, the computational boundary is kept fixed. 
-    The Fourier harmonics are stored in the SPEC convention, 
-    i.e. it is the 
+    The Fourier harmonics are the degees of freedom, the computational boundary is kept fixed.
+    The Fourier harmonics are stored in the SPEC convention,
+    i.e. it is the
     fourier components of B.(\partial\vec{r}/ \partial\theta \times \partial\vec{r}/ \partial\zeta) on the surface with a 1/(2\pi)^2
     Fourier normalization factor.
 
@@ -47,8 +47,9 @@ class NormalField(Optimizable):
             vnc( mm, self.ntor+nn ) is the mode (mm,nn)
     """
 
-    def __init__(self, nfp=1, stellsym=True, mpol=1, ntor=0,
-                 vns=None, vnc=None, surface=None):
+    def __init__(
+        self, nfp=1, stellsym=True, mpol=1, ntor=0, vns=None, vnc=None, surface=None
+    ):
 
         self.nfp = nfp
         self.stellsym = stellsym
@@ -76,10 +77,7 @@ class NormalField(Optimizable):
 
         dofs = self.get_dofs()
 
-        Optimizable.__init__(
-            self,
-            x0=dofs,
-            names=self._make_names())
+        Optimizable.__init__(self, x0=dofs, names=self._make_names())
 
     @property
     def vns(self):
@@ -87,7 +85,7 @@ class NormalField(Optimizable):
 
     @vns.setter
     def vns(self, value):
-        raise AttributeError('Change Vns using set_vns() or set_vns_asarray()')
+        raise AttributeError("Change Vns using set_vns() or set_vns_asarray()")
 
     @property
     def vnc(self):
@@ -95,7 +93,7 @@ class NormalField(Optimizable):
 
     @vnc.setter
     def vnc(self, value):
-        raise AttributeError('Change Vnc using set_vnc() or set_vnc_asarray()')
+        raise AttributeError("Change Vnc using set_vnc() or set_vnc_asarray()")
 
     @classmethod
     def from_spec(cls, filename):
@@ -106,36 +104,47 @@ class NormalField(Optimizable):
         # Test if py_spec is available
         if py_spec is None:
             raise RuntimeError(
-                "Initialization from Spec requires py_spec to be installed.")
+                "Initialization from Spec requires py_spec to be installed."
+            )
 
         # Read Namelist
         nm = py_spec.SPECNamelist(filename)
-        ph = nm['physicslist']
+        ph = nm["physicslist"]
 
         # Read modes from SPEC input file
-        vns = np.asarray(ph['vns'])
-        if ph['istellsym']:
+        vns = np.asarray(ph["vns"])
+        if ph["istellsym"]:
             vnc = None
         else:
-            vnc = np.asarray(ph['vnc'])
-        mpol = ph['Mpol']
-        ntor = ph['Ntor']
-        surface = SurfaceRZFourier(nfp=ph['nfp'], stellsym=bool(ph['istellsym']), mpol=mpol, ntor=ntor)
-        old_ntor = np.array(ph['rbc']).shape[1]//2
-        surface.rc[:] = np.array(ph['rbc'])[:mpol+1, old_ntor-ntor:old_ntor+ntor+1]
-        surface.zs[:] = np.array(ph['zbs'])[:mpol+1, old_ntor-ntor:old_ntor+ntor+1]
-        if not ph['istellsym']:
-            surface.zc[:] = np.array(ph['zbc'])[:mpol+1, old_ntor-ntor:old_ntor+ntor+1]
-            surface.rs[:] = np.array(ph['rbs'])[:mpol+1, old_ntor-ntor:old_ntor+ntor+1]
+            vnc = np.asarray(ph["vnc"])
+        mpol = ph["Mpol"]
+        ntor = ph["Ntor"]
+        surface = SurfaceRZFourier(
+            nfp=ph["nfp"], stellsym=bool(ph["istellsym"]), mpol=mpol, ntor=ntor
+        )
+        old_ntor = np.array(ph["rbc"]).shape[1] // 2
+        surface.rc[:] = np.array(ph["rbc"])[
+            : mpol + 1, old_ntor - ntor : old_ntor + ntor + 1
+        ]
+        surface.zs[:] = np.array(ph["zbs"])[
+            : mpol + 1, old_ntor - ntor : old_ntor + ntor + 1
+        ]
+        if not ph["istellsym"]:
+            surface.zc[:] = np.array(ph["zbc"])[
+                : mpol + 1, old_ntor - ntor : old_ntor + ntor + 1
+            ]
+            surface.rs[:] = np.array(ph["rbs"])[
+                : mpol + 1, old_ntor - ntor : old_ntor + ntor + 1
+            ]
 
         normal_field = cls(
-            nfp=ph['nfp'],
-            stellsym=bool(ph['istellsym']),
-            mpol=ph['Mpol'],
-            ntor=ph['Ntor'],
+            nfp=ph["nfp"],
+            stellsym=bool(ph["istellsym"]),
+            mpol=ph["Mpol"],
+            ntor=ph["Ntor"],
             vns=vns,
             vnc=vnc,
-            surface=surface
+            surface=surface,
         )
 
         return normal_field
@@ -146,19 +155,23 @@ class NormalField(Optimizable):
         Initialize using the simsopt SPEC object's attributes
         """
         if not spec.freebound:
-            raise ValueError('The given SPEC object is not free-boundary')
+            raise ValueError("The given SPEC object is not free-boundary")
 
         surface = spec.computational_boundary
 
         # Grab all the attributes from the SPEC object into an input dictionary
-        input_dict = {'nfp': spec.nfp,
-                      'stellsym': spec.stellsym,
-                      'mpol': spec.mpol,
-                      'ntor': spec.ntor,
-                      'vns': spec.array_translator(spec.inputlist.vns).as_simsopt,
-                      'surface': surface}
+        input_dict = {
+            "nfp": spec.nfp,
+            "stellsym": spec.stellsym,
+            "mpol": spec.mpol,
+            "ntor": spec.ntor,
+            "vns": spec.array_translator(spec.inputlist.vns).as_simsopt,
+            "surface": surface,
+        }
         if not spec.stellsym:
-            input_dict.append({'vnc': spec.array_translator(spec.inputlist.vnc).as_simsopt})
+            input_dict.append(
+                {"vnc": spec.array_translator(spec.inputlist.vnc).as_simsopt}
+            )
 
         normal_field = cls(**input_dict)
 
@@ -173,10 +186,10 @@ class NormalField(Optimizable):
 
         # Populate dofs array
         vns_shape = self.vns.shape
-        input_mpol = int(vns_shape[0]-1)
-        input_ntor = int((vns_shape[1]-1)/2)
-        for mm in range(0, self.mpol+1):
-            for nn in range(-self.ntor, self.ntor+1):
+        input_mpol = int(vns_shape[0] - 1)
+        input_ntor = int((vns_shape[1] - 1) / 2)
+        for mm in range(0, self.mpol + 1):
+            for nn in range(-self.ntor, self.ntor + 1):
                 if mm == 0 and nn < 0:
                     continue
                 if mm > input_mpol:
@@ -186,11 +199,11 @@ class NormalField(Optimizable):
 
                 if not (mm == 0 and nn == 0):
                     ii = self.get_index_in_dofs(mm, nn, even=False)
-                    dofs[ii] = self.vns[mm, input_ntor+nn]
+                    dofs[ii] = self.vns[mm, input_ntor + nn]
 
                 if not self.stellsym:
                     ii = self.get_index_in_dofs(mm, nn, even=True)
-                    dofs[ii] = self.vnc[mm, input_ntor+nn]
+                    dofs[ii] = self.vnc[mm, input_ntor + nn]
         return dofs
 
     def get_index_in_array(self, m, n, mpol=None, ntor=None):
@@ -211,13 +224,13 @@ class NormalField(Optimizable):
             ntor = self.ntor
 
         if m < 0 or m > mpol:
-            raise ValueError('m out of bound')
+            raise ValueError("m out of bound")
         if abs(n) > ntor:
-            raise ValueError('n out of bound')
+            raise ValueError("n out of bound")
         if m == 0 and n < 0:
-            raise ValueError('n has to be positive if m==0')
+            raise ValueError("n has to be positive if m==0")
 
-        return [m, n+ntor]
+        return [m, n + ntor]
 
     def get_index_in_dofs(self, m, n, mpol=None, ntor=None, even=False):
         """
@@ -237,19 +250,19 @@ class NormalField(Optimizable):
             ntor = self.ntor
 
         if m < 0 or m > mpol:
-            raise ValueError('m out of bound')
+            raise ValueError("m out of bound")
         if abs(n) > ntor:
-            raise ValueError('n out of bound')
+            raise ValueError("n out of bound")
         if m == 0 and n < 0:
-            raise ValueError('n has to be positive if m==0')
+            raise ValueError("n has to be positive if m==0")
         if not even and m == 0 and n == 0:
-            raise ValueError('m=n=0 not supported for odd series')
+            raise ValueError("m=n=0 not supported for odd series")
 
         ii = -1
         if m == 0:
             ii = n
         else:
-            ii = m * (2*ntor+1) + n
+            ii = m * (2 * ntor + 1) + n
 
         nvns = ntor + mpol * (ntor * 2 + 1)
         if not even:  # Vns
@@ -283,7 +296,7 @@ class NormalField(Optimizable):
         self.check_mn(m, n)
         i, j = self.get_index_in_array(m, n)
         if self.stellsym:
-            raise ValueError('Stellarator symmetric has no vnc')
+            raise ValueError("Stellarator symmetric has no vnc")
         else:
             self._vnc[i, j] = value
             dofs = self.get_dofs()
@@ -291,11 +304,11 @@ class NormalField(Optimizable):
 
     def check_mn(self, m, n):
         if m < 0 or m > self.mpol:
-            raise ValueError('m out of bound')
+            raise ValueError("m out of bound")
         if n < -self.ntor or n > self.ntor:
-            raise ValueError('n out of bound')
+            raise ValueError("n out of bound")
         if m == 0 and n < 0:
-            raise ValueError('n has to be positive if m==0')
+            raise ValueError("n has to be positive if m==0")
 
     def _make_names(self):
         """
@@ -304,8 +317,9 @@ class NormalField(Optimizable):
         if self.stellsym:
             names = self._make_names_helper(even=False)
         else:
-            names = np.append(self._make_names_helper(even=False),
-                              self._make_names_helper(even=True))
+            names = np.append(
+                self._make_names_helper(even=False), self._make_names_helper(even=True)
+            )
 
         return names
 
@@ -314,19 +328,19 @@ class NormalField(Optimizable):
         indices = []
 
         if even:
-            prefix = 'vnc'
+            prefix = "vnc"
         else:
-            prefix = 'vns'
+            prefix = "vns"
 
-        for mm in range(0, self.mpol+1):
-            for nn in range(-self.ntor, self.ntor+1):
+        for mm in range(0, self.mpol + 1):
+            for nn in range(-self.ntor, self.ntor + 1):
                 if mm == 0 and nn < 0:
                     continue
                 if not even and mm == 0 and nn == 0:
                     continue
 
                 ind = self.get_index_in_dofs(mm, nn, even=even)
-                names.append(prefix + '({m},{n})'.format(m=mm, n=nn))
+                names.append(prefix + "({m},{n})".format(m=mm, n=nn))
                 indices.append(ind)
 
         # Sort names
@@ -394,9 +408,9 @@ class NormalField(Optimizable):
                 this_nmin = 0
             for n in range(this_nmin, nmax + 1):
                 if m > 0 or n != 0:
-                    fn(f'vns({m},{n})')
+                    fn(f"vns({m},{n})")
                 if not self.stellsym:
-                    fn(f'vnc({m},{n})')
+                    fn(f"vnc({m},{n})")
 
     def get_vns_asarray(self, mpol=None, ntor=None):
         """
@@ -405,16 +419,16 @@ class NormalField(Optimizable):
         if mpol is None:
             mpol = self.mpol
         elif mpol > self.mpol:
-            raise ValueError('mpol out of bound')
+            raise ValueError("mpol out of bound")
 
         if ntor is None:
             ntor = self.ntor
         elif ntor > self.ntor:
-            raise ValueError('ntor out of bound')
+            raise ValueError("ntor out of bound")
 
         vns = self.vns
 
-        return vns[0:mpol, self.ntor-ntor:self.ntor+ntor+1]
+        return vns[0:mpol, self.ntor - ntor : self.ntor + ntor + 1]
 
     def get_vnc_asarray(self, mpol=None, ntor=None):
         """
@@ -423,18 +437,18 @@ class NormalField(Optimizable):
         if mpol is None:
             mpol = self.mpol
         elif mpol > self.mpol:
-            raise ValueError('mpol out of bound')
+            raise ValueError("mpol out of bound")
 
         if ntor is None:
             ntor = self.ntor
         elif ntor > self.ntor:
-            raise ValueError('ntor out of bound')
+            raise ValueError("ntor out of bound")
 
         vnc = self.vnc
         if vnc is None:
-            vnc = np.zeros((mpol, 2*ntor+1))
+            vnc = np.zeros((mpol, 2 * ntor + 1))
 
-        return vnc[0:mpol, self.ntor-ntor:self.ntor+ntor+1]
+        return vnc[0:mpol, self.ntor - ntor : self.ntor + ntor + 1]
 
     def get_vns_vnc_asarray(self, mpol=None, ntor=None):
         """
@@ -443,12 +457,12 @@ class NormalField(Optimizable):
         if mpol is None:
             mpol = self.mpol
         elif mpol > self.mpol:
-            raise ValueError('mpol out of bound')
+            raise ValueError("mpol out of bound")
 
         if ntor is None:
             ntor = self.ntor
         elif ntor > self.ntor:
-            raise ValueError('ntor out of bound')
+            raise ValueError("ntor out of bound")
 
         vns = self.get_vns_asarray(mpol, ntor)
         vnc = self.get_vnc_asarray(mpol, ntor)
@@ -461,14 +475,14 @@ class NormalField(Optimizable):
         if mpol is None:
             mpol = self.mpol
         elif mpol > self.mpol:
-            raise ValueError('mpol out of bound')
+            raise ValueError("mpol out of bound")
 
         if ntor is None:
             ntor = self.ntor
         elif ntor > self.ntor:
-            raise ValueError('ntor out of bound')
+            raise ValueError("ntor out of bound")
 
-        self._vns = vns[0:mpol, self.ntor-ntor:self.ntor+ntor+1]
+        self._vns = vns[0:mpol, self.ntor - ntor : self.ntor + ntor + 1]
         dofs = self.get_dofs()
         self.local_full_x = dofs
 
@@ -479,14 +493,14 @@ class NormalField(Optimizable):
         if mpol is None:
             mpol = self.mpol
         elif mpol > self.mpol:
-            raise ValueError('mpol out of bound')
+            raise ValueError("mpol out of bound")
 
         if ntor is None:
             ntor = self.ntor
         elif ntor > self.ntor:
-            raise ValueError('ntor out of bound')
+            raise ValueError("ntor out of bound")
 
-        self._vnc = vnc[0:mpol, self.ntor-ntor:self.ntor+ntor+1]
+        self._vnc = vnc[0:mpol, self.ntor - ntor : self.ntor + ntor + 1]
         dofs = self.get_dofs()
         self.local_full_x = dofs
 
@@ -497,12 +511,12 @@ class NormalField(Optimizable):
         if mpol is None:
             mpol = self.mpol
         elif mpol > self.mpol:
-            raise ValueError('mpol out of bound')
+            raise ValueError("mpol out of bound")
 
         if ntor is None:
             ntor = self.ntor
         elif ntor > self.ntor:
-            raise ValueError('ntor out of bound')
+            raise ValueError("ntor out of bound")
 
         self.set_vns_asarray(vns, mpol, ntor)
         self.set_vnc_asarray(vnc, mpol, ntor)
@@ -510,35 +524,39 @@ class NormalField(Optimizable):
     def get_real_space_field(self):
         """
         Fourier transform the field and get the real-space values of the normal component of the externally
-        provided field on the computational boundary. 
-        The returned array will be of size specified by the surfaces'  quadpoints and located on the quadpoints. 
+        provided field on the computational boundary.
+        The returned array will be of size specified by the surfaces'  quadpoints and located on the quadpoints.
         """
         vns, vnc = self.get_vns_vnc_asarray()
-        BdotN_unnormalized = self.surface.inverse_fourier_transform_scalar(vns, vnc, normalization=(2*np.pi)**2, stellsym=self.stellsym)
-        normal_field_real_space = -1 * BdotN_unnormalized / np.linalg.norm(self.surface.normal(), axis=-1)
+        BdotN_unnormalized = self.surface.inverse_fourier_transform_scalar(
+            vns, vnc, normalization=(2 * np.pi) ** 2, stellsym=self.stellsym
+        )
+        normal_field_real_space = (
+            -1 * BdotN_unnormalized / np.linalg.norm(self.surface.normal(), axis=-1)
+        )
         return normal_field_real_space
 
 
 class CoilNormalField(NormalField):
     """
-    A SPEC NormalField generated by a CoilSet. 
+    A SPEC NormalField generated by a CoilSet.
 
-    The CoilNormalField provides the same interface as the 
+    The CoilNormalField provides the same interface as the
     NormalField, but its degrees of freedom are inherited
-    from its CoilSet parent. 
+    from its CoilSet parent.
 
     Args:
-        coilset: The CoilSet object from which to inherit the degrees of freedom        
+        coilset: The CoilSet object from which to inherit the degrees of freedom
 
     Properties:
-        surface: The computational boundary of the SPEC simulation, 
-        that is managed by the CoilSet. 
-        vns/vnc: fourier harmonics of the normal field. 
+        surface: The computational boundary of the SPEC simulation,
+        that is managed by the CoilSet.
+        vns/vnc: fourier harmonics of the normal field.
         This property is cached, and recomputed only when the parents' DOFS (the
         coils) change.
     """
 
-    def __init__(self, coilset: 'CoilSet' = None):
+    def __init__(self, coilset: "CoilSet" = None):
         self._vns = None
         self._vnc = None
 
@@ -552,7 +570,9 @@ class CoilNormalField(NormalField):
         self.stellsym = self.surface.stellsym
         self.mpol = self.surface.mpol
         self.ntor = self.surface.ntor
-        Optimizable.__init__(self, depends_on=[self._coilset])  # call the Optimizable constructor, skip the NormalField constructor
+        Optimizable.__init__(
+            self, depends_on=[self._coilset]
+        )  # call the Optimizable constructor, skip the NormalField constructor
 
     @property
     def surface(self):
@@ -564,37 +584,67 @@ class CoilNormalField(NormalField):
 
     @classmethod
     def from_spec_object(cls, *args, **kwargs):
-        raise ValueError('Generate the coils separately and pass them to the CoilNormalField constructor')
+        raise ValueError(
+            "Generate the coils separately and pass them to the CoilNormalField constructor"
+        )
 
     @classmethod
     def from_spec(cls, *args, **kwargs):
-        raise ValueError('Generate the coils separately and pass them to the CoilNormalField constructor')
+        raise ValueError(
+            "Generate the coils separately and pass them to the CoilNormalField constructor"
+        )
 
     @property
     def vns(self):
         if self._vns is None:
-            bnormal = np.sum(self.coilset.bs.B().reshape((self.surface.quadpoints_phi.size, self.surface.quadpoints_theta.size, 3)) * self.surface.normal()*-1, axis=2)
-            Vns, Vnc = self.surface.fourier_transform_scalar(bnormal[:, :], normalization=(2*np.pi)**2, stellsym=self.stellsym)
+            bnormal = np.sum(
+                self.coilset.bs.B().reshape(
+                    (
+                        self.surface.quadpoints_phi.size,
+                        self.surface.quadpoints_theta.size,
+                        3,
+                    )
+                )
+                * self.surface.normal()
+                * -1,
+                axis=2,
+            )
+            Vns, Vnc = self.surface.fourier_transform_scalar(
+                bnormal[:, :], normalization=(2 * np.pi) ** 2, stellsym=self.stellsym
+            )
             self._vns = Vns
             self._vnc = Vnc
         return self._vns
 
     @vns.setter
     def vns(self, *args, **kwargs):
-        raise AttributeError('you cannot set vns, the coils do this!')
+        raise AttributeError("you cannot set vns, the coils do this!")
 
     @property
     def vnc(self):
         if self._vnc is None:
-            bnormal = np.sum(self.coilset.bs.B().reshape((self.surface.quadpoints_phi.size, self.surface.quadpoints_theta.size, 3)) * self.surface.normal()*-1, axis=2)
-            Vns, Vnc = self.surface.fourier_transform_scalar(bnormal[:, :], normalization=(2*np.pi)**2, stellsym=self.stellsym)
+            bnormal = np.sum(
+                self.coilset.bs.B().reshape(
+                    (
+                        self.surface.quadpoints_phi.size,
+                        self.surface.quadpoints_theta.size,
+                        3,
+                    )
+                )
+                * self.surface.normal()
+                * -1,
+                axis=2,
+            )
+            Vns, Vnc = self.surface.fourier_transform_scalar(
+                bnormal[:, :], normalization=(2 * np.pi) ** 2, stellsym=self.stellsym
+            )
             self._vns = Vns
             self._vnc = Vnc
         return self._vnc
 
     @vnc.setter
     def vnc(self, *args, **kwargs):
-        raise AttributeError('you cannot set vnc, the coils do this!')
+        raise AttributeError("you cannot set vnc, the coils do this!")
 
     @property
     def coilset(self):
@@ -603,13 +653,14 @@ class CoilNormalField(NormalField):
     @coilset.setter
     def coilset(self, coilset):
         from simsopt.field import CoilSet, ReducedCoilSet
+
         assert isinstance(coilset, (CoilSet, ReducedCoilSet))
         self.remove_parent(self._coilset)
         self._coilset = coilset
         self.append_parent(coilset)
         self.recompute_bell()
 
-    def reduce_coilset(self, nsv='nonzero'):
+    def reduce_coilset(self, nsv="nonzero"):
         """
         Replace the coilset with a Re:w
         ducedCoilSet keeping the first nsv singular values.
@@ -617,22 +668,29 @@ class CoilNormalField(NormalField):
         Note: Should this be done by proc0 and broadcast? Is SVD deterministic?
         """
         from simsopt.field import ReducedCoilSet
+
         thiscoilset = self.coilset
         if type(self.coilset) is ReducedCoilSet:
             thiscoilset = self.coilset.coilset
 
         def target_function(coilset):
-            cnf = CoilNormalField(coilset)  # dummy CoilNormalField to evaluate the vnc and vnc
-            output = cnf.vns.ravel()[coilset.surface.ntor+1:]  # remove leading zeros
+            cnf = CoilNormalField(
+                coilset
+            )  # dummy CoilNormalField to evaluate the vnc and vnc
+            output = cnf.vns.ravel()[coilset.surface.ntor + 1 :]  # remove leading zeros
             if not coilset.surface.stellsym:
-                output = np.append(output, cnf.vnc.ravel()[coilset.surface.ntor:])  # remove leading zeros
+                output = np.append(
+                    output, cnf.vnc.ravel()[coilset.surface.ntor :]
+                )  # remove leading zeros
             return np.ravel(output)
 
         reduced_coilset = thiscoilset.reduce(target_function, nsv=nsv)
-        logger.info(f'CoilNormalField replaced Coilset with ReducedCoilsSet with {reduced_coilset.nsv} singular values')
-        logger.debug('first right-singular vector: ')
+        logger.info(
+            f"CoilNormalField replaced Coilset with ReducedCoilsSet with {reduced_coilset.nsv} singular values"
+        )
+        logger.debug("first right-singular vector: ")
         logger.debug(reduced_coilset.rsv[0])
-        logger.debug('singular values: ')
+        logger.debug("singular values: ")
         logger.debug(reduced_coilset._s_diag)
         self.coilset = reduced_coilset  # using setter; replaces parent
 
@@ -651,34 +709,36 @@ class CoilNormalField(NormalField):
         return self.vnc[index[0], index[1]]  # calls cache'd getter
 
     def set_vns(self, *args, **kwargs):
-        raise AttributeError('you cannot set vns, the coils do this!')
+        raise AttributeError("you cannot set vns, the coils do this!")
 
     def set_vnc(self, *args, **kwargs):
-        raise AttributeError('you cannot set vnc, the coils do this!')
+        raise AttributeError("you cannot set vnc, the coils do this!")
 
     def get_vns_asarray(self):
         return self.vns
 
     def set_vns_asarray(self, *args, **kwargs):
-        raise AttributeError('you cannot set vns, the coils do this!')
+        raise AttributeError("you cannot set vns, the coils do this!")
 
     def get_vnc_asarray(self):
         return self.vnc
 
     def set_vnc_asarray(self, *args, **kwargs):
-        raise AttributeError('you cannot set vnc, the coils do this!')
+        raise AttributeError("you cannot set vnc, the coils do this!")
 
     def get_vns_vnc_asarray(self):
         return self.vns, self.vnc
 
     def set_vns_vnc_asarray(self, *args, **kwargs):
-        raise AttributeError('you cannot set fourier components, the coils do this!')
+        raise AttributeError("you cannot set fourier components, the coils do this!")
 
     def change_resolution(self, *args, **kwargs):
-        raise ValueError('CoilNormalField has no resolution, change parameters in its coilset')
+        raise ValueError(
+            "CoilNormalField has no resolution, change parameters in its coilset"
+        )
 
     def fixed_range(self, *args, **kwargs):
-        raise ValueError('no sense in fixing anything in a CoilNormalField')
+        raise ValueError("no sense in fixing anything in a CoilNormalField")
 
     def get_index_in_array(self, m, n, mpol=None, ntor=None):
         """
@@ -698,45 +758,53 @@ class CoilNormalField(NormalField):
             ntor = self.ntor
 
         if m < 0 or m > mpol:
-            raise ValueError('m out of bound')
+            raise ValueError("m out of bound")
         if abs(n) > ntor:
-            raise ValueError('n out of bound')
+            raise ValueError("n out of bound")
         if m == 0 and n < 0:
-            raise ValueError('n has to be positive if m==0')
+            raise ValueError("n has to be positive if m==0")
 
-        return [m, n+ntor]
+        return [m, n + ntor]
 
     def get_dofs(self, *args, **kwargs):
-        raise ValueError('CoilNormalField does not have its own degrees of freedom')
+        raise ValueError("CoilNormalField does not have its own degrees of freedom")
 
     def get_index_in_dofs(self, *args, **kwargs):
-        raise ValueError('CoilNormalField does not have its own degrees of freedom')
+        raise ValueError("CoilNormalField does not have its own degrees of freedom")
 
-    def optimize_coils(self, targetvns, targetvnc=None, TARGET_LENGTH=1000, MAXITER=300):
+    def optimize_coils(
+        self, targetvns, targetvnc=None, TARGET_LENGTH=1000, MAXITER=300
+    ):
         r"""
-        Simple convenience function to 
+        Simple convenience function to
         optimize the coils to match the target vns and vnc using a FOCUS-style algorithm.
 
         Uses the simplest FOCUS optimization consisting of only
-        the quadratic flux penalty and a length penalty. 
+        the quadratic flux penalty and a length penalty.
 
-        Args: 
+        Args:
             targetvns: The target odd fourier modes of :math:`\mathbf{B}\cdot\mathbf{\vec{n}}`. 2D array of size
-                (mpol+1)x(2ntor+1). 
+                (mpol+1)x(2ntor+1).
             targetvnc: The target even fourier modes of :math:`\mathbf{B}\cdot\mathbf{\vec{n}}`. 2D array of size
-                (mpol+1)x(2ntor+1). Ignored if stellsym if True. 
-            TARGET_LENGTH: The target length of the coils. Default is 1000. 
+                (mpol+1)x(2ntor+1). Ignored if stellsym if True.
+            TARGET_LENGTH: The target length of the coils. Default is 1000.
             MAXITER: The maximum number of iterations. Default is 1000.
         returns:
             res: the result object from scipy.optimize.minimize
         """
         from scipy.optimize import minimize
+
         if targetvnc is None:
             targetvnc = np.zeros_like(targetvns)
-        BdotN_unnormalized = self.surface.inverse_fourier_transform_scalar(targetvns, targetvnc, normalization=(2*np.pi)**2, stellsym=self.stellsym)
-        target = -1 * BdotN_unnormalized / np.linalg.norm(self.surface.normal(), axis=-1)
-        JF = self.coilset.flux_penalty(target=target)\
-            + self.coilset.length_penalty(TOTAL_LENGTH=TARGET_LENGTH, f='max')
+        BdotN_unnormalized = self.surface.inverse_fourier_transform_scalar(
+            targetvns, targetvnc, normalization=(2 * np.pi) ** 2, stellsym=self.stellsym
+        )
+        target = (
+            -1 * BdotN_unnormalized / np.linalg.norm(self.surface.normal(), axis=-1)
+        )
+        JF = self.coilset.flux_penalty(target=target) + self.coilset.length_penalty(
+            TOTAL_LENGTH=TARGET_LENGTH, f="max"
+        )
 
         def fun(dofs):
             JF.x = dofs
@@ -744,8 +812,18 @@ class CoilNormalField(NormalField):
 
         dofs = JF.x
 
-        res = minimize(fun, dofs, jac=True, method='L-BFGS-B',
-                       options={'maxiter': MAXITER, 'maxcor': 300, 'iprint': 5}, tol=1e-15)
-        print(f'the maximum difference between coil Vns and target Vns is: {np.max(np.abs(self.vns-targetvns))}')
-        print(f'The root mean squared difference between the Vns produced by the coils and the target is: {np.sqrt(np.mean((self.vns-targetvns)**2))}')
+        res = minimize(
+            fun,
+            dofs,
+            jac=True,
+            method="L-BFGS-B",
+            options={"maxiter": MAXITER, "maxcor": 300, "iprint": 5},
+            tol=1e-15,
+        )
+        print(
+            f"the maximum difference between coil Vns and target Vns is: {np.max(np.abs(self.vns - targetvns))}"
+        )
+        print(
+            f"The root mean squared difference between the Vns produced by the coils and the target is: {np.sqrt(np.mean((self.vns - targetvns) ** 2))}"
+        )
         return res

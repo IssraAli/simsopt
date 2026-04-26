@@ -1,12 +1,18 @@
 """
-This file contains a class for reading in FOCUS-style data files. 
+This file contains a class for reading in FOCUS-style data files.
 
-This file was copied over from the MAGPIE code used for generating 
-permanent magnet structures. All credit for this code is thanks 
+This file was copied over from the MAGPIE code used for generating
+permanent magnet structures. All credit for this code is thanks
 to the PM4Stell team and Ken Hammond for his consent to use this file
 and work with the permanent magnet branch of SIMSOPT.
 """
-__all__ = ['FocusData', 'FocusPlasmaBnormal', 'stell_point_transform', 'stell_vector_transform']
+
+__all__ = [
+    "FocusData",
+    "FocusPlasmaBnormal",
+    "stell_point_transform",
+    "stell_vector_transform",
+]
 import numpy as np
 from simsopt.geo import Surface
 
@@ -16,17 +22,15 @@ FOCUS_PLASMAFILE_NHEADER_BNORM = 2
 
 
 class FocusPlasmaBnormal(object):
-
     def __init__(self, fname):
 
-        with open(fname, 'r') as f:
+        with open(fname, "r") as f:
             lines = f.readlines()
 
         # Read numbers of modes and nfp from the header
         position = FOCUS_PLASMAFILE_NHEADER_TOP
         splitline = lines[position].split()
-        errmsg = "This does not appear to be a FOCUS-format " \
-                 + "plasma boundary file"
+        errmsg = "This does not appear to be a FOCUS-format " + "plasma boundary file"
         assert len(splitline) == 3, errmsg
 
         Nfou = int(splitline[0])
@@ -34,8 +38,13 @@ class FocusPlasmaBnormal(object):
         NfouBn = int(splitline[2])
 
         # Read Fourier harmonics of the normal field on the plasma boundary
-        position = position + 1 + FOCUS_PLASMAFILE_NHEADER_BDRY + Nfou + \
-            FOCUS_PLASMAFILE_NHEADER_BNORM
+        position = (
+            position
+            + 1
+            + FOCUS_PLASMAFILE_NHEADER_BDRY
+            + Nfou
+            + FOCUS_PLASMAFILE_NHEADER_BNORM
+        )
 
         self.n = np.zeros(NfouBn)
         self.m = np.zeros(NfouBn)
@@ -54,7 +63,7 @@ class FocusPlasmaBnormal(object):
         self.stellsym = np.max(np.abs(self.bnc)) == 0
 
     def bnormal_grid(self, nphi, ntheta, range):
-        '''
+        """
         Calculates the normal component of the magnetic field on a
         regularly-spaced 2D grid of points on the surface with a specified
         resolution.
@@ -74,13 +83,13 @@ class FocusPlasmaBnormal(object):
           bnormal: 2D array
             Normal component of the magnetic field evaluated at each of the
             grid points.
-        '''
+        """
         # Determine the theta and phi points using Simsopt Surface class methods
         phi = Surface.get_phi_quadpoints(nphi=nphi, range=range, nfp=self.nfp)
         theta = Surface.get_theta_quadpoints(ntheta=ntheta)
         # Rescale the angles
-        phi = 2.*np.pi*np.array(phi)
-        theta = 2.*np.pi*np.array(theta)
+        phi = 2.0 * np.pi * np.array(phi)
+        theta = 2.0 * np.pi * np.array(theta)
 
         # Prepare 3D arrays with mode numbers and coefficients
         Theta, Phi, Mode = np.meshgrid(theta, phi, np.arange(0, self.NfouBn))
@@ -91,9 +100,9 @@ class FocusPlasmaBnormal(object):
             BNC = self.bnc[Mode]
 
         # Calculate the values of each mode at each grid point
-        SinGrid = BNS*np.sin(M*Theta - self.nfp*N*Phi)
+        SinGrid = BNS * np.sin(M * Theta - self.nfp * N * Phi)
         if not self.stellsym:
-            CosGrid = BNC*np.cos(M*Theta - self.nfp*N*Phi)
+            CosGrid = BNC * np.cos(M * Theta - self.nfp * N * Phi)
 
         # Add the contributions of each mode
         bnormal = np.sum(SinGrid, axis=2)
@@ -109,7 +118,7 @@ class FocusData(object):
 
     Args:
         filename: a FOCUS file
-        keep_Ic_zeros: (optional) if True, all dipoles in the file will be 
+        keep_Ic_zeros: (optional) if True, all dipoles in the file will be
             retained in the data structure irrespective of the value of their
             Ic parameter. If False, only magnets with Ic == 1 will be imported.
             Default is False.
@@ -117,8 +126,22 @@ class FocusData(object):
             method will only load every nth magnet from the file. If 1, all
             magnets will be loaded. Default is 1.
     """
-    propNames = ['type', 'symm', 'coilname', 'ox', 'oy', 'oz', 'Ic', 'M_0',
-                 'pho', 'Lc', 'mp', 'mt', 'op']
+
+    propNames = [
+        "type",
+        "symm",
+        "coilname",
+        "ox",
+        "oy",
+        "oz",
+        "Ic",
+        "M_0",
+        "pho",
+        "Lc",
+        "mp",
+        "mt",
+        "op",
+    ]
 
     float_inds = [3, 4, 5, 7, 8, 10, 11]
 
@@ -134,13 +157,12 @@ class FocusData(object):
 
     def read_from_file(self, filename, keep_Ic_zeros, downsample):
 
-        with open(str(filename), 'r') as focusfile:
+        with open(str(filename), "r") as focusfile:
             # Ignore the first line in the file
             focusfile.readline()
 
             # Record the number of magnets and the momentq
-            line2data = [int(number) for number in
-                         focusfile.readline().strip().split()]
+            line2data = [int(number) for number in focusfile.readline().strip().split()]
             self.nMagnets = line2data[0]
             if len(line2data) > 1:
                 self.momentq = line2data[1]
@@ -171,11 +193,16 @@ class FocusData(object):
             self.max_float_length = 0
             self.min_float_val = 0
             for i in range(self.nMagnets):
-
-                linedata = focusfile.readline().strip().split(',')
+                linedata = focusfile.readline().strip().split(",")
                 if len(linedata) < self.nProps:
-                    raise Exception(('Problem accessing data for magnet %d in '
-                                     + 'file ' + filename) % (i))
+                    raise Exception(
+                        (
+                            "Problem accessing data for magnet %d in "
+                            + "file "
+                            + filename
+                        )
+                        % (i)
+                    )
 
                 self.magtype[i] = int(linedata[0])
                 self.symm[i] = int(linedata[1])
@@ -207,12 +234,14 @@ class FocusData(object):
                     self.op[i] = np.double(linedata[12])
 
                 # Keep track of the longest and lowest-valued floats recorded
-                max_float_length = max([len(linedata[i].strip()) for i
-                                        in FocusData.float_inds])
+                max_float_length = max(
+                    [len(linedata[i].strip()) for i in FocusData.float_inds]
+                )
                 if max_float_length > self.max_float_length:
                     self.max_float_length = max_float_length
-                min_float_val = min([np.double(linedata[i]) for i
-                                     in FocusData.float_inds])
+                min_float_val = min(
+                    [np.double(linedata[i]) for i in FocusData.float_inds]
+                )
                 if min_float_val < self.min_float_val:
                     self.min_float_val = min_float_val
 
@@ -222,7 +251,7 @@ class FocusData(object):
 
         # Add space for a negative sign in the max float length if necessary
         if self.min_float_val >= 0:
-            self.max_float_length = self.max_float_length+1
+            self.max_float_length = self.max_float_length + 1
 
         # Drop magnets from downsample and port locations
         inds_total = np.arange(self.nMagnets)
@@ -232,7 +261,9 @@ class FocusData(object):
         if keep_Ic_zeros:
             nonzero_inds = inds_downsampled
         else:
-            nonzero_inds = np.intersect1d(np.ravel(np.where(self.Ic == 1.0)), inds_downsampled)
+            nonzero_inds = np.intersect1d(
+                np.ravel(np.where(self.Ic == 1.0)), inds_downsampled
+            )
         self.ox = self.ox[nonzero_inds]
         self.oy = self.oy[nonzero_inds]
         self.oz = self.oz[nonzero_inds]
@@ -249,30 +280,36 @@ class FocusData(object):
 
     def unit_vector(self, inds):
         """
-        Returns the x, y, and z components of a Cartesian unit vector in the 
+        Returns the x, y, and z components of a Cartesian unit vector in the
         polarizaton direction of the nth magnet
         """
-        if len(inds) > 0 and max(inds) > self.nMagnets-1:
-            raise Exception('unit_vector: requested magnet %d does not exist'
-                            % (max(inds)))
+        if len(inds) > 0 and max(inds) > self.nMagnets - 1:
+            raise Exception(
+                "unit_vector: requested magnet %d does not exist" % (max(inds))
+            )
 
-        return np.cos(self.mp[inds])*np.sin(self.mt[inds]), \
-            np.sin(self.mp[inds])*np.sin(self.mt[inds]), \
-            np.cos(self.mt[inds])
+        return (
+            np.cos(self.mp[inds]) * np.sin(self.mt[inds]),
+            np.sin(self.mp[inds]) * np.sin(self.mt[inds]),
+            np.cos(self.mt[inds]),
+        )
 
     def perp_vector(self, inds):
         """
-        Returns the x, y, and z components of a Cartesian unit vector 
+        Returns the x, y, and z components of a Cartesian unit vector
         perpendicular to the polarizaton direction of the nth magnet
         """
-        if len(inds) > 0 and max(inds) > self.nMagnets-1:
-            raise Exception('unit_vector: requested magnet %d does not exist'
-                            % (max(inds)))
+        if len(inds) > 0 and max(inds) > self.nMagnets - 1:
+            raise Exception(
+                "unit_vector: requested magnet %d does not exist" % (max(inds))
+            )
 
         mt_perp = self.mt[inds] + np.pi / 2.0
-        return np.cos(self.mp[inds])*np.sin(mt_perp), \
-            np.sin(self.mp[inds])*np.sin(mt_perp), \
-            np.cos(mt_perp)
+        return (
+            np.cos(self.mp[inds]) * np.sin(mt_perp),
+            np.sin(self.mp[inds]) * np.sin(mt_perp),
+            np.cos(mt_perp),
+        )
 
     def flip_negative_magnets(self):
         """
@@ -306,15 +343,15 @@ class FocusData(object):
               of dipole magnitudes.
         """
         if min(self.pho) < 0:
-            raise RuntimeError('adjust_rho: rho contains negative values')
+            raise RuntimeError("adjust_rho: rho contains negative values")
 
         if self.has_momentq:
-            self.pho = self.pho**(float(self.momentq)/float(q_new))
+            self.pho = self.pho ** (float(self.momentq) / float(q_new))
             self.momentq = q_new
 
         # If no momentq currently specified, assume to be one
         else:
-            self.pho = self.pho**(1./float(q_new))
+            self.pho = self.pho ** (1.0 / float(q_new))
             self.momentq = q_new
             self.has_momentq = True
 
@@ -327,48 +364,72 @@ class FocusData(object):
             filename: string denoting the name of the output file.
         """
         if self.nMagnets < 1:
-            raise RuntimeError('print_to_file: no magnets to print')
+            raise RuntimeError("print_to_file: no magnets to print")
 
-        with open(str(filename), 'w') as focusfile:
-
+        with open(str(filename), "w") as focusfile:
             if self.has_momentq:
-                focusfile.write('Total number of dipoles, momentq\n')
-                focusfile.write('%10d %5g\n' % (self.nMagnets, self.momentq))
+                focusfile.write("Total number of dipoles, momentq\n")
+                focusfile.write("%10d %5g\n" % (self.nMagnets, self.momentq))
             else:
-                focusfile.write('Total number of dipoles\n')
-                focusfile.write('%10d\n' % (self.nMagnets))
+                focusfile.write("Total number of dipoles\n")
+                focusfile.write("%10d\n" % (self.nMagnets))
 
             # String format specifiers: float length, decimal precision, name length
-            lf = '%s' % (self.max_float_length)
-            nd = '%s' % (self.max_float_length - 7)
-            ln = '%s' % (self.max_name_length)
+            lf = "%s" % (self.max_float_length)
+            nd = "%s" % (self.max_float_length - 7)
+            ln = "%s" % (self.max_name_length)
 
             # Write the header line for the individual magnet data
-            focusfile.write(('%s, ' * 2 + '%' + ln + 's, ' + ('%' + lf + 's, ') * 3 +
-                             '%s, ' + ('%' + lf + 's, ') * 2 + '%s, ' +
-                             ('%' + lf + 's, ') * 2) %
-                            tuple(FocusData.propNames[:12]))
+            focusfile.write(
+                (
+                    "%s, " * 2
+                    + "%"
+                    + ln
+                    + "s, "
+                    + ("%" + lf + "s, ") * 3
+                    + "%s, "
+                    + ("%" + lf + "s, ") * 2
+                    + "%s, "
+                    + ("%" + lf + "s, ") * 2
+                )
+                % tuple(FocusData.propNames[:12])
+            )
             if self.has_op:
-                focusfile.write(('%' + lf + 's, \n') % (FocusData.propNames[12]))
+                focusfile.write(("%" + lf + "s, \n") % (FocusData.propNames[12]))
             else:
-                focusfile.write('\n')
+                focusfile.write("\n")
 
             # Write the data for each magnet to the file
             for i in range(self.nMagnets):
-
-                lineStr = ('%4d, ' * 2 + '%' + ln + 's, ' +
-                           ('%' + lf + '.' + nd + 'E, ') * 3 + '%2d, ' +
-                           ('%' + lf + '.' + nd + 'E, ') * 2 + '%2d, ' +
-                           ('%' + lf + '.' + nd + 'E, ') * 2) %  \
-                    (self.magtype[i], self.symm[i], self.coilname[i],
-                     self.ox[i], self.oy[i], self.oz[i], self.Ic[i],
-                     self.M_0[i], self.pho[i], self.Lc[i],
-                     self.mp[i], self.mt[i])
+                lineStr = (
+                    "%4d, " * 2
+                    + "%"
+                    + ln
+                    + "s, "
+                    + ("%" + lf + "." + nd + "E, ") * 3
+                    + "%2d, "
+                    + ("%" + lf + "." + nd + "E, ") * 2
+                    + "%2d, "
+                    + ("%" + lf + "." + nd + "E, ") * 2
+                ) % (
+                    self.magtype[i],
+                    self.symm[i],
+                    self.coilname[i],
+                    self.ox[i],
+                    self.oy[i],
+                    self.oz[i],
+                    self.Ic[i],
+                    self.M_0[i],
+                    self.pho[i],
+                    self.Lc[i],
+                    self.mp[i],
+                    self.mt[i],
+                )
 
                 if self.has_op:
-                    lineStr = lineStr + ('%' + lf + '.' + nd + 'E, \n') % self.op[i]
+                    lineStr = lineStr + ("%" + lf + "." + nd + "E, \n") % self.op[i]
                 else:
-                    lineStr = lineStr + '\n'
+                    lineStr = lineStr + "\n"
 
                 focusfile.write(lineStr)
 
@@ -394,11 +455,11 @@ class FocusData(object):
         self.cyl_z = np.zeros(self.nMagnets)
 
     def repeat_hp_to_fp(self, nfp, magnet_sector=1):
-        '''
+        """
         Duplicates the magnets to the adjacent half-period, implementing the
         appropriate transformations to uphold stellarator symmetry.
 
-        NOTES: 
+        NOTES:
             - At the present time, duplicate magnets will have the same pol_id
               as their corresponding originals
             - At the present time, duplicate magnets will have the same name
@@ -409,31 +470,31 @@ class FocusData(object):
             nfp: integer
                 Number of field periods in the configuration
             magnet_sector: integer (optional)
-                Sector (half-period) of the torus in which the magnets are 
+                Sector (half-period) of the torus in which the magnets are
                 assumed to be located. Must be between 1 and 2*nfp, inclusive.
                 Sector 1 starts at toroidal angle 0.
-        '''
+        """
         symm_inds = np.where(self.symm == 2)[0]
         n_symm = len(symm_inds)
         if n_symm == 0:
-            raise ValueError('repeat_hp_to_fp is only valid for magnets '
-                             'that are stellarator symmetric (symm=2)')
+            raise ValueError(
+                "repeat_hp_to_fp is only valid for magnets "
+                "that are stellarator symmetric (symm=2)"
+            )
 
         # Toroidal angle of the symmetry plane between the adjacent half-periods
-        if magnet_sector > 2*nfp or magnet_sector < 1:
-            raise ValueError('magnet_sector must be positive and less than '
-                             '2*nfp')
-        phi = magnet_sector * np.pi/nfp
+        if magnet_sector > 2 * nfp or magnet_sector < 1:
+            raise ValueError("magnet_sector must be positive and less than 2*nfp")
+        phi = magnet_sector * np.pi / nfp
 
         nx, ny, nz = self.unit_vector(symm_inds)
 
         # Reflect polarization vector origins and directions
-        nx2, ny2, nz2 = stell_vector_transform('reflect', phi, nx, ny, nz)
-        ox2, oy2, oz2 = \
-            stell_point_transform('reflect', phi, self.ox, self.oy, self.oz)
+        nx2, ny2, nz2 = stell_vector_transform("reflect", phi, nx, ny, nz)
+        ox2, oy2, oz2 = stell_point_transform("reflect", phi, self.ox, self.oy, self.oz)
         mp2 = np.arctan2(ny2, nx2)
         mt2 = np.arctan2(np.sqrt(nx2**2 + ny2**2), nz2)
-        op2 = 2*phi - self.op[symm_inds]
+        op2 = 2 * phi - self.op[symm_inds]
 
         # Update the number of magnets
         self.nMagnets = self.nMagnets + n_symm
@@ -458,10 +519,13 @@ class FocusData(object):
 
         # Update discrete polarization properties if they exist
         if self.nPol > 0:
-            pol_x2, pol_y2, pol_z2 = \
-                stell_vector_transform('reflect', phi,
-                                       self.pol_x[symm_inds, :], self.pol_y[symm_inds, :],
-                                       self.pol_z[symm_inds, :])
+            pol_x2, pol_y2, pol_z2 = stell_vector_transform(
+                "reflect",
+                phi,
+                self.pol_x[symm_inds, :],
+                self.pol_y[symm_inds, :],
+                self.pol_z[symm_inds, :],
+            )
             pol_type2 = self.pol_type[symm_inds]
             pol_id2 = self.pol_id[symm_inds]
             cyl_r2 = -self.cyl_r[symm_inds]
@@ -479,18 +543,18 @@ class FocusData(object):
 
 
 def stell_vector_transform(mode, phi, vx_in, vy_in, vz_in):
-    '''
+    """
     Transforms a vector in one of two ways, depending on the mode selected:
-        reflect:   Reflects a vector, with a defined origin point, in a given 
+        reflect:   Reflects a vector, with a defined origin point, in a given
                    poloidal plane that is presumed to form the boundary between
-                   two stellarator-symmetryc half-periods. The output vector 
-                   will have the equivalent origin point and direction 
+                   two stellarator-symmetryc half-periods. The output vector
+                   will have the equivalent origin point and direction
                    associated with the target half-period. Vector magnitude
                    is preserved.
-        translate: Translates a vector, with a defined origin point, in the 
+        translate: Translates a vector, with a defined origin point, in the
                    toroidal direction. The origin thus moves along a circle
                    of fixed radius about the z axis by a given angle. The
-                   azimuthal components of the vector change in order to 
+                   azimuthal components of the vector change in order to
                    preserve the radial and toroidal components. The vertical
                    component of the vector, as well as its length, are held
                    fixed.
@@ -507,37 +571,37 @@ def stell_vector_transform(mode, phi, vx_in, vy_in, vz_in):
 
     Returns
     -------
-        vx_out, vy_out, vz_out: 
+        vx_out, vy_out, vz_out:
             x, y, z components of the output transformed vector(s)
-    '''
+    """
 
     # Check input mode
-    if mode == 'reflect':
+    if mode == "reflect":
         refl = True
-    elif mode == 'translate':
+    elif mode == "translate":
         refl = False
     else:
-        raise ValueError('Unrecognized mode for stell_vector_transform')
+        raise ValueError("Unrecognized mode for stell_vector_transform")
 
     if refl:
-        vx_out = -np.cos(2*phi)*vx_in - np.sin(2*phi)*vy_in
-        vy_out = -np.sin(2*phi)*vx_in + np.cos(2*phi)*vy_in
+        vx_out = -np.cos(2 * phi) * vx_in - np.sin(2 * phi) * vy_in
+        vy_out = -np.sin(2 * phi) * vx_in + np.cos(2 * phi) * vy_in
         vz_out = vz_in
     else:
-        vx_out = np.cos(phi)*vx_in - np.sin(phi)*vy_in
-        vy_out = np.sin(phi)*vx_in + np.cos(phi)*vy_in
+        vx_out = np.cos(phi) * vx_in - np.sin(phi) * vy_in
+        vy_out = np.sin(phi) * vx_in + np.cos(phi) * vy_in
         vz_out = vz_in
 
     return vx_out, vy_out, vz_out
 
 
 def stell_point_transform(mode, phi, x_in, y_in, z_in):
-    '''
+    """
     Transforms a point in one of two ways, depending on the mode selected:
-        reflect:   Reflects a point in a given poloidal plane presumed to form 
-                   the boundary between two stellarator-symmetryc half-periods. 
+        reflect:   Reflects a point in a given poloidal plane presumed to form
+                   the boundary between two stellarator-symmetryc half-periods.
                    The output point will have the equivalent location associated
-                   with the adjacent half-period. 
+                   with the adjacent half-period.
         translate: Translates a point in the toroidal direction (i.e., along
                    a circle with a fixed radius about the z axis) by a given
                    angle.
@@ -556,23 +620,23 @@ def stell_point_transform(mode, phi, x_in, y_in, z_in):
     -------
         x_out, y_out, z_out: double (possibly arrays)
             x, y, z coordinates of the transformed point(s)
-    '''
+    """
 
     # Check input mode
-    if mode == 'reflect':
+    if mode == "reflect":
         refl = True
-    elif mode == 'translate':
+    elif mode == "translate":
         refl = False
     else:
-        raise ValueError('Unrecognized mode for stell_vector_transform')
+        raise ValueError("Unrecognized mode for stell_vector_transform")
 
     if refl:
-        x_out = np.cos(2*phi)*x_in + np.sin(2*phi)*y_in
-        y_out = np.sin(2*phi)*x_in - np.cos(2*phi)*y_in
+        x_out = np.cos(2 * phi) * x_in + np.sin(2 * phi) * y_in
+        y_out = np.sin(2 * phi) * x_in - np.cos(2 * phi) * y_in
         z_out = -z_in
     else:
-        x_out = np.cos(phi)*x_in - np.sin(phi)*y_in
-        y_out = np.sin(phi)*x_in + np.cos(phi)*y_in
+        x_out = np.cos(phi) * x_in - np.sin(phi) * y_in
+        y_out = np.sin(phi) * x_in + np.cos(phi) * y_in
         z_out = z_in
 
     return x_out, y_out, z_out

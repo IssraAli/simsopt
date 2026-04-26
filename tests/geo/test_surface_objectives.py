@@ -1,13 +1,22 @@
 import unittest
 import numpy as np
 from simsopt.field.biotsavart import BiotSavart
-from simsopt.geo.surfaceobjectives import ToroidalFlux, QfmResidual, parameter_derivatives, Volume, PrincipalCurvature, MajorRadius, Iotas, NonQuasiSymmetricRatio, BoozerResidual
+from simsopt.geo.surfaceobjectives import (
+    ToroidalFlux,
+    QfmResidual,
+    parameter_derivatives,
+    Volume,
+    PrincipalCurvature,
+    MajorRadius,
+    Iotas,
+    NonQuasiSymmetricRatio,
+    BoozerResidual,
+)
 from simsopt.configs.zoo import get_data
 from .surface_test_helpers import get_surface, get_exact_surface, get_boozer_surface
 
 
-surfacetypes_list = ["SurfaceXYZFourier", "SurfaceRZFourier",
-                     "SurfaceXYZTensorFourier"]
+surfacetypes_list = ["SurfaceXYZFourier", "SurfaceRZFourier", "SurfaceXYZTensorFourier"]
 stellsym_list = [True, False]
 
 
@@ -15,21 +24,24 @@ def taylor_test1(f, df, x, epsilons=None, direction=None, atol=1e-9):
     np.random.seed(1)
     f(x)
     if direction is None:
-        direction = np.random.rand(*(x.shape))-0.5
-    dfx = df(x)@direction
+        direction = np.random.rand(*(x.shape)) - 0.5
+    dfx = df(x) @ direction
     if epsilons is None:
-        epsilons = np.power(2., -np.asarray(range(10, 20)))
+        epsilons = np.power(2.0, -np.asarray(range(10, 20)))
     print("###################################################################")
     err_old = 1e9
     for eps in epsilons:
         fpluseps = f(x + eps * direction)
         fminuseps = f(x - eps * direction)
-        dfest = (fpluseps-fminuseps)/(2*eps)
+        dfest = (fpluseps - fminuseps) / (2 * eps)
         err = np.linalg.norm(dfest - dfx)
-        print("taylor test1: ", err, err/err_old)
-        np.testing.assert_array_less(err, max(atol, 0.35 * err_old),
-                                     err_msg=f"Taylor test failed: err={err:.2e}, threshold={max(atol, 0.35 * err_old):.2e}, "
-                                             f"err_old={err_old:.2e}, ratio={err/err_old:.4f}")
+        print("taylor test1: ", err, err / err_old)
+        np.testing.assert_array_less(
+            err,
+            max(atol, 0.35 * err_old),
+            err_msg=f"Taylor test failed: err={err:.2e}, threshold={max(atol, 0.35 * err_old):.2e}, "
+            f"err_old={err_old:.2e}, ratio={err / err_old:.4f}",
+        )
         err_old = err
     print("###################################################################")
 
@@ -37,22 +49,22 @@ def taylor_test1(f, df, x, epsilons=None, direction=None, atol=1e-9):
 def taylor_test2(f, df, d2f, x, epsilons=None, direction1=None, direction2=None):
     np.random.seed(1)
     if direction1 is None:
-        direction1 = np.random.rand(*(x.shape))-0.5
+        direction1 = np.random.rand(*(x.shape)) - 0.5
     if direction2 is None:
-        direction2 = np.random.rand(*(x.shape))-0.5
+        direction2 = np.random.rand(*(x.shape)) - 0.5
 
     f(x)
     df0 = df(x) @ direction1
     d2fval = direction2.T @ d2f(x) @ direction1
     if epsilons is None:
-        epsilons = np.power(2., -np.asarray(range(7, 20)))
+        epsilons = np.power(2.0, -np.asarray(range(7, 20)))
     print("###################################################################")
     err_old = 1e9
     for eps in epsilons:
         fpluseps = df(x + eps * direction2) @ direction1
-        d2fest = (fpluseps-df0)/eps
+        d2fest = (fpluseps - df0) / eps
         err = np.abs(d2fest - d2fval)
-        print('taylor test2: ', err, err/err_old)
+        print("taylor test2: ", err, err / err_old)
         assert err < 0.6 * err_old
         err_old = err
     print("###################################################################")
@@ -65,7 +77,7 @@ class ToroidalFluxTests(unittest.TestCase):
         of the cross section (varphi = constant) across which it is computed
         """
         s = get_exact_surface()
-        base_curves, base_currents, ma, nfp, bs= get_data("ncsx")
+        base_curves, base_currents, ma, nfp, bs = get_data("ncsx")
         bs_tf = BiotSavart(bs.coils)
 
         gamma = s.gamma()
@@ -125,6 +137,7 @@ class ToroidalFluxTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return tf.dJ_by_dsurfacecoefficients()
+
         taylor_test1(f, df, coeffs)
 
     def subtest_toroidal_flux2(self, surfacetype, stellsym):
@@ -163,6 +176,7 @@ class ToroidalFluxTests(unittest.TestCase):
         def df(dofs):
             bs_tf.x = dofs
             return tf.dJ_by_dcoils()(bs_tf)
+
         taylor_test1(f, df, coeffs)
 
 
@@ -179,7 +193,7 @@ class PrincipalCurvatureTests(unittest.TestCase):
     def subtest_principal_curvature(self, surfacetype, stellsym):
         s = get_surface(surfacetype, stellsym)
 
-        pc = PrincipalCurvature(s, kappamax1=1, kappamax2=2.2, weight1=1, weight2=2.)
+        pc = PrincipalCurvature(s, kappamax1=1, kappamax2=2.2, weight1=1, weight2=2.0)
         coeffs = s.x
 
         def f(dofs):
@@ -190,7 +204,7 @@ class PrincipalCurvatureTests(unittest.TestCase):
             s.x = dofs
             return pc.dJ()
 
-        taylor_test1(f, df, coeffs, epsilons=np.power(2., -np.asarray(range(13, 22))))
+        taylor_test1(f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 22))))
 
 
 class ParameterDerivativesTest(unittest.TestCase):
@@ -206,8 +220,10 @@ class ParameterDerivativesTest(unittest.TestCase):
 
     def subtest_volume(self, surfacetype, stellsym):
         from simsopt.geo import Surface
-        s = get_surface(surfacetype, stellsym, mpol=7, ntor=6,
-                        ntheta=32, nphi=31, full=True)
+
+        s = get_surface(
+            surfacetype, stellsym, mpol=7, ntor=6, ntheta=32, nphi=31, full=True
+        )
         dofs = s.get_dofs()
         vol = Volume(s, range=Surface.RANGE_FIELD_PERIOD)
         dvol_sg = parameter_derivatives(s, np.ones_like(s.gamma()[:, :, 0]))
@@ -239,8 +255,8 @@ class QfmTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return qfm.dJ_by_dsurfacecoefficients()
-        taylor_test1(f, df, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 22))))
+
+        taylor_test1(f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 22))))
 
 
 class MajorRadiusTests(unittest.TestCase):
@@ -248,21 +264,34 @@ class MajorRadiusTests(unittest.TestCase):
         """
         Taylor test for derivative of surface major radius wrt coil parameters
         """
-        for boozer_type in ['exact', 'ls']:
+        for boozer_type in ["exact", "ls"]:
             for label in ["Volume", "ToroidalFlux"]:
                 for optimize_G in [True, False]:
                     for weight_inv_modB in [True, False]:
-                        with self.subTest(label=label, boozer_type=boozer_type, optimize_G=optimize_G):
-                            if boozer_type == 'ls' and label == 'ToroidalFlux':
+                        with self.subTest(
+                            label=label, boozer_type=boozer_type, optimize_G=optimize_G
+                        ):
+                            if boozer_type == "ls" and label == "ToroidalFlux":
                                 continue
-                            if boozer_type == 'exact' and optimize_G is False:
+                            if boozer_type == "exact" and optimize_G is False:
                                 continue
-                            if boozer_type == 'exact' and weight_inv_modB:
+                            if boozer_type == "exact" and weight_inv_modB:
                                 continue
-                            self.subtest_major_radius_surface_derivative(label, boozer_type, optimize_G, weight_inv_modB)
+                            self.subtest_major_radius_surface_derivative(
+                                label, boozer_type, optimize_G, weight_inv_modB
+                            )
 
-    def subtest_major_radius_surface_derivative(self, label, boozer_type, optimize_G, weight_inv_modB):
-        bs, boozer_surface = get_boozer_surface(label=label, nphi=51, ntheta=51, boozer_type=boozer_type, optimize_G=optimize_G, weight_inv_modB=weight_inv_modB)
+    def subtest_major_radius_surface_derivative(
+        self, label, boozer_type, optimize_G, weight_inv_modB
+    ):
+        bs, boozer_surface = get_boozer_surface(
+            label=label,
+            nphi=51,
+            ntheta=51,
+            boozer_type=boozer_type,
+            optimize_G=optimize_G,
+            weight_inv_modB=weight_inv_modB,
+        )
         coeffs = bs.x
         mr = MajorRadius(boozer_surface)
 
@@ -273,8 +302,8 @@ class MajorRadiusTests(unittest.TestCase):
         def df(dofs):
             bs.x = dofs
             return mr.dJ()
-        taylor_test1(f, df, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 18))))
+
+        taylor_test1(f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 18))))
 
 
 class IotasTests(unittest.TestCase):
@@ -283,18 +312,25 @@ class IotasTests(unittest.TestCase):
         Taylor test for derivative of surface rotational transform wrt coil parameters
         """
 
-        for boozer_type in ['exact', 'ls']:
+        for boozer_type in ["exact", "ls"]:
             for label in ["Volume", "ToroidalFlux"]:
                 for optimize_G in [True, False]:
                     for weight_inv_modB in [True, False]:
-                        if boozer_type == 'ls' and label == 'ToroidalFlux':
+                        if boozer_type == "ls" and label == "ToroidalFlux":
                             continue
-                        if boozer_type == 'exact' and optimize_G is False:
+                        if boozer_type == "exact" and optimize_G is False:
                             continue
-                        if boozer_type == 'exact' and weight_inv_modB:
+                        if boozer_type == "exact" and weight_inv_modB:
                             continue
-                        with self.subTest(label=label, boozer_type=boozer_type, optimize_G=optimize_G, weight_inv_modB=weight_inv_modB):
-                            self.subtest_iotas_derivative(label, boozer_type, optimize_G, weight_inv_modB)
+                        with self.subTest(
+                            label=label,
+                            boozer_type=boozer_type,
+                            optimize_G=optimize_G,
+                            weight_inv_modB=weight_inv_modB,
+                        ):
+                            self.subtest_iotas_derivative(
+                                label, boozer_type, optimize_G, weight_inv_modB
+                            )
 
     def subtest_iotas_derivative(self, label, boozer_type, optimize_G, weight_inv_modB):
         """
@@ -302,7 +338,12 @@ class IotasTests(unittest.TestCase):
         """
         np.random.seed(1)  # Fixed seed for reproducibility across platforms
 
-        bs, boozer_surface = get_boozer_surface(label=label, boozer_type=boozer_type, optimize_G=optimize_G, weight_inv_modB=weight_inv_modB)
+        bs, boozer_surface = get_boozer_surface(
+            label=label,
+            boozer_type=boozer_type,
+            optimize_G=optimize_G,
+            weight_inv_modB=weight_inv_modB,
+        )
         coeffs = bs.x
         io = Iotas(boozer_surface)
 
@@ -314,8 +355,9 @@ class IotasTests(unittest.TestCase):
             bs.x = dofs
             return io.dJ()
 
-        taylor_test1(f, df, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 19))), atol=2e-8)
+        taylor_test1(
+            f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 19))), atol=2e-8
+        )
 
 
 class NonQSRatioTests(unittest.TestCase):
@@ -323,26 +365,47 @@ class NonQSRatioTests(unittest.TestCase):
         """
         Taylor test for derivative of surface non QS ratio wrt coil parameters
         """
-        for boozer_type in ['exact', 'ls']:
+        for boozer_type in ["exact", "ls"]:
             for label in ["Volume", "ToroidalFlux"]:
                 for weight_inv_modB in [True, False]:
                     for optimize_G in [True, False]:
                         for fix_coil_dof in [True, False]:
-                            if boozer_type == 'ls' and label == 'ToroidalFlux':
+                            if boozer_type == "ls" and label == "ToroidalFlux":
                                 continue
-                            if boozer_type == 'exact' and optimize_G is False:
+                            if boozer_type == "exact" and optimize_G is False:
                                 continue
-                            if boozer_type == 'exact' and weight_inv_modB:
+                            if boozer_type == "exact" and weight_inv_modB:
                                 continue
                             for axis in [False, True]:
-                                with self.subTest(label=label, axis=axis, boozer_type=boozer_type, optimize_G=optimize_G, weight_inv_modB=weight_inv_modB, fix_coil_dof=fix_coil_dof):
-                                    self.subtest_nonQSratio_derivative(label, axis, boozer_type, optimize_G, weight_inv_modB, fix_coil_dof)
+                                with self.subTest(
+                                    label=label,
+                                    axis=axis,
+                                    boozer_type=boozer_type,
+                                    optimize_G=optimize_G,
+                                    weight_inv_modB=weight_inv_modB,
+                                    fix_coil_dof=fix_coil_dof,
+                                ):
+                                    self.subtest_nonQSratio_derivative(
+                                        label,
+                                        axis,
+                                        boozer_type,
+                                        optimize_G,
+                                        weight_inv_modB,
+                                        fix_coil_dof,
+                                    )
 
-    def subtest_nonQSratio_derivative(self, label, axis, boozer_type, optimize_G, weight_inv_modB, fix_coil_dof):
-        bs, boozer_surface = get_boozer_surface(label=label, boozer_type=boozer_type, optimize_G=optimize_G, weight_inv_modB=weight_inv_modB)
+    def subtest_nonQSratio_derivative(
+        self, label, axis, boozer_type, optimize_G, weight_inv_modB, fix_coil_dof
+    ):
+        bs, boozer_surface = get_boozer_surface(
+            label=label,
+            boozer_type=boozer_type,
+            optimize_G=optimize_G,
+            weight_inv_modB=weight_inv_modB,
+        )
 
         if fix_coil_dof:
-            bs.coils[0].curve.fix('xc(0)')
+            bs.coils[0].curve.fix("xc(0)")
 
         coeffs = bs.x
         io = NonQuasiSymmetricRatio(boozer_surface, bs, quasi_poloidal=axis)
@@ -355,8 +418,7 @@ class NonQSRatioTests(unittest.TestCase):
             bs.x = dofs
             return io.dJ()
 
-        taylor_test1(f, df, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 19))))
+        taylor_test1(f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 19))))
 
 
 class BoozerResidualTests(unittest.TestCase):
@@ -367,11 +429,22 @@ class BoozerResidualTests(unittest.TestCase):
         for label in ["Volume"]:
             for optimize_G in [True, False]:
                 for weight_inv_modB in [True, False]:
-                    with self.subTest(label=label, optimize_G=optimize_G, weight_inv_modB=weight_inv_modB):
-                        self.subtest_boozerresidual_derivative(label, optimize_G, weight_inv_modB)
+                    with self.subTest(
+                        label=label,
+                        optimize_G=optimize_G,
+                        weight_inv_modB=weight_inv_modB,
+                    ):
+                        self.subtest_boozerresidual_derivative(
+                            label, optimize_G, weight_inv_modB
+                        )
 
     def subtest_boozerresidual_derivative(self, label, optimize_G, weight_inv_modB):
-        bs, boozer_surface = get_boozer_surface(label=label, boozer_type='ls', optimize_G=optimize_G, weight_inv_modB=weight_inv_modB)
+        bs, boozer_surface = get_boozer_surface(
+            label=label,
+            boozer_type="ls",
+            optimize_G=optimize_G,
+            weight_inv_modB=weight_inv_modB,
+        )
         coeffs = bs.x
         br = BoozerResidual(boozer_surface, bs)
 
@@ -383,8 +456,7 @@ class BoozerResidualTests(unittest.TestCase):
             bs.x = dofs
             return br.dJ()
 
-        taylor_test1(f, df, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 19))))
+        taylor_test1(f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 19))))
 
 
 class LabelTests(unittest.TestCase):
@@ -392,13 +464,23 @@ class LabelTests(unittest.TestCase):
         for label in ["Volume", "ToroidalFlux", "Area", "AspectRatio"]:
             for stellsym in stellsym_list:
                 for nphi, ntheta in [(13, 14), (None, None), (13, None), (None, 14)]:
-                    with self.subTest(label=label, stellsym=stellsym, converge=stellsym):
+                    with self.subTest(
+                        label=label, stellsym=stellsym, converge=stellsym
+                    ):
                         # don't converge the BoozerSurface when stellsym=False because it takes a long time
                         # for a unit test
-                        self.subtest_label_derivative1(label, stellsym=stellsym, converge=stellsym, nphi=nphi, ntheta=ntheta)
+                        self.subtest_label_derivative1(
+                            label,
+                            stellsym=stellsym,
+                            converge=stellsym,
+                            nphi=nphi,
+                            ntheta=ntheta,
+                        )
 
     def subtest_label_derivative1(self, label, stellsym, converge, nphi, ntheta):
-        bs, boozer_surface = get_boozer_surface(label=label, nphi=nphi, ntheta=ntheta, converge=converge, stellsym=stellsym)
+        bs, boozer_surface = get_boozer_surface(
+            label=label, nphi=nphi, ntheta=ntheta, converge=converge, stellsym=stellsym
+        )
         surface = boozer_surface.surface
         label = boozer_surface.label
         coeffs = surface.x
@@ -411,8 +493,7 @@ class LabelTests(unittest.TestCase):
             surface.x = dofs
             return label.dJ(partials=True)(surface)
 
-        taylor_test1(f, df, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(12, 18))))
+        taylor_test1(f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(12, 18))))
 
     def test_label_surface_derivative2(self):
         for label in ["Volume", "ToroidalFlux", "Area", "AspectRatio"]:
@@ -437,5 +518,6 @@ class LabelTests(unittest.TestCase):
             surface.x = dofs
             return label.d2J_by_dsurfacecoefficientsdsurfacecoefficients()
 
-        taylor_test2(f, df, d2f, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 19))))
+        taylor_test2(
+            f, df, d2f, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 19)))
+        )

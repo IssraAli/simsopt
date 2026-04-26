@@ -5,6 +5,7 @@ import logging
 import numpy as np
 from monty.tempfile import ScratchDir
 from scipy.io import netcdf_file
+
 try:
     import booz_xform
 except ImportError:
@@ -21,16 +22,17 @@ except ImportError:
     MPI = None
 
 from simsopt._core.optimizable import Optimizable
+
 if MPI is not None:
     from simsopt.mhd.boozer import Boozer, Quasisymmetry  # , booz_xform_found
     from simsopt.mhd.vmec import Vmec  # , vmec_found
 from . import TEST_DIR
 
 logger = logging.getLogger(__name__)
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 
-class MockBoozXform():
+class MockBoozXform:
     """
     This class exists only for testing the Quasisymmetry class.  It
     returns similar data to the real Booz_xform class, but without doing a
@@ -41,11 +43,11 @@ class MockBoozXform():
         mnmax = (ntor * 2 + 1) * mpol + ntor + 1
         xm = np.zeros(mnmax)
         xn = np.zeros(mnmax)
-        xn[:ntor + 1] = np.arange(ntor + 1)
+        xn[: ntor + 1] = np.arange(ntor + 1)
         for m in range(1, mpol + 1):
             index = ntor + 1 + (ntor * 2 + 1) * (m - 1)
-            xm[index: index + (ntor * 2 + 1)] = m
-            xn[index: index + (ntor * 2 + 1)] = np.arange(-ntor, ntor + 1)
+            xm[index : index + (ntor * 2 + 1)] = m
+            xn[index : index + (ntor * 2 + 1)] = np.arange(-ntor, ntor + 1)
         self.xm_b = xm
         self.xn_b = xn * nfp
         self.mnmax_b = mnmax
@@ -54,7 +56,7 @@ class MockBoozXform():
         arr2 = arr1 + 1
         arr2[0] = 100
         self.bmnc_b = np.stack((arr1, arr2)).transpose()
-        print('bmnc_b:')
+        print("bmnc_b:")
         print(self.bmnc_b)
         # print('booz_xform_found:', booz_xform_found)
 
@@ -94,27 +96,84 @@ class QuasisymmetryTests(unittest.TestCase):
         # QA
         s = 0
         q = Quasisymmetry(b, s, 1, 0, "B00", "even")
-        np.testing.assert_allclose(q.J(), [2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 17, 18])
+        np.testing.assert_allclose(
+            q.J(), [2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 17, 18]
+        )
         s = 1
         q = Quasisymmetry(b, s, 1, 0, "B00", "even")
-        np.testing.assert_allclose(q.J(), [.21, .31, .41, .51, .71, .81, .91, 1.01, 1.21, 1.31, 1.41, 1.51, 1.71, 1.81])
+        np.testing.assert_allclose(
+            q.J(),
+            [
+                0.21,
+                0.31,
+                0.41,
+                0.51,
+                0.71,
+                0.81,
+                0.91,
+                1.01,
+                1.21,
+                1.31,
+                1.41,
+                1.51,
+                1.71,
+                1.81,
+            ],
+        )
         s = (0, 1)
         q = Quasisymmetry(b, s, 1, 0, "B00", "even")
-        np.testing.assert_allclose(q.J(), [2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 17, 18,
-                                           .21, .31, .41, .51, .71, .81, .91, 1.01, 1.21, 1.31, 1.41, 1.51, 1.71, 1.81])
+        np.testing.assert_allclose(
+            q.J(),
+            [
+                2,
+                3,
+                4,
+                5,
+                7,
+                8,
+                9,
+                10,
+                12,
+                13,
+                14,
+                15,
+                17,
+                18,
+                0.21,
+                0.31,
+                0.41,
+                0.51,
+                0.71,
+                0.81,
+                0.91,
+                1.01,
+                1.21,
+                1.31,
+                1.41,
+                1.51,
+                1.71,
+                1.81,
+            ],
+        )
 
         # QP
         s = 0
         q = Quasisymmetry(b, s, 0, 1, "B00", "even")
-        np.testing.assert_allclose(q.J(), [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
+        np.testing.assert_allclose(
+            q.J(), [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        )
 
         # QH
         q = Quasisymmetry(b, s, 1, 1, "B00", "even")
-        np.testing.assert_allclose(q.J(), [2, 3, 4, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18])
+        np.testing.assert_allclose(
+            q.J(), [2, 3, 4, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+        )
 
         # QH, opposite "chirality"
         q = Quasisymmetry(b, s, 1, -1, "B00", "even")
-        np.testing.assert_allclose(q.J(), [2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18])
+        np.testing.assert_allclose(
+            q.J(), [2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18]
+        )
 
     @unittest.skipIf(booz_xform is None, "booz_xform python package not found")
     def test_boozer_register(self):
@@ -136,8 +195,10 @@ class QuasisymmetryTests(unittest.TestCase):
         Quasisymmetry(b1, {0.2, 0.3}, 1, 0)
         self.assertEqual(b1.s, {0.1, 0.2, 0.3, 0.5, 0.75})
 
-    @unittest.skipIf((booz_xform is None) or (vmec is None),
-                     "vmec or booz_xform python package not found")
+    @unittest.skipIf(
+        (booz_xform is None) or (vmec is None),
+        "vmec or booz_xform python package not found",
+    )
     def test_boozer_circular_tokamak(self):
         with ScratchDir("."):
             v = Vmec(os.path.join(TEST_DIR, "input.circular_tokamak"))
@@ -180,8 +241,9 @@ class QuasisymmetryTests(unittest.TestCase):
             # All modes except m=0 should contribute to the residuals:
             residuals3a = bmnc[1:, 0] / bmnc[0, 0]
             residuals3b = bmnc[1:, 1] / bmnc[0, 1]
-            np.testing.assert_allclose(np.concatenate((residuals3a, residuals3b)),
-                                       residuals3)
+            np.testing.assert_allclose(
+                np.concatenate((residuals3a, residuals3b)), residuals3
+            )
 
             # Register a target on a surface very close to a previously
             # registered surface:
@@ -193,18 +255,21 @@ class QuasisymmetryTests(unittest.TestCase):
             self.assertEqual(b.s_to_index, {0.5: 0, 1.0: 1, s: 1})
 
             # Compare to reference boozmn*.nc file
-            f = netcdf_file(os.path.join(TEST_DIR, "boozmn_circular_tokamak.nc"),
-                            mmap=False)
+            f = netcdf_file(
+                os.path.join(TEST_DIR, "boozmn_circular_tokamak.nc"), mmap=False
+            )
             bmnc_ref = f.variables["bmnc_b"][()].transpose()
             atol = 1e-12
             rtol = 1e-12
-            np.testing.assert_allclose(bmnc[:, 0], bmnc_ref[:, 7],
-                                       atol=atol, rtol=rtol)
-            np.testing.assert_allclose(bmnc[:, 1], bmnc_ref[:, 15],
-                                       atol=atol, rtol=rtol)
+            np.testing.assert_allclose(bmnc[:, 0], bmnc_ref[:, 7], atol=atol, rtol=rtol)
+            np.testing.assert_allclose(
+                bmnc[:, 1], bmnc_ref[:, 15], atol=atol, rtol=rtol
+            )
 
-    @unittest.skipIf((booz_xform is None) or (vmec is None),
-                     "vmec or booz_xform python package not found")
+    @unittest.skipIf(
+        (booz_xform is None) or (vmec is None),
+        "vmec or booz_xform python package not found",
+    )
     def test_boozer_li383(self):
         v = Vmec(os.path.join(TEST_DIR, "wout_li383_low_res_reference.nc"))
         b = Boozer(v, mpol=32, ntor=16)
@@ -215,19 +280,18 @@ class QuasisymmetryTests(unittest.TestCase):
 
         # Compare to a reference boozmn*.nc file created by standalone
         # booz_xform:
-        f = netcdf_file(os.path.join(TEST_DIR, "boozmn_li383_low_res.nc"),
-                        mmap=False)
+        f = netcdf_file(os.path.join(TEST_DIR, "boozmn_li383_low_res.nc"), mmap=False)
         bmnc_ref = f.variables["bmnc_b"][()].transpose()
         f.close()
         atol = 1e-12
         rtol = 1e-12
-        np.testing.assert_allclose(bmnc[:, 0], bmnc_ref[:, 0],
-                                   atol=atol, rtol=rtol)
-        np.testing.assert_allclose(bmnc[:, 1], bmnc_ref[:, -1],
-                                   atol=atol, rtol=rtol)
+        np.testing.assert_allclose(bmnc[:, 0], bmnc_ref[:, 0], atol=atol, rtol=rtol)
+        np.testing.assert_allclose(bmnc[:, 1], bmnc_ref[:, -1], atol=atol, rtol=rtol)
 
-    @unittest.skipIf((booz_xform is None) or (vmec is None),
-                     "vmec or booz_xform python package not found")
+    @unittest.skipIf(
+        (booz_xform is None) or (vmec is None),
+        "vmec or booz_xform python package not found",
+    )
     def test_boozer_basic_non_stellsym(self):
         """Check that we are close to precalculated quasisymmetry errors.
         For a stellarator assymmetric configuration with less-used normalization flags to increase code coverage.
@@ -240,17 +304,40 @@ class QuasisymmetryTests(unittest.TestCase):
             b = Boozer(v, mpol=32, ntor=16)
             # code coverage for the case where we register a float and not something iterable.
             b.register(0.5)
-            J = Quasisymmetry(b, s=0.5, helicity_m=1, helicity_n=0,
-                              normalization="symmetric", weight="stellopt").J()
+            J = Quasisymmetry(
+                b,
+                s=0.5,
+                helicity_m=1,
+                helicity_n=0,
+                normalization="symmetric",
+                weight="stellopt",
+            ).J()
 
             np.testing.assert_allclose(
-                J[0], -3.2704931879062826, err_msg='Weight "stellopt" for normalization "symmetric" does not match precalculated value for a non-stellarator symmetric configuration.')
-            J = Quasisymmetry(b, s=0.5, helicity_m=1, helicity_n=0,
-                              normalization="B00", weight="stellopt_ornl").J()
+                J[0],
+                -3.2704931879062826,
+                err_msg='Weight "stellopt" for normalization "symmetric" does not match precalculated value for a non-stellarator symmetric configuration.',
+            )
+            J = Quasisymmetry(
+                b,
+                s=0.5,
+                helicity_m=1,
+                helicity_n=0,
+                normalization="B00",
+                weight="stellopt_ornl",
+            ).J()
             np.testing.assert_allclose(
-                J[0], 0.8089189591823078, err_msg='Weight "stellopt_ornl" does not match precalculated value.')
+                J[0],
+                0.8089189591823078,
+                err_msg='Weight "stellopt_ornl" does not match precalculated value.',
+            )
             surfs = b.bx.compute_surfs
-            self.assertEqual(surfs[0], 49, msg='Surface index is not the expected value. Wrong surface is being used in the calculation.')
+            self.assertEqual(
+                surfs[0],
+                49,
+                msg="Surface index is not the expected value. Wrong surface is being used in the calculation.",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

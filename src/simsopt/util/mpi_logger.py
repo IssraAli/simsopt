@@ -61,8 +61,9 @@ def _destroy_log_comm():
 _log_comm_list = []
 
 
-@SimsoptRequires(MPI is not None,
-                 "mpi4py is needed by MPILogHandler, but not installed")
+@SimsoptRequires(
+    MPI is not None, "mpi4py is needed by MPILogHandler, but not installed"
+)
 class MPILogHandler(logging.Handler):
     """A Handler which logs messages over MPI to a single process
     which then write them to a file.
@@ -96,7 +97,9 @@ class MPILogHandler(logging.Handler):
         self._comm = MPI.COMM_WORLD if comm is None else comm
 
         # Spawn new process for logging
-        self._log_comm = self._comm.Spawn(sys.executable, args=[__file__, self._logfile])
+        self._log_comm = self._comm.Spawn(
+            sys.executable, args=[__file__, self._logfile]
+        )
 
         # Add the communicator to the list of ones to keep track of.
         _log_comm_list.append(self._log_comm)
@@ -121,7 +124,6 @@ class MPILogHandler(logging.Handler):
         """
 
         try:
-
             record.rank = self._comm.rank
             record.size = self._comm.size
 
@@ -131,7 +133,7 @@ class MPILogHandler(logging.Handler):
             if len(msg) > _message_maxlen:
                 msg = msg[:_message_maxlen]
 
-            msg_buf = array.array('b', msg.encode())
+            msg_buf = array.array("b", msg.encode())
 
             # Send message to the logging process
             self._request = self._log_comm.Issend([msg_buf, MPI.CHAR], dest=0, tag=0)
@@ -144,8 +146,7 @@ class MPILogHandler(logging.Handler):
             self.handleError(record)
 
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     if len(sys.argv) < 2:
         raise Exception("Too few arguments to MPI logging process.")
 
@@ -153,13 +154,16 @@ if __name__ == '__main__':
     logfile = sys.argv[1]
 
     # Open the logfile
-    fh = open(logfile, 'w')
+    fh = open(logfile, "w")
 
     # Get the parent Intracomm
     comm_parent = MPI.Comm.Get_parent()
 
     # Initialise all the buffers to receive logging messages
-    buffers = [(array.array('b', '\0'.encode()) * _message_maxlen) for pi in range(comm_parent.remote_size)]
+    buffers = [
+        (array.array("b", "\0".encode()) * _message_maxlen)
+        for pi in range(comm_parent.remote_size)
+    ]
     requests = []
 
     # Create a request for checking if we should exit
@@ -171,7 +175,6 @@ if __name__ == '__main__':
         requests.append(request)
 
     while True:
-
         # Wait until any connection receives a message
         status_list = []
         ind_requests = MPI.Request.Testsome(requests, statuses=status_list)
@@ -180,23 +183,23 @@ if __name__ == '__main__':
 
         # If a request has changed
         if num_requests > 0:
-
             # Iterate over changed requests and process them
             for ind, s in zip(ind_requests, status_list):
-
                 # Check to see if there was an error.
                 if s.Get_error() != 0:
                     raise Exception("Logging error (code %i)." % s.Get_error())
 
                 # Write the message to disk
                 msg_rank = s.Get_source()
-                msg = buffers[msg_rank].tobytes().decode().rstrip('\0')
-                fh.write('%s\n' % msg)
+                msg = buffers[msg_rank].tobytes().decode().rstrip("\0")
+                fh.write("%s\n" % msg)
                 fh.flush()
 
                 # Replace the buffer and connection
-                buffers[ind] = (array.array('b', '\0'.encode()) * _message_maxlen)
-                requests[ind] = comm_parent.Irecv([buffers[ind], MPI.CHAR], source=msg_rank, tag=0)
+                buffers[ind] = array.array("b", "\0".encode()) * _message_maxlen
+                requests[ind] = comm_parent.Irecv(
+                    [buffers[ind], MPI.CHAR], source=msg_rank, tag=0
+                )
 
         if MPI.Request.Test(exit_request):
             # We should exit from this process.

@@ -15,8 +15,10 @@ def draw_uniform_on_curve(curve, nsamples, safetyfactor=10):
     alen = curve.incremental_arclength()
     M = np.max(alen)
     nattempts = 10 * nsamples
-    idxs = np.random.randint(0, alen.shape[0], size=(nattempts, ))
-    accept = np.where(np.random.uniform(low=0, high=1, size=(nattempts, )) < alen[idxs]/M)[0]
+    idxs = np.random.randint(0, alen.shape[0], size=(nattempts,))
+    accept = np.where(
+        np.random.uniform(low=0, high=1, size=(nattempts,)) < alen[idxs] / M
+    )[0]
     assert len(accept) > nsamples
     idxs = np.sort(idxs[accept[:nsamples]])
     xyz = curve.gamma()[idxs, :]
@@ -38,12 +40,14 @@ def draw_uniform_on_surface(surface, nsamples, safetyfactor=10):
     jac = np.linalg.norm(surface.normal().reshape((-1, 3)), axis=1)
     M = np.max(jac)
     nattempts = 10 * nsamples
-    idxs = np.random.randint(0, jac.shape[0], size=(nattempts, ))
-    accept = np.where(np.random.uniform(low=0, high=1, size=(nattempts, )) < jac[idxs]/M)[0]
+    idxs = np.random.randint(0, jac.shape[0], size=(nattempts,))
+    accept = np.where(
+        np.random.uniform(low=0, high=1, size=(nattempts,)) < jac[idxs] / M
+    )[0]
     assert len(accept) > nsamples
     idxs = np.sort(idxs[accept[:nsamples]])
     gamma = surface.gamma()
-    order = 'F' if np.isfortran(gamma) else 'C'
+    order = "F" if np.isfortran(gamma) else "C"
     idxs = np.unravel_index(idxs, gamma.shape[:2], order)
     xyz = gamma[idxs[0], idxs[1], :]
     return xyz, idxs

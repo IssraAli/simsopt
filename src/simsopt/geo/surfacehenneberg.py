@@ -15,7 +15,7 @@ from .._core.descriptor import OneofIntegers, Integer, PositiveInteger
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['SurfaceHenneberg']
+__all__ = ["SurfaceHenneberg"]
 
 
 class SurfaceHenneberg(sopp.Surface, Surface):
@@ -91,19 +91,22 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         quadpoints_phi: Set this to a list or 1D array to set the :math:`\phi_j` grid points directly.
         quadpoints_theta: Set this to a list or 1D array to set the :math:`\theta_j` grid points directly.
     """
+
     nfp = Integer(min_value=1)
     alpha_fac = OneofIntegers(-1, 0, 1)
     mmax = Integer(min_value=1)
     nmax = PositiveInteger()
 
-    def __init__(self,
-                 nfp: int = 1,
-                 alpha_fac: int = 1,
-                 mmax: int = 1,
-                 nmax: int = 0,
-                 quadpoints_phi: RealArray = None,
-                 quadpoints_theta: RealArray = None,
-                 dofs: DOFs = None):
+    def __init__(
+        self,
+        nfp: int = 1,
+        alpha_fac: int = 1,
+        mmax: int = 1,
+        nmax: int = 0,
+        quadpoints_phi: RealArray = None,
+        quadpoints_theta: RealArray = None,
+        dofs: DOFs = None,
+    ):
 
         self.nfp = nfp
         self.alpha_fac = alpha_fac
@@ -125,15 +128,22 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         self.set_rhomn(1, 0, 0.1)
 
         if dofs is None:
-            Surface.__init__(self, x0=self.get_dofs(), names=self._make_names(),
-                             external_dof_setter=SurfaceHenneberg.set_dofs_impl)
+            Surface.__init__(
+                self,
+                x0=self.get_dofs(),
+                names=self._make_names(),
+                external_dof_setter=SurfaceHenneberg.set_dofs_impl,
+            )
         else:
-            Surface.__init__(self, dofs=dofs,
-                             external_dof_setter=SurfaceHenneberg.set_dofs_impl)
+            Surface.__init__(
+                self, dofs=dofs, external_dof_setter=SurfaceHenneberg.set_dofs_impl
+            )
 
     def __repr__(self):
-        return f"{self.name} (nfp={self.nfp}, alpha_fac={self.alpha_fac}, " \
+        return (
+            f"{self.name} (nfp={self.nfp}, alpha_fac={self.alpha_fac}, "
             + f"mmax={self.mmax}, nmax={self.nmax})"
+        )
 
     def allocate(self):
         """
@@ -157,18 +167,18 @@ class SurfaceHenneberg(sopp.Surface, Surface):
     def _make_names(self):
         names = []
         for n in range(self.nmax + 1):
-            names.append(f'R0nH({n})')
+            names.append(f"R0nH({n})")
         for n in range(1, self.nmax + 1):
-            names.append(f'Z0nH({n})')
+            names.append(f"Z0nH({n})")
         for n in range(self.nmax + 1):
-            names.append(f'bn({n})')
+            names.append(f"bn({n})")
         # Handle m = 0 modes in rho_mn:
         for n in range(1, self.nmax + 1):
-            names.append(f'rhomn(0,{n})')
+            names.append(f"rhomn(0,{n})")
         # Handle m > 0 modes in rho_mn:
         for m in range(1, self.mmax + 1):
             for n in range(-self.nmax, self.nmax + 1):
-                names.append(f'rhomn({m},{n})')
+                names.append(f"rhomn({m},{n})")
         return names
 
     def _validate_mn(self, m, n):
@@ -176,15 +186,15 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         Check whether given (m, n) values are allowed for :math:`\rho_{m,n}`.
         """
         if m < 0:
-            raise ValueError(f'm must be >= 0, but m = {m}')
+            raise ValueError(f"m must be >= 0, but m = {m}")
         if m > self.mmax:
-            raise ValueError(f'm must be <= mmax, but m = {m}')
+            raise ValueError(f"m must be <= mmax, but m = {m}")
         if m == 0 and n < 1:
-            raise ValueError(f'For m=0, n must be >= 1, but n = {n}')
+            raise ValueError(f"For m=0, n must be >= 1, but n = {n}")
         if n > self.nmax:
-            raise ValueError(f'n must be <= nmax, but n = {n}')
+            raise ValueError(f"n must be <= nmax, but n = {n}")
         if n < -self.nmax:
-            raise ValueError(f'n must be >= -nmax, but n = {n}')
+            raise ValueError(f"n must be >= -nmax, but n = {n}")
 
     def get_rhomn(self, m, n):
         r"""
@@ -205,9 +215,17 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         """
         Return a 1D numpy array with all the degrees of freedom.
         """
-        return np.concatenate((self.R0nH, self.Z0nH[1:], self.bn,
-                               self.rhomn[0, self.nmax + 1:],
-                               np.reshape(self.rhomn[1:, :], (self.mmax * (2 * self.nmax + 1),), order='C')))
+        return np.concatenate(
+            (
+                self.R0nH,
+                self.Z0nH[1:],
+                self.bn,
+                self.rhomn[0, self.nmax + 1 :],
+                np.reshape(
+                    self.rhomn[1:, :], (self.mmax * (2 * self.nmax + 1),), order="C"
+                ),
+            )
+        )
 
     def set_dofs(self, dofs):
         self.local_x = dofs
@@ -231,27 +249,33 @@ class SurfaceHenneberg(sopp.Surface, Surface):
 
         n = self.num_dofs()
         if len(v) != n:
-            raise ValueError('Input vector should have ' + str(n) +
-                             ' elements but instead has ' + str(len(v)))
+            raise ValueError(
+                "Input vector should have "
+                + str(n)
+                + " elements but instead has "
+                + str(len(v))
+            )
 
         index = 0
         nvals = self.nmax + 1
-        self.R0nH = v[index: index + nvals]
+        self.R0nH = v[index : index + nvals]
         index += nvals
 
         nvals = self.nmax
-        self.Z0nH[1:] = v[index: index + nvals]
+        self.Z0nH[1:] = v[index : index + nvals]
         index += nvals
 
         nvals = self.nmax + 1
-        self.bn = v[index: index + nvals]
+        self.bn = v[index : index + nvals]
         index += nvals
 
         nvals = self.nmax
-        self.rhomn[0, self.nmax + 1:] = v[index: index + nvals]
+        self.rhomn[0, self.nmax + 1 :] = v[index : index + nvals]
         index += nvals
 
-        self.rhomn[1:, :] = np.reshape(v[index:], (self.mmax, 2 * self.nmax + 1), order='C')
+        self.rhomn[1:, :] = np.reshape(
+            v[index:], (self.mmax, 2 * self.nmax + 1), order="C"
+        )
 
     def fixed_range(self, mmax, nmax, fixed=True):
         """
@@ -269,28 +293,28 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         words, the ``bn`` modes are treated as having ``m=1``.
         """
         if mmax < 0:
-            raise ValueError('mmax must be >= 0')
+            raise ValueError("mmax must be >= 0")
         mmax = min(self.mmax, mmax)
         if nmax < 0:
-            raise ValueError('nmax must be >= 0')
+            raise ValueError("nmax must be >= 0")
         nmax = min(self.nmax, nmax)
 
         fn = self.fix if fixed else self.unfix
 
         for n in range(nmax + 1):
-            fn(f'R0nH({n})')
+            fn(f"R0nH({n})")
         for n in range(1, nmax + 1):
-            fn(f'Z0nH({n})')
+            fn(f"Z0nH({n})")
         if mmax > 0:
             for n in range(nmax + 1):
-                fn(f'bn({n})')
+                fn(f"bn({n})")
 
         for m in range(mmax + 1):
             nmin_to_use = -nmax
             if m == 0:
                 nmin_to_use = 1
             for n in range(nmin_to_use, nmax + 1):
-                fn(f'rhomn({m},{n})')
+                fn(f"rhomn({m},{n})")
 
     def to_RZFourier(self):
         """
@@ -299,7 +323,9 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         m=0 terms for R0 and Z0.
         """
         mpol = self.mmax
-        ntor = self.nmax + 1  # More modes are needed in the SurfaceRZFourier because some indices are shifted by +/- 2*alpha.
+        ntor = (
+            self.nmax + 1
+        )  # More modes are needed in the SurfaceRZFourier because some indices are shifted by +/- 2*alpha.
         s = SurfaceRZFourier(nfp=self.nfp, stellsym=True, mpol=mpol, ntor=ntor)
         s.rc[:] = 0.0
         s.zs[:] = 0.0
@@ -367,13 +393,15 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         return s
 
     @classmethod
-    def from_RZFourier(cls,
-                       surf,
-                       alpha_fac: int,
-                       mmax: Union[int, None] = None,
-                       nmax: Union[int, None] = None,
-                       ntheta: Union[int, None] = None,
-                       nphi: Union[int, None] = None):
+    def from_RZFourier(
+        cls,
+        surf,
+        alpha_fac: int,
+        mmax: Union[int, None] = None,
+        nmax: Union[int, None] = None,
+        ntheta: Union[int, None] = None,
+        nphi: Union[int, None] = None,
+    ):
         """
         Convert a :obj:`~.surfacerzfourier.SurfaceRZFourier` surface to a
         :obj:`SurfaceHenneberg` surface.
@@ -390,8 +418,10 @@ class SurfaceHenneberg(sopp.Surface, Surface):
               If ``None``, the value ``3 * nphi`` will be used.
         """
         if not surf.stellsym:
-            raise RuntimeError('SurfaceHenneberg.from_RZFourier method only '
-                               'works for stellarator symmetric surfaces')
+            raise RuntimeError(
+                "SurfaceHenneberg.from_RZFourier method only "
+                "works for stellarator symmetric surfaces"
+            )
         if mmax is None:
             mmax = surf.mpol
         if nmax is None:
@@ -400,7 +430,9 @@ class SurfaceHenneberg(sopp.Surface, Surface):
             ntheta = mmax * 3
         if nphi is None:
             nphi = nmax * 3
-        logger.info(f'Beginning conversion with mmax={mmax}, nmax={nmax}, ntheta={ntheta}, nphi={nphi}')
+        logger.info(
+            f"Beginning conversion with mmax={mmax}, nmax={nmax}, ntheta={ntheta}, nphi={nphi}"
+        )
         nfp = surf.nfp
         theta = np.linspace(0, 2 * np.pi, ntheta, endpoint=False)
         phi = np.linspace(0, 2 * np.pi / nfp, nphi, endpoint=False)
@@ -430,15 +462,19 @@ class SurfaceHenneberg(sopp.Surface, Surface):
 
         # An independent transformation is performed at each grid point in phi:
         for jphi, phi0 in enumerate(phi):
-            logger.debug(f'Transforming jphi={jphi} of {nphi}')
+            logger.debug(f"Transforming jphi={jphi} of {nphi}")
             cosaphi = np.cos(alpha * phi0)
             sinaphi = np.sin(alpha * phi0)
 
             # Find the max and min of the surface in the zeta direction:
-            opt_result = minimize_scalar(b_min, args=(phi0, cosaphi, sinaphi), tol=1e-12)
+            opt_result = minimize_scalar(
+                b_min, args=(phi0, cosaphi, sinaphi), tol=1e-12
+            )
             min_for_b = opt_result.fun
 
-            opt_result = minimize_scalar(b_max, args=(phi0, cosaphi, sinaphi), tol=1e-12)
+            opt_result = minimize_scalar(
+                b_max, args=(phi0, cosaphi, sinaphi), tol=1e-12
+            )
             max_for_b = -opt_result.fun
 
             b = 0.5 * (max_for_b - min_for_b)
@@ -463,24 +499,32 @@ class SurfaceHenneberg(sopp.Surface, Surface):
             # the range [-pi/2, pi/2].
             d_Z_rot_d_theta = d_Z_d_theta * cosaphi - d_R_d_theta * sinaphi
             # Copy the first element to the end, for periodicity:
-            d_Z_rot_d_theta_circ = np.concatenate((d_Z_rot_d_theta, [d_Z_rot_d_theta[0]]))
+            d_Z_rot_d_theta_circ = np.concatenate(
+                (d_Z_rot_d_theta, [d_Z_rot_d_theta[0]])
+            )
             sign_flips = d_Z_rot_d_theta_circ[1:] * d_Z_rot_d_theta_circ[:-1]
             sign_flip_indices = [j for j in range(ntheta) if sign_flips[j] < 0]
             if len(sign_flip_indices) != 2:
-                logger.warning(f'A number of sign flips other than 2 detected for jphi={jphi}: sign_flip_indices={sign_flip_indices}.'
-                               ' This may mean the surface cannot be represented in Henneberg form.'
-                               f' sign_flips={sign_flips}')
+                logger.warning(
+                    f"A number of sign flips other than 2 detected for jphi={jphi}: sign_flip_indices={sign_flip_indices}."
+                    " This may mean the surface cannot be represented in Henneberg form."
+                    f" sign_flips={sign_flips}"
+                )
 
             temp = (Z * cosaphi - R * sinaphi - Q) / b
             if np.any(temp > 1):
                 # Going outside [-1, 1] by ~ roundoff is okay, but
                 # warn if we are much farther than that.
                 if np.any(temp > 1 + 1.0e-12):
-                    logger.warning(f'Argument of arcsin exceeds 1: {temp[temp > 1] - 1}')
+                    logger.warning(
+                        f"Argument of arcsin exceeds 1: {temp[temp > 1] - 1}"
+                    )
                 temp[temp > 1] = 1.0
             if np.any(temp < -1):
                 if np.any(temp < -1 - 1.0e-12):
-                    logger.warning(f'Argument of arcsin is below -1: {temp[temp < -1] + 1}')
+                    logger.warning(
+                        f"Argument of arcsin is below -1: {temp[temp < -1] + 1}"
+                    )
                 temp[temp < -1] = -1.0
 
             arcsin_term = np.arcsin(temp)
@@ -491,11 +535,13 @@ class SurfaceHenneberg(sopp.Surface, Surface):
             theta_H = arcsin_term + alpha * phi0
 
             # Copy arrays 3 times, so endpoints are interpolated correctly:
-            theta_H_3 = np.concatenate((theta_H - 2 * np.pi, theta_H, theta_H + 2 * np.pi))
+            theta_H_3 = np.concatenate(
+                (theta_H - 2 * np.pi, theta_H, theta_H + 2 * np.pi)
+            )
             R_3 = np.concatenate((R, R, R))
             Z_3 = np.concatenate((Z, Z, Z))
-            R_interp = interp1d(theta_H_3, R_3, kind='cubic')
-            Z_interp = interp1d(theta_H_3, Z_3, kind='cubic')
+            R_interp = interp1d(theta_H_3, R_3, kind="cubic")
+            Z_interp = interp1d(theta_H_3, Z_3, kind="cubic")
 
             R_H = R_interp(theta)
             Z_H = Z_interp(theta)
@@ -517,10 +563,10 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         surf_H.R0nH[0] = np.mean(R0_realsp)
         surf_H.bn[0] = np.mean(b_realsp)
         Z00H = np.mean(Z0_realsp)
-        logger.info(f'n=0 term of Z0nH: {Z00H} (should be ~ 0)')
+        logger.info(f"n=0 term of Z0nH: {Z00H} (should be ~ 0)")
         assert np.abs(Z00H) < 1.0e-6
         rho00 = np.mean(rho_realsp)
-        logger.info(f'm=n=0 term of rho_mn: {rho00} (should be ~ 0)')
+        logger.info(f"m=n=0 term of rho_mn: {rho00} (should be ~ 0)")
         assert np.abs(rho00) < 1.0e-6
 
         # Now handle 1D arrays:
@@ -533,7 +579,7 @@ class SurfaceHenneberg(sopp.Surface, Surface):
 
         # Transform rho:
         phi2d, theta2d = np.meshgrid(phi, theta)
-        #print('phi2d.shape:', phi2d.shape)
+        # print('phi2d.shape:', phi2d.shape)
         for m in range(mmax + 1):
             nmin = -nmax
             if m == 0:
@@ -541,7 +587,9 @@ class SurfaceHenneberg(sopp.Surface, Surface):
             for n in range(nmin, nmax + 1):
                 # Eq above (4.5):
                 angle = m * theta2d + (n * nfp - alpha) * phi2d
-                surf_H.set_rhomn(m, n, 2 * np.sum(rho_realsp * np.cos(angle)) / (ntheta * nphi))
+                surf_H.set_rhomn(
+                    m, n, 2 * np.sum(rho_realsp * np.cos(angle)) / (ntheta * nphi)
+                )
 
         """
         plt.figure()
@@ -563,12 +611,12 @@ class SurfaceHenneberg(sopp.Surface, Surface):
             R0_alt += surf_H.R0nH[n] * np.cos(n * nfp * phi)
             Z0_alt += surf_H.Z0nH[n] * np.sin(n * nfp * phi)
 
-        print('b_realsp:', b_realsp)
-        print('b_alt:   ', b_alt)
-        print('bn:', surf_H.bn)
-        print('Diff in b:', np.max(np.abs(b_alt - b_realsp)))
-        print('Diff in R0:', np.max(np.abs(R0_alt - R0_realsp)))
-        print('Diff in Z0:', np.max(np.abs(Z0_alt - Z0_realsp)))
+        print("b_realsp:", b_realsp)
+        print("b_alt:   ", b_alt)
+        print("bn:", surf_H.bn)
+        print("Diff in b:", np.max(np.abs(b_alt - b_realsp)))
+        print("Diff in R0:", np.max(np.abs(R0_alt - R0_realsp)))
+        print("Diff in Z0:", np.max(np.abs(Z0_alt - Z0_realsp)))
 
         rho_alt = np.zeros((ntheta, nphi))
         for m in range(mmax + 1):
@@ -578,9 +626,9 @@ class SurfaceHenneberg(sopp.Surface, Surface):
             for n in range(nmin, nmax + 1):
                 angle = m * theta2d + (n * nfp - alpha) * phi2d
                 rho_alt += surf_H.get_rhomn(m, n) * np.cos(angle)
-        #print('rho_realsp:', rho_realsp)
-        #print('rho_alt:   ', rho_alt)
-        print('Diff in rho:', np.max(np.abs(rho_realsp - rho_alt)))
+        # print('rho_realsp:', rho_realsp)
+        # print('rho_alt:   ', rho_alt)
+        print("Diff in rho:", np.max(np.abs(rho_realsp - rho_alt)))
 
         surf_H.local_full_x = surf_H.get_dofs()
         return surf_H
@@ -633,9 +681,11 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         ntheta = len(quadpoints_theta)
         phi2d, theta2d = np.meshgrid(quadpoints_phi, quadpoints_theta)
         data1d = np.zeros((nphi * ntheta, 3))
-        self.gamma_lin(data1d,
-                       np.reshape(phi2d, (nphi * ntheta,)),
-                       np.reshape(theta2d, (nphi * ntheta,)))
+        self.gamma_lin(
+            data1d,
+            np.reshape(phi2d, (nphi * ntheta,)),
+            np.reshape(theta2d, (nphi * ntheta,)),
+        )
         for xyz in range(3):
             data[:, :, xyz] = np.reshape(data1d[:, xyz], (ntheta, nphi)).T
 
@@ -688,16 +738,27 @@ class SurfaceHenneberg(sopp.Surface, Surface):
         d_R0H2D_d_phi = np.kron(d_R0H_d_phi, np.ones((ntheta, 1)))
         d_Z0H2D_d_phi = np.kron(d_Z0H_d_phi, np.ones((ntheta, 1)))
         d_b2D_d_phi = np.kron(d_b_d_phi, np.ones((ntheta, 1)))
-        d_zeta_d_phi = d_b2D_d_phi * np.sin(theta - alpha * phi) \
-            + b2D * np.cos(theta - alpha * phi) * (-alpha)
+        d_zeta_d_phi = d_b2D_d_phi * np.sin(theta - alpha * phi) + b2D * np.cos(
+            theta - alpha * phi
+        ) * (-alpha)
         sinaphi = np.sin(alpha * phi)
         cosaphi = np.cos(alpha * phi)
         R = R0H2D + rho * cosaphi - zeta * sinaphi
         # Z = Z0H2D + rho * sinaphi + zeta * cosaphi
-        d_R_d_phi = d_R0H2D_d_phi + d_rho_d_phi * cosaphi + rho * (-alpha * sinaphi) \
-            - d_zeta_d_phi * sinaphi - zeta * (alpha * cosaphi)
-        d_Z_d_phi = d_Z0H2D_d_phi + d_rho_d_phi * sinaphi + rho * (alpha * cosaphi) \
-            + d_zeta_d_phi * cosaphi + zeta * (-alpha * sinaphi)
+        d_R_d_phi = (
+            d_R0H2D_d_phi
+            + d_rho_d_phi * cosaphi
+            + rho * (-alpha * sinaphi)
+            - d_zeta_d_phi * sinaphi
+            - zeta * (alpha * cosaphi)
+        )
+        d_Z_d_phi = (
+            d_Z0H2D_d_phi
+            + d_rho_d_phi * sinaphi
+            + rho * (alpha * cosaphi)
+            + d_zeta_d_phi * cosaphi
+            + zeta * (-alpha * sinaphi)
+        )
         # Insert factors of 2pi since theta here is 2pi times the theta used for d/dtheta
         data[:, :, 0] = 2 * np.pi * (d_R_d_phi * np.cos(phi) - R * np.sin(phi)).T
         data[:, :, 1] = 2 * np.pi * (d_R_d_phi * np.sin(phi) + R * np.cos(phi)).T

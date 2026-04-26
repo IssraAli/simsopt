@@ -4,13 +4,16 @@ import numpy as np
 from simsopt.field.magnetic_axis_helpers import compute_on_axis_iota
 from simsopt.configs.zoo import get_data
 
-class MagneticAxisHelpers(unittest.TestCase):
 
+class MagneticAxisHelpers(unittest.TestCase):
     def test_magnetic_axis_iota(self):
         """
         Verify that the rotational transform can be computed on axis
         """
-        for (config, target_iota) in zip(["hsx", "ncsx", "giuliani"], [1.0418687161633922, 0.39549339846119463, 0.42297724084249616]):
+        for config, target_iota in zip(
+            ["hsx", "ncsx", "giuliani"],
+            [1.0418687161633922, 0.39549339846119463, 0.42297724084249616],
+        ):
             self.subtest_magnetic_axis_iota(config, target_iota)
 
     def subtest_magnetic_axis_iota(self, config, target_iota):

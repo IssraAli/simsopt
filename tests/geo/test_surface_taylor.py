@@ -5,16 +5,17 @@ from simsopt.geo import parameters
 from simsopt.geo.surfacerzfourier import SurfaceRZFourier
 from simsopt.geo.surfacexyzfourier import SurfaceXYZFourier
 from simsopt.geo.surfacexyztensorfourier import SurfaceXYZTensorFourier
-parameters['jit'] = False
+
+parameters["jit"] = False
 
 
 def taylor_test(f, df, x, epsilons=None, direction=None, order=2):
     np.random.seed(1)
     if direction is None:
-        direction = np.random.rand(*(x.shape))-0.5
-    dfx = df(x)@direction
+        direction = np.random.rand(*(x.shape)) - 0.5
+    dfx = df(x) @ direction
     if epsilons is None:
-        epsilons = np.power(2., -np.asarray(range(8, 20)))
+        epsilons = np.power(2.0, -np.asarray(range(8, 20)))
     print("###################################################################")
     err_old = 1e9
     counter = 0
@@ -24,12 +25,16 @@ def taylor_test(f, df, x, epsilons=None, direction=None, order=2):
         fpluseps = f(x + eps * direction)
         fminuseps = f(x - eps * direction)
         if order == 2:
-            dfest = (fpluseps-fminuseps)/(2*eps)
+            dfest = (fpluseps - fminuseps) / (2 * eps)
         elif order == 4:
-            fplus2eps = f(x + 2*eps * direction)
-            fminus2eps = f(x - 2*eps * direction)
-            dfest = ((1/12) * fminus2eps - (2/3) * fminuseps + (2/3)*fpluseps
-                     - (1/12)*fplus2eps)/eps
+            fplus2eps = f(x + 2 * eps * direction)
+            fminus2eps = f(x - 2 * eps * direction)
+            dfest = (
+                (1 / 12) * fminus2eps
+                - (2 / 3) * fminuseps
+                + (2 / 3) * fpluseps
+                - (1 / 12) * fplus2eps
+            ) / eps
         else:
             raise NotImplementedError
         err = np.linalg.norm(dfest - dfx)
@@ -52,30 +57,47 @@ def get_surface(surfacetype, stellsym, phis=None, thetas=None):
     phis = phis if phis is not None else np.linspace(0, 1, 31, endpoint=False)
     thetas = thetas if thetas is not None else np.linspace(0, 1, 31, endpoint=False)
     if surfacetype == "SurfaceRZFourier":
-        s = SurfaceRZFourier(nfp=nfp, stellsym=stellsym, mpol=mpol, ntor=ntor,
-                             quadpoints_phi=phis, quadpoints_theta=thetas)
-        s.x = s.x * 0.
+        s = SurfaceRZFourier(
+            nfp=nfp,
+            stellsym=stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=phis,
+            quadpoints_theta=thetas,
+        )
+        s.x = s.x * 0.0
         s.rc[0, ntor + 0] = 1
         s.rc[1, ntor + 0] = 0.3
         s.zs[1, ntor + 0] = 0.3
     elif surfacetype == "SurfaceXYZFourier":
-        s = SurfaceXYZFourier(nfp=nfp, stellsym=stellsym, mpol=mpol, ntor=ntor,
-                              quadpoints_phi=phis, quadpoints_theta=thetas)
-        s.x = s.x * 0.
-        s.xc[0, ntor + 1] = 1.
+        s = SurfaceXYZFourier(
+            nfp=nfp,
+            stellsym=stellsym,
+            mpol=mpol,
+            ntor=ntor,
+            quadpoints_phi=phis,
+            quadpoints_theta=thetas,
+        )
+        s.x = s.x * 0.0
+        s.xc[0, ntor + 1] = 1.0
         s.xc[1, ntor + 1] = 0.1
-        s.ys[0, ntor + 1] = 1.
+        s.ys[0, ntor + 1] = 1.0
         s.ys[1, ntor + 1] = 0.1
         s.zs[1, ntor] = 0.1
     elif surfacetype == "SurfaceXYZTensorFourier":
         s = SurfaceXYZTensorFourier(
-            nfp=nfp, stellsym=stellsym, mpol=mpol, ntor=ntor,
+            nfp=nfp,
+            stellsym=stellsym,
+            mpol=mpol,
+            ntor=ntor,
             clamped_dims=[False, not stellsym, True],
-            quadpoints_phi=phis, quadpoints_theta=thetas)
-        s.x = s.x * 0.
+            quadpoints_phi=phis,
+            quadpoints_theta=thetas,
+        )
+        s.x = s.x * 0.0
         s.xcs[0, 0] = 1.0
         s.xcs[1, 0] = 0.1
-        s.zcs[mpol+1, 0] = 0.1
+        s.zcs[mpol + 1, 0] = 0.1
     else:
         assert False
 
@@ -86,26 +108,25 @@ def get_surface(surfacetype, stellsym, phis=None, thetas=None):
     return s
 
 
-def taylor_test2(f, df, d2f, x, epsilons=None, direction1=None,
-                 direction2=None):
+def taylor_test2(f, df, d2f, x, epsilons=None, direction1=None, direction2=None):
     np.random.seed(1)
     if direction1 is None:
-        direction1 = np.random.rand(*(x.shape))-0.5
+        direction1 = np.random.rand(*(x.shape)) - 0.5
     if direction2 is None:
-        direction2 = np.random.rand(*(x.shape))-0.5
+        direction2 = np.random.rand(*(x.shape)) - 0.5
 
     df0 = df(x) @ direction1
     d2fval = direction2.T @ d2f(x) @ direction1
     if epsilons is None:
-        epsilons = np.power(2., -np.asarray(range(7, 20)))
+        epsilons = np.power(2.0, -np.asarray(range(7, 20)))
     print("###################################################################")
     err_old = 1e9
     for eps in epsilons:
         fpluseps = df(x + eps * direction2) @ direction1
-        d2fest = (fpluseps-df0)/eps
+        d2fest = (fpluseps - df0) / eps
         err = np.abs(d2fest - d2fval)
 
-        print(err, err/err_old)
+        print(err, err / err_old)
         assert err < 0.6 * err_old
         if err < 1e-9:
             break
@@ -114,8 +135,7 @@ def taylor_test2(f, df, d2f, x, epsilons=None, direction1=None,
 
 
 class SurfaceTaylorTests(unittest.TestCase):
-    surfacetypes = ["SurfaceRZFourier", "SurfaceXYZFourier",
-                    "SurfaceXYZTensorFourier"]
+    surfacetypes = ["SurfaceRZFourier", "SurfaceXYZFourier", "SurfaceXYZTensorFourier"]
 
     def subtest_surface_coefficient_derivative(self, s):
         coeffs = s.x
@@ -128,6 +148,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dgamma_by_dcoeff()[1, 1, :, :].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -137,6 +158,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dgammadash1_by_dcoeff()[1, 1, :, :].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -146,6 +168,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dgammadash2_by_dcoeff()[1, 1, :, :].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -155,6 +178,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dgammadash2dash2_by_dcoeff()[1, 1, :, :].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -164,6 +188,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dgammadash1dash1_by_dcoeff()[1, 1, :, :].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -173,6 +198,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dgammadash1dash2_by_dcoeff()[1, 1, :, :].copy()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -182,6 +208,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.daspect_ratio_by_dcoeff()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -191,6 +218,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dmajor_radius_by_dcoeff()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -200,6 +228,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dminor_radius_by_dcoeff()
+
         taylor_test(f, df, coeffs)
 
         def f(dofs):
@@ -209,16 +238,18 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dmean_cross_sectional_area_by_dcoeff()
+
         taylor_test(f, df, coeffs)
 
     def test_surface_coefficient_derivative(self):
         for surfacetype in self.surfacetypes:
             for stellsym in [True, False]:
-
                 # mean cross sectional area should always be positive since minor radius = sqrt(mean_cross_sectional_area/pi),
                 # flipping the sign of the dofs should still give the correct derivatives
                 for sign in [1, -1]:
-                    with self.subTest(surfacetype=surfacetype, stellsym=stellsym, sign=sign):
+                    with self.subTest(
+                        surfacetype=surfacetype, stellsym=stellsym, sign=sign
+                    ):
                         s = get_surface(surfacetype, stellsym)
                         s.x = sign * s.x
                         self.subtest_surface_coefficient_derivative(s)
@@ -234,6 +265,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dnormal_by_dcoeff()[1, 1, :, :].copy()
+
         taylor_test(f, df, coeffs)
 
     def test_surface_normal_coefficient_derivative(self):
@@ -257,7 +289,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dfirst_fund_form_by_dcoeff()[1, 1, :, :].copy()
-        taylor_test(f, df, coeffs, epsilons=np.power(2., -np.asarray(range(10, 15))), order=4)
+
+        taylor_test(
+            f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(10, 15))), order=4
+        )
 
         def f(dofs):
             s.x = dofs
@@ -266,7 +301,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dsecond_fund_form_by_dcoeff()[1, 1, :, :].copy()
-        taylor_test(f, df, coeffs, epsilons=np.power(2., -np.asarray(range(10, 15))), order=4)
+
+        taylor_test(
+            f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(10, 15))), order=4
+        )
 
         def f(dofs):
             s.x = dofs
@@ -275,7 +313,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dsurface_curvatures_by_dcoeff()[1, 1, 2, :].copy()
-        taylor_test(f, df, coeffs, epsilons=np.power(2., -np.asarray(range(10, 15))), order=4)
+
+        taylor_test(
+            f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(10, 15))), order=4
+        )
 
     def test_fund_form_coefficient_derivative(self):
         """
@@ -298,7 +339,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dunitnormal_by_dcoeff()[1, 1, :, :].copy()
-        taylor_test(f, df, coeffs, epsilons=np.power(2., -np.asarray(range(10, 15))), order=2)
+
+        taylor_test(
+            f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(10, 15))), order=2
+        )
 
     def test_unit_normal_coefficient_derivative(self):
         """
@@ -321,8 +365,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.darea_by_dcoeff()[None, :].copy()
-        taylor_test(f, df, coeffs,
-                    epsilons=np.power(2., -np.asarray(range(11, 20))), order=4)
+
+        taylor_test(
+            f, df, coeffs, epsilons=np.power(2.0, -np.asarray(range(11, 20))), order=4
+        )
 
     def test_surface_area_coefficient_derivative(self):
         """
@@ -359,8 +405,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def d2f(dofs):
             s.x = dofs
             return s.d2area_by_dcoeffdcoeff()
-        taylor_test2(f, df, d2f, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 20))))
+
+        taylor_test2(
+            f, df, d2f, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 20)))
+        )
 
     def test_volume_coefficient_second_derivative(self):
         """
@@ -380,7 +428,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         # defining a local function get_random_surface because it let's me control number of quadpoints, and modes
         def get_random_surface(surfacetype, stellsym, mpol, ntor, nphi, ntheta):
             from .surface_test_helpers import get_surface as get_surface_ext
-            s = get_surface_ext(surfacetype, stellsym, mpol=mpol, ntor=ntor, nphi=nphi, ntheta=ntheta)
+
+            s = get_surface_ext(
+                surfacetype, stellsym, mpol=mpol, ntor=ntor, nphi=nphi, ntheta=ntheta
+            )
             dofs = s.get_dofs()
             np.random.seed(2)
             rand_scale = 0.01
@@ -391,19 +442,29 @@ class SurfaceTaylorTests(unittest.TestCase):
         for surfacetype in self.surfacetypes:
             for stellsym in [True, False]:
                 with self.subTest(surfacetype=surfacetype, stellsym=stellsym):
-                    s1 = get_random_surface(surfacetype, stellsym, mpol=1, ntor=1, nphi=1, ntheta=1)
+                    s1 = get_random_surface(
+                        surfacetype, stellsym, mpol=1, ntor=1, nphi=1, ntheta=1
+                    )
                     self.subtest_volume_coefficient_second_derivative(s1)
 
-                    s2 = get_random_surface(surfacetype, stellsym, mpol=1, ntor=1, nphi=1, ntheta=1)
+                    s2 = get_random_surface(
+                        surfacetype, stellsym, mpol=1, ntor=1, nphi=1, ntheta=1
+                    )
                     self.subtest_volume_coefficient_second_derivative(s2)
 
-                    s3 = get_random_surface(surfacetype, stellsym, mpol=1, ntor=1, nphi=2, ntheta=1)
+                    s3 = get_random_surface(
+                        surfacetype, stellsym, mpol=1, ntor=1, nphi=2, ntheta=1
+                    )
                     self.subtest_volume_coefficient_second_derivative(s3)
 
-                    s4 = get_random_surface(surfacetype, stellsym, mpol=1, ntor=1, nphi=1, ntheta=2)
+                    s4 = get_random_surface(
+                        surfacetype, stellsym, mpol=1, ntor=1, nphi=1, ntheta=2
+                    )
                     self.subtest_volume_coefficient_second_derivative(s4)
 
-                    s5 = get_random_surface(surfacetype, stellsym, mpol=4, ntor=4, nphi=31, ntheta=30)
+                    s5 = get_random_surface(
+                        surfacetype, stellsym, mpol=4, ntor=4, nphi=31, ntheta=30
+                    )
                     self.subtest_volume_coefficient_second_derivative(s5)
 
     def subtest_volume_coefficient_second_derivative(self, s):
@@ -421,8 +482,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def d2f(dofs):
             s.x = dofs
             return s.d2volume_by_dcoeffdcoeff()
-        taylor_test2(f, df, d2f, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 20))))
+
+        taylor_test2(
+            f, df, d2f, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 20)))
+        )
 
     def subtest_surface_volume_coefficient_derivative(self, s):
         coeffs = s.x
@@ -435,6 +498,7 @@ class SurfaceTaylorTests(unittest.TestCase):
         def df(dofs):
             s.x = dofs
             return s.dvolume_by_dcoeff()[None, :].copy()
+
         taylor_test(f, df, coeffs)
 
     def test_surface_volume_coefficient_derivative(self):
@@ -454,7 +518,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         for surfacetype in self.surfacetypes:
             for stellsym in [True, False]:
                 for sign in [1, -1]:
-                    with self.subTest(surfacetype=surfacetype, stellsym=stellsym, sign=sign):
+                    with self.subTest(
+                        surfacetype=surfacetype, stellsym=stellsym, sign=sign
+                    ):
                         s = get_surface(surfacetype, stellsym)
                         s.x = sign * s.x
                         self.subtest_minor_radius_second_derivative(s)
@@ -475,8 +541,9 @@ class SurfaceTaylorTests(unittest.TestCase):
             s.x = dofs
             return s.d2minor_radius_by_dcoeff_dcoeff()
 
-        taylor_test2(f, df, d2f, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 20))))
+        taylor_test2(
+            f, df, d2f, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 20)))
+        )
 
     def test_major_radius_second_derivative(self):
         """
@@ -485,7 +552,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         for surfacetype in self.surfacetypes:
             for stellsym in [True, False]:
                 for sign in [1, -1]:
-                    with self.subTest(surfacetype=surfacetype, stellsym=stellsym, sign=sign):
+                    with self.subTest(
+                        surfacetype=surfacetype, stellsym=stellsym, sign=sign
+                    ):
                         s = get_surface(surfacetype, stellsym)
                         s.x = sign * s.x
                         self.subtest_major_radius_second_derivative(s)
@@ -506,8 +575,9 @@ class SurfaceTaylorTests(unittest.TestCase):
             s.x = dofs
             return s.d2major_radius_by_dcoeff_dcoeff()
 
-        taylor_test2(f, df, d2f, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 20))))
+        taylor_test2(
+            f, df, d2f, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 20)))
+        )
 
     def test_mean_area_second_derivative(self):
         """
@@ -516,7 +586,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         for surfacetype in self.surfacetypes:
             for stellsym in [True, False]:
                 for sign in [1, -1]:
-                    with self.subTest(surfacetype=surfacetype, stellsym=stellsym, sign=sign):
+                    with self.subTest(
+                        surfacetype=surfacetype, stellsym=stellsym, sign=sign
+                    ):
                         s = get_surface(surfacetype, stellsym)
                         s.x = sign * s.x
                         self.subtest_mean_area_second_derivative(s)
@@ -537,8 +609,9 @@ class SurfaceTaylorTests(unittest.TestCase):
             s.x = dofs
             return s.d2mean_cross_sectional_area_by_dcoeff_dcoeff()
 
-        taylor_test2(f, df, d2f, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 20))))
+        taylor_test2(
+            f, df, d2f, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 20)))
+        )
 
     def test_AR_second_derivative(self):
         """
@@ -546,12 +619,13 @@ class SurfaceTaylorTests(unittest.TestCase):
         """
         for surfacetype in self.surfacetypes:
             for stellsym in [True, False]:
-
                 # mean cross sectional area should always be positive since minor radius = sqrt(mean_cross_sectional_area/pi), which
                 # the aspect ratio depends on
                 # flipping the sign of the dofs should still give the correct derivatives
                 for sign in [1, -1]:
-                    with self.subTest(surfacetype=surfacetype, stellsym=stellsym, sign=sign):
+                    with self.subTest(
+                        surfacetype=surfacetype, stellsym=stellsym, sign=sign
+                    ):
                         s = get_surface(surfacetype, stellsym)
                         s.x = sign * s.x
                         self.subtest_AR_second_derivative(s)
@@ -571,8 +645,10 @@ class SurfaceTaylorTests(unittest.TestCase):
         def d2f(dofs):
             s.x = dofs
             return s.d2aspect_ratio_by_dcoeff_dcoeff()
-        taylor_test2(f, df, d2f, coeffs,
-                     epsilons=np.power(2., -np.asarray(range(13, 20))))
+
+        taylor_test2(
+            f, df, d2f, coeffs, epsilons=np.power(2.0, -np.asarray(range(13, 20)))
+        )
 
     def subtest_surface_phi_derivative(self, surfacetype, stellsym):
         epss = [0.5**i for i in range(10, 15)]
@@ -582,9 +658,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         deriv = s.gammadash1()[0, 0, :]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = s.gamma()[i+1, 0, :]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = s.gamma()[i + 1, 0, :]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -605,9 +681,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         deriv = s.gammadash2()[0, 0, :]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = s.gamma()[0, i+1, :]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = s.gamma()[0, i + 1, :]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -628,9 +704,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         deriv = s.gammadash2dash2()[0, 0, :]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = s.gammadash2()[0, i+1, :]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = s.gammadash2()[0, i + 1, :]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -651,9 +727,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         deriv = s.gammadash1dash1()[0, 0, :]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = s.gammadash1()[i+1, 0, :]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = s.gammadash1()[i + 1, 0, :]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -675,9 +751,9 @@ class SurfaceTaylorTests(unittest.TestCase):
         deriv = s.gammadash1dash2()[0, 0, :]
         err_old = 1e6
         for i in range(len(epss)):
-            fh = s.gammadash1()[0, i+1, :]
-            deriv_est = (fh-f0)/epss[i]
-            err = np.linalg.norm(deriv_est-deriv)
+            fh = s.gammadash1()[0, i + 1, :]
+            deriv_est = (fh - f0) / epss[i]
+            err = np.linalg.norm(deriv_est - deriv)
             assert err < 0.55 * err_old
             err_old = err
 
@@ -693,7 +769,7 @@ class SurfaceTaylorTests(unittest.TestCase):
     def subtest_surface_conversion(self, surfacetype, stellsym):
         s = get_surface(surfacetype, stellsym)
         newsurf = s.to_RZFourier()
-        assert np.mean((s.gamma() - newsurf.gamma())**2) < 1e-5
+        assert np.mean((s.gamma() - newsurf.gamma()) ** 2) < 1e-5
 
     def test_surface_conversion(self):
         """

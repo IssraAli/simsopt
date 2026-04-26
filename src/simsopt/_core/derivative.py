@@ -2,7 +2,7 @@ import numpy as np
 import numbers
 import collections
 
-__all__ = ['Derivative']
+__all__ = ["Derivative"]
 
 
 class OptimizableDefaultDict(collections.defaultdict):
@@ -16,8 +16,9 @@ class OptimizableDefaultDict(collections.defaultdict):
 
     def __missing__(self, key):
         from .optimizable import Optimizable  # Import here to avoid circular import
+
         assert isinstance(key, Optimizable)
-        self[key] = value = np.zeros((key.local_full_dof_size, ))
+        self[key] = value = np.zeros((key.local_full_dof_size,))
         return value
 
 
@@ -29,7 +30,6 @@ def copy_numpy_dict(d):
 
 
 class Derivative:
-
     """
     This class stores the derivative of a scalar output wrt to the individual
     ``Optimizable`` classes that are required to compute this output.
@@ -72,7 +72,7 @@ class Derivative:
             inB: dobj/dinter1 * dinter1/dinB
         }
 
-    and 
+    and
 
     .. code-block::
 
@@ -181,6 +181,7 @@ class Derivative:
                            DOFs, and fixed ones are removed out.
         """
         from .optimizable import Optimizable  # Import here to avoid circular import
+
         assert isinstance(optim, Optimizable)
         derivs = []
 
@@ -231,4 +232,5 @@ def derivative_dec(func):
             return func(self, *args, **kwargs)
         else:
             return func(self, *args, **kwargs)(self)
+
     return _derivative_dec

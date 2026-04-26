@@ -3,9 +3,21 @@ import logging
 import numpy as np
 from pathlib import Path
 
-from simsopt.field.magneticfieldclasses import ToroidalField, PoloidalField, InterpolatedField, UniformInterpolationRule
-from simsopt.field.tracing import compute_fieldlines, particles_to_vtk, plot_poincare_data, \
-    MinRStoppingCriterion, MinZStoppingCriterion, MaxRStoppingCriterion, MaxZStoppingCriterion
+from simsopt.field.magneticfieldclasses import (
+    ToroidalField,
+    PoloidalField,
+    InterpolatedField,
+    UniformInterpolationRule,
+)
+from simsopt.field.tracing import (
+    compute_fieldlines,
+    particles_to_vtk,
+    plot_poincare_data,
+    MinRStoppingCriterion,
+    MinZStoppingCriterion,
+    MaxRStoppingCriterion,
+    MaxZStoppingCriterion,
+)
 from simsopt.field.biotsavart import BiotSavart
 from simsopt.configs.zoo import get_data
 from simsopt.field.coil import Coil, Current
@@ -26,36 +38,36 @@ def validate_phi_hits(phi_hits, nphis):
     Assert that we are hitting the phi planes in the correct order.
     For the toroidal field, we should always keep increasing in phi.
     """
-    for i in range(len(phi_hits)-1):
+    for i in range(len(phi_hits) - 1):
         this_idx = int(phi_hits[i][1])
-        next_idx = int(phi_hits[i+1][1])
+        next_idx = int(phi_hits[i + 1][1])
         if not next_idx == (this_idx + 1) % nphis:
             return False
     return True
 
 
 class FieldlineTesting(unittest.TestCase):
-
     def test_poincare_toroidal(self):
-        logger = logging.getLogger('simsopt.field.tracing')
+        logger = logging.getLogger("simsopt.field.tracing")
         logger.setLevel(1)
         # Test a toroidal magnetic field with no rotational transform
         R0test = 1.3
         B0test = 0.8
         Bfield = ToroidalField(R0test, B0test)
         nlines = 10
-        R0 = [1.1 + i*0.1 for i in range(nlines)]
+        R0 = [1.1 + i * 0.1 for i in range(nlines)]
         Z0 = [0 for i in range(nlines)]
         nphis = 10
-        phis = np.linspace(0, 2*np.pi, nphis, endpoint=False)
+        phis = np.linspace(0, 2 * np.pi, nphis, endpoint=False)
         res_tys, res_phi_hits = compute_fieldlines(
-            Bfield, R0, Z0, tmax=100, phis=phis, stopping_criteria=[])
+            Bfield, R0, Z0, tmax=100, phis=phis, stopping_criteria=[]
+        )
         for i in range(nlines):
-            assert np.allclose(res_tys[i][:, 3], 0.)
+            assert np.allclose(res_tys[i][:, 3], 0.0)
             assert np.allclose(np.linalg.norm(res_tys[i][:, 1:3], axis=1), R0[i])
             assert validate_phi_hits(res_phi_hits[i], nphis)
         if pyevtk is not None:
-            particles_to_vtk(res_tys, '/tmp/fieldlines')
+            particles_to_vtk(res_tys, "/tmp/fieldlines")
 
     def test_poincare_tokamak(self):
         # Test a simple circular tokamak geometry that
@@ -64,45 +76,65 @@ class FieldlineTesting(unittest.TestCase):
         R0test = 1.0
         B0test = 1.0
         qtest = 3.2
-        Bfield = ToroidalField(R0test, B0test)+PoloidalField(R0test, B0test, qtest)
+        Bfield = ToroidalField(R0test, B0test) + PoloidalField(R0test, B0test, qtest)
         nlines = 4
-        R0 = [1.05 + i*0.02 for i in range(nlines)]
+        R0 = [1.05 + i * 0.02 for i in range(nlines)]
         Z0 = [0 for i in range(nlines)]
         nphis = 4
-        phis = np.linspace(0, 2*np.pi, nphis, endpoint=False)
+        phis = np.linspace(0, 2 * np.pi, nphis, endpoint=False)
         res_tys, res_phi_hits = compute_fieldlines(
-            Bfield, R0, Z0, tmax=10, phis=phis, stopping_criteria=[])
+            Bfield, R0, Z0, tmax=10, phis=phis, stopping_criteria=[]
+        )
         # Check that Poincare plot is a circle in the R,Z plane with R centered at R0
-        rtest = [[np.sqrt((np.sqrt(res_tys[i][j][1]**2+res_tys[i][j][2]**2)-R0test)**2+res_tys[i][j][3]**2)-R0[i]+R0test for j in range(len(res_tys[i]))] for i in range(len(res_tys))]
-        assert [np.allclose(rtest[i], 0., rtol=1e-5, atol=1e-5) for i in range(nlines)]
+        rtest = [
+            [
+                np.sqrt(
+                    (np.sqrt(res_tys[i][j][1] ** 2 + res_tys[i][j][2] ** 2) - R0test)
+                    ** 2
+                    + res_tys[i][j][3] ** 2
+                )
+                - R0[i]
+                + R0test
+                for j in range(len(res_tys[i]))
+            ]
+            for i in range(len(res_tys))
+        ]
+        assert [np.allclose(rtest[i], 0.0, rtol=1e-5, atol=1e-5) for i in range(nlines)]
 
     def test_poincare_plot(self):
         base_curves, base_currents, ma, nfp, bs = get_data("ncsx")
-        TEST_DIR = (Path(__file__).parent / ".." / ".." / "tests"
-                    / "test_files").resolve()
-        surf = SurfaceRZFourier.from_focus(
-                   TEST_DIR / 'input.NCSX_c09r00_halfTeslaTF')
+        TEST_DIR = (
+            Path(__file__).parent / ".." / ".." / "tests" / "test_files"
+        ).resolve()
+        surf = SurfaceRZFourier.from_focus(TEST_DIR / "input.NCSX_c09r00_halfTeslaTF")
         n = 10
         rrange = (1.0, 1.9, n)
-        phirange = (0, 2*np.pi/nfp, n*2)
+        phirange = (0, 2 * np.pi / nfp, n * 2)
         zrange = (0, 0.4, n)
         bsh = InterpolatedField(
-            bs, UniformInterpolationRule(2),
-            rrange, phirange, zrange, True, nfp=nfp, stellsym=True
+            bs,
+            UniformInterpolationRule(2),
+            rrange,
+            phirange,
+            zrange,
+            True,
+            nfp=nfp,
+            stellsym=True,
         )
         nlines = 4
         r0 = np.linalg.norm(ma.gamma()[0, :2])
         z0 = ma.gamma()[0, 2]
-        R0 = [r0 + i*0.01 for i in range(nlines)]
+        R0 = [r0 + i * 0.01 for i in range(nlines)]
         Z0 = [z0 for i in range(nlines)]
         nphis = 4
-        phis = np.linspace(0, 2*np.pi/nfp, nphis, endpoint=False)
+        phis = np.linspace(0, 2 * np.pi / nfp, nphis, endpoint=False)
         res_tys, res_phi_hits = compute_fieldlines(
-            bsh, R0, Z0, tmax=1000, phis=phis, stopping_criteria=[])
+            bsh, R0, Z0, tmax=1000, phis=phis, stopping_criteria=[]
+        )
         try:
             import matplotlib  # noqa
-            plot_poincare_data(res_phi_hits, phis, '/tmp/fieldlines.png',
-                               surf=surf)
+
+            plot_poincare_data(res_phi_hits, phis, "/tmp/fieldlines.png", surf=surf)
         except ImportError:
             pass
 
@@ -112,9 +144,10 @@ class FieldlineTesting(unittest.TestCase):
         Z0 = [ma.gamma()[0, 2]]
         phis = np.arctan2(ma.gamma()[:, 1], ma.gamma()[:, 0])
         res_tys, res_phi_hits = compute_fieldlines(
-            bs, R0, Z0, tmax=10, phis=phis, stopping_criteria=[])
-        for i in range(len(phis)-1):
-            assert np.linalg.norm(ma.gamma()[i+1, :] - res_phi_hits[0][i, 2:5]) < 1e-4
+            bs, R0, Z0, tmax=10, phis=phis, stopping_criteria=[]
+        )
+        for i in range(len(phis) - 1):
+            assert np.linalg.norm(ma.gamma()[i + 1, :] - res_phi_hits[0][i, 2:5]) < 1e-4
 
     def test_poincare_caryhanson(self):
         # Test with a known magnetic field - optimized Cary & Hanson configuration
@@ -122,14 +155,17 @@ class FieldlineTesting(unittest.TestCase):
         # solver given a set of two helical coils created using the CurveHelical
         # class. The total magnetic field is a superposition of a helical and
         # a toroidal magnetic field.
-        curves = [CurveHelical(200, 1, 5, 2, 1., 0.3) for i in range(2)]
-        curves[0].x = [np.pi/ 2, 0.2841, 0]
+        curves = [CurveHelical(200, 1, 5, 2, 1.0, 0.3) for i in range(2)]
+        curves[0].x = [np.pi / 2, 0.2841, 0]
         curves[1].x = [0, 0, 0.2933]
         currents = [3.07e5, -3.07e5]
         Btoroidal = ToroidalField(1.0, 1.0)
-        Bhelical = BiotSavart([
-            Coil(curves[0], Current(currents[0])),
-            Coil(curves[1], Current(currents[1]))])
+        Bhelical = BiotSavart(
+            [
+                Coil(curves[0], Current(currents[0])),
+                Coil(curves[1], Current(currents[1])),
+            ]
+        )
         bs = Bhelical + Btoroidal
         ma = CurveXYZFourier(300, 1)
         magnetic_axis_radius = 0.9413
@@ -137,36 +173,53 @@ class FieldlineTesting(unittest.TestCase):
         R0 = [np.linalg.norm(ma.gamma()[0, :2])]
         Z0 = [ma.gamma()[0, 2]]
         phis = np.arctan2(ma.gamma()[:, 1], ma.gamma()[:, 0])
-        res_tys, res_phi_hits = compute_fieldlines(
-            bs, R0, Z0, tmax=2, phis=phis)
+        res_tys, res_phi_hits = compute_fieldlines(bs, R0, Z0, tmax=2, phis=phis)
         for i in range(len(res_phi_hits[0])):
-            assert np.linalg.norm(ma.gamma()[i+1, :] - res_phi_hits[0][i, 2:5]) < 2e-3
+            assert np.linalg.norm(ma.gamma()[i + 1, :] - res_phi_hits[0][i, 2:5]) < 2e-3
 
         # Text StoppingCriterion in R and Z
         # For each case, check that stopping criterion was met.
         # Check that R/Z is less than/greater than the maximum/minimum value.
         Rmax = 1
         res_tys, res_phi_hits = compute_fieldlines(
-            bs, [Rmax-0.02], [1], tmax=2000, stopping_criteria=[MaxRStoppingCriterion(Rmax)])
+            bs,
+            [Rmax - 0.02],
+            [1],
+            tmax=2000,
+            stopping_criteria=[MaxRStoppingCriterion(Rmax)],
+        )
         assert res_phi_hits[0][0, 1] == -1
-        assert np.all(np.sqrt(res_tys[0][:, 1]**2 + res_tys[0][:, 2]**2) < Rmax)
+        assert np.all(np.sqrt(res_tys[0][:, 1] ** 2 + res_tys[0][:, 2] ** 2) < Rmax)
 
         Rmin = 0.3
         res_tys, res_phi_hits = compute_fieldlines(
-            bs, [Rmin+0.02], [0.3], tmax=500, stopping_criteria=[MinRStoppingCriterion(Rmin)])
+            bs,
+            [Rmin + 0.02],
+            [0.3],
+            tmax=500,
+            stopping_criteria=[MinRStoppingCriterion(Rmin)],
+        )
         assert res_phi_hits[0][0, 1] == -1
-        assert np.all(np.sqrt(res_tys[0][:, 1]**2 + res_tys[0][:, 2]**2) > Rmin)
+        assert np.all(np.sqrt(res_tys[0][:, 1] ** 2 + res_tys[0][:, 2] ** 2) > Rmin)
 
         Zmin = -0.1
         res_tys, res_phi_hits = compute_fieldlines(
-            bs, [0.97], [Zmin+0.02], tmax=2000, stopping_criteria=[MinZStoppingCriterion(Zmin)]
+            bs,
+            [0.97],
+            [Zmin + 0.02],
+            tmax=2000,
+            stopping_criteria=[MinZStoppingCriterion(Zmin)],
         )
         assert res_phi_hits[0][0, 1] == -1
         assert np.all(res_tys[0][:, 3] > Zmin)
 
         Zmax = 0.5
         res_tys, res_phi_hits = compute_fieldlines(
-            bs, [0.5], [Zmax-0.02], tmax=2000, stopping_criteria=[MaxZStoppingCriterion(Zmax)]
+            bs,
+            [0.5],
+            [Zmax - 0.02],
+            tmax=2000,
+            stopping_criteria=[MaxZStoppingCriterion(Zmax)],
         )
         assert res_phi_hits[0][0, 1] == -1
         assert np.all(res_tys[0][:, 3] < Zmax)

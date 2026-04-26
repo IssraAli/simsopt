@@ -114,23 +114,22 @@ class GSONable:
     old_module.old_class: new_module.new_class
     """
 
-    REDIRECT = _load_redirect(
-        os.path.join(os.path.expanduser("~"), ".simsopt.yaml"))
+    REDIRECT = _load_redirect(os.path.join(os.path.expanduser("~"), ".simsopt.yaml"))
 
     def as_dict(self, serial_objs_dict):
         """
         A JSON serializable dict representation of an object.
         """
         name = getattr(self, "name", str(id(self)))
-        d = {"@module": self.__class__.__module__,
-             "@class": self.__class__.__name__,
-             "@name": name}
+        d = {
+            "@module": self.__class__.__module__,
+            "@class": self.__class__.__name__,
+            "@name": name,
+        }
 
         try:
-            parent_module = \
-                self.__class__.__module__.split(".", maxsplit=1)[0]
-            module_version = import_module(
-                parent_module).__version__  # type: ignore
+            parent_module = self.__class__.__module__.split(".", maxsplit=1)[0]
+            module_version = import_module(parent_module).__version__  # type: ignore
             d["@version"] = str(module_version)
         except (AttributeError, ImportError):
             d["@version"] = None  # type: ignore
@@ -148,7 +147,9 @@ class GSONable:
             if hasattr(obj, "as_dict"):
                 name = getattr(obj, "name", str(id(obj)))
                 if name not in serial_objs_dict:  # Add the path
-                    serial_obj = obj.as_dict(serial_objs_dict)  # serial_objs is modified in place
+                    serial_obj = obj.as_dict(
+                        serial_objs_dict
+                    )  # serial_objs is modified in place
                     serial_objs_dict[name] = serial_obj
                 return {"$type": "ref", "value": name}
             return obj
@@ -175,8 +176,7 @@ class GSONable:
         if hasattr(self, "kwargs"):
             # type: ignore
             d.update(**getattr(self, "kwargs"))  # pylint: disable=E1101
-        if spec.varargs is not None and getattr(self, spec.varargs,
-                                                None) is not None:
+        if spec.varargs is not None and getattr(self, spec.varargs, None) is not None:
             d.update({spec.varargs: getattr(self, spec.varargs)})
         if hasattr(self, "_kwargs"):
             d.update(**getattr(self, "_kwargs"))  # pylint: disable=E1101
@@ -189,6 +189,7 @@ class GSONable:
         This is a slightly modified version of as_dict method to deal with the cases
         where the supplied object itself needs to be added to serial_objs_dict.
         """
+
         def recursive_as_dict(obj):
             if isinstance(obj, (list, tuple)):
                 return [recursive_as_dict(it) for it in obj]
@@ -199,7 +200,9 @@ class GSONable:
             if hasattr(obj, "as_dict"):
                 name = getattr(obj, "name", str(id(obj)))
                 if name not in serial_objs_dict:  # Add the path
-                    serial_obj = obj.as_dict(serial_objs_dict)  # serial_objs is modified in place
+                    serial_obj = obj.as_dict(
+                        serial_objs_dict
+                    )  # serial_objs is modified in place
                     serial_objs_dict[name] = serial_obj
                 return {"$type": "ref", "value": name}
             return obj
@@ -212,8 +215,11 @@ class GSONable:
         :param d: Dict representation.
         :return: GSONable class.
         """
-        decoded = {k: GSONDecoder().process_decoded(v, serial_objs_dict, recon_objs) for k, v in
-                   d.items() if not k.startswith("@")}
+        decoded = {
+            k: GSONDecoder().process_decoded(v, serial_objs_dict, recon_objs)
+            for k, v in d.items()
+            if not k.startswith("@")
+        }
         return cls(**decoded)
 
     def to_json(self) -> str:
@@ -243,7 +249,8 @@ class GSONable:
             return new_obj
 
         raise ValueError(
-            f"Must provide {cls.__name__}, the as_dict form, or the proper")
+            f"Must provide {cls.__name__}, the as_dict form, or the proper"
+        )
 
     @classmethod
     def __modify_schema__(cls, field_schema):
@@ -295,14 +302,11 @@ class SIMSON:
         """
         A JSON serializable dict representation of an object.
         """
-        d = {"@module": self.__class__.__module__,
-             "@class": self.__class__.__name__}
+        d = {"@module": self.__class__.__module__, "@class": self.__class__.__name__}
 
         try:
-            parent_module = \
-                self.__class__.__module__.split(".", maxsplit=1)[0]
-            module_version = import_module(
-                parent_module).__version__  # type: ignore
+            parent_module = self.__class__.__module__.split(".", maxsplit=1)[0]
+            module_version = import_module(parent_module).__version__  # type: ignore
             d["@version"] = str(module_version)
         except (AttributeError, ImportError):
             d["@version"] = None  # type: ignore
@@ -320,7 +324,8 @@ class SIMSON:
                 name = getattr(obj, "name", str(id(obj)))
                 if name not in serial_objs_dict:  # Add the path
                     serial_obj = obj.as_dict(
-                        serial_objs_dict=serial_objs_dict)  # serial_objs is modified in place
+                        serial_objs_dict=serial_objs_dict
+                    )  # serial_objs is modified in place
                     serial_objs_dict[name] = serial_obj
                 return {"$type": "ref", "value": name}
             return obj
@@ -335,8 +340,7 @@ class SIMSON:
         serial_objs_dict = d["simsopt_objs"]
         gson_decoder = GSONDecoder()
         recon_objs = {}
-        return gson_decoder.process_decoded(
-            graph_subdict, serial_objs_dict, recon_objs)
+        return gson_decoder.process_decoded(graph_subdict, serial_objs_dict, recon_objs)
 
 
 class GSONEncoder(json.JSONEncoder):
@@ -361,8 +365,7 @@ class GSONEncoder(json.JSONEncoder):
             Python dict representation.
         """
         if isinstance(o, datetime.datetime):
-            return {"@module": "datetime", "@class": "datetime",
-                    "string": str(o)}
+            return {"@module": "datetime", "@class": "datetime", "string": str(o)}
         if isinstance(o, UUID):
             return {"@module": "uuid", "@class": "UUID", "string": str(o)}
 
@@ -391,21 +394,18 @@ class GSONEncoder(json.JSONEncoder):
                 return {
                     "@module": "pandas",
                     "@class": "DataFrame",
-                    "data": o.to_json(
-                        default_handler=GSONEncoder().encode),
+                    "data": o.to_json(default_handler=GSONEncoder().encode),
                 }
             if isinstance(o, pd.Series):
                 return {
                     "@module": "pandas",
                     "@class": "Series",
-                    "data": o.to_json(
-                        default_handler=GSONEncoder().encode),
+                    "data": o.to_json(default_handler=GSONEncoder().encode),
                 }
 
         if bson is not None:
             if isinstance(o, bson.objectid.ObjectId):
-                return {"@module": "bson.objectid", "@class": "ObjectId",
-                        "oid": str(o)}
+                return {"@module": "bson.objectid", "@class": "ObjectId", "oid": str(o)}
 
         if callable(o) and not isinstance(o, GSONable):
             return _serialize_callable(o)
@@ -422,8 +422,7 @@ class GSONEncoder(json.JSONEncoder):
             if "@version" not in d:
                 try:
                     parent_module = o.__class__.__module__.split(".")[0]
-                    module_version = import_module(
-                        parent_module).__version__  # type: ignore
+                    module_version = import_module(parent_module).__version__  # type: ignore
                     d["@version"] = str(module_version)
                 except (AttributeError, ImportError):
                     d["@version"] = None
@@ -455,18 +454,17 @@ class GSONDecoder(json.JSONDecoder):
                 if d["$type"] == "ref":
                     if d["value"] not in recon_objs:
                         sub_dict = serial_objs_dict[d["value"]]
-                        recon_obj = self.process_decoded(sub_dict,
-                                                         serial_objs_dict, recon_objs)
+                        recon_obj = self.process_decoded(
+                            sub_dict, serial_objs_dict, recon_objs
+                        )
                         recon_objs[d["value"]] = recon_obj
                     return recon_objs[d["value"]]
             if "@module" in d and "@class" in d:
                 modname = d["@module"]
                 classname = d["@class"]
                 if classname in GSONable.REDIRECT.get(modname, {}):
-                    modname = GSONable.REDIRECT[modname][classname][
-                        "@module"]
-                    classname = GSONable.REDIRECT[modname][classname][
-                        "@class"]
+                    modname = GSONable.REDIRECT[modname][classname]["@module"]
+                    classname = GSONable.REDIRECT[modname][classname]["@class"]
             elif "@module" in d and "@callable" in d:
                 modname = d["@module"]
                 objname = d["@callable"]
@@ -475,14 +473,16 @@ class GSONDecoder(json.JSONDecoder):
                     # if the function is bound to an instance or class, first
                     # deserialize the bound object and then remove the object name
                     # from the function name.
-                    obj = self.process_decoded(d["@bound"], serial_objs_dict=serial_objs_dict,
-                                               recon_objs=recon_objs)
+                    obj = self.process_decoded(
+                        d["@bound"],
+                        serial_objs_dict=serial_objs_dict,
+                        recon_objs=recon_objs,
+                    )
                     objname = objname.split(".")[1:]
                 else:
                     # if the function is not bound to an object, import the
                     # function from the module name
-                    obj = __import__(modname, globals(), locals(),
-                                     [objname], 0)
+                    obj = __import__(modname, globals(), locals(), [objname], 0)
                     objname = objname.split(".")
                 try:
                     # the function could be nested. e.g., MyClass.NestedClass.function
@@ -499,27 +499,25 @@ class GSONDecoder(json.JSONDecoder):
                 classname = None
 
             if classname:
-
-                if modname and modname not in ["bson.objectid", "numpy",
-                                               "pandas"]:
+                if modname and modname not in ["bson.objectid", "numpy", "pandas"]:
                     if modname == "datetime" and classname == "datetime":
                         try:
-                            dt = datetime.datetime.strptime(d["string"],
-                                                            "%Y-%m-%d %H:%M:%S.%f")
+                            dt = datetime.datetime.strptime(
+                                d["string"], "%Y-%m-%d %H:%M:%S.%f"
+                            )
                         except ValueError:
-                            dt = datetime.datetime.strptime(d["string"],
-                                                            "%Y-%m-%d %H:%M:%S")
+                            dt = datetime.datetime.strptime(
+                                d["string"], "%Y-%m-%d %H:%M:%S"
+                            )
                         return dt
 
                     if modname == "uuid" and classname == "UUID":
                         return UUID(d["string"])
 
-                    mod = __import__(modname, globals(), locals(),
-                                     [classname], 0)
+                    mod = __import__(modname, globals(), locals(), [classname], 0)
                     if hasattr(mod, classname):
                         cls_ = getattr(mod, classname)
-                        data = {k: v for k, v in d.items() if
-                                not k.startswith("@")}
+                        data = {k: v for k, v in d.items() if not k.startswith("@")}
                         if hasattr(cls_, "from_dict"):
                             obj = cls_.from_dict(data, serial_objs_dict, recon_objs)
                             if "@name" in d:
@@ -528,8 +526,10 @@ class GSONDecoder(json.JSONDecoder):
                 elif np is not None and modname == "numpy" and classname == "array":
                     if d["dtype"].startswith("complex"):
                         return np.array(
-                            [np.array(r) + np.array(i) * 1j for r, i in
-                             zip(*d["data"])],
+                            [
+                                np.array(r) + np.array(i) * 1j
+                                for r, i in zip(*d["data"])
+                            ],
                             dtype=d["dtype"],
                         )
                     return np.array(d["data"], dtype=d["dtype"])
@@ -541,11 +541,18 @@ class GSONDecoder(json.JSONDecoder):
                         decoded_data = GSONDecoder().decode(d["data"])
                         return pd.Series(decoded_data)
                 elif (
-                        bson is not None) and modname == "bson.objectid" and classname == "ObjectId":
+                    (bson is not None)
+                    and modname == "bson.objectid"
+                    and classname == "ObjectId"
+                ):
                     return bson.objectid.ObjectId(d["oid"])
 
-            return {self.process_decoded(k, serial_objs_dict, recon_objs): self.process_decoded(v, serial_objs_dict, recon_objs) for
-                    k, v in d.items()}
+            return {
+                self.process_decoded(
+                    k, serial_objs_dict, recon_objs
+                ): self.process_decoded(v, serial_objs_dict, recon_objs)
+                for k, v in d.items()
+            }
 
         if isinstance(d, list):
             return [self.process_decoded(x, serial_objs_dict, recon_objs) for x in d]
@@ -574,8 +581,14 @@ class GSONError(Exception):
     """
 
 
-def jsanitize(obj, strict=False, allow_bson=False, enum_values=False,
-              recursive_gsonable=False, serial_objs_dict=None):
+def jsanitize(
+    obj,
+    strict=False,
+    allow_bson=False,
+    enum_values=False,
+    recursive_gsonable=False,
+    serial_objs_dict=None,
+):
     """
     This method cleans an input json-like object, either a list or a dict or
     some sequence, nested or otherwise, by converting all non-string
@@ -606,16 +619,20 @@ def jsanitize(obj, strict=False, allow_bson=False, enum_values=False,
         return obj.value
 
     if allow_bson and (
-            isinstance(obj, (datetime.datetime, bytes)) or (
-            bson is not None and isinstance(obj, bson.objectid.ObjectId))
+        isinstance(obj, (datetime.datetime, bytes))
+        or (bson is not None and isinstance(obj, bson.objectid.ObjectId))
     ):
         return obj
     if isinstance(obj, (list, tuple)):
-        return [jsanitize(i, strict=strict, allow_bson=allow_bson,
-                          enum_values=enum_values) for i in obj]
+        return [
+            jsanitize(i, strict=strict, allow_bson=allow_bson, enum_values=enum_values)
+            for i in obj
+        ]
     if np is not None and isinstance(obj, np.ndarray):
-        return [jsanitize(i, strict=strict, allow_bson=allow_bson,
-                          enum_values=enum_values) for i in obj.tolist()]
+        return [
+            jsanitize(i, strict=strict, allow_bson=allow_bson, enum_values=enum_values)
+            for i in obj.tolist()
+        ]
     if np is not None and isinstance(obj, np.generic):
         return obj.item()
     if pd is not None and isinstance(obj, (pd.Series, pd.DataFrame)):
@@ -681,7 +698,8 @@ def _serialize_callable(o, serial_objs_dict={}):
                 bound = GSONEncoder().default(bound)
             except TypeError:
                 raise TypeError(
-                    "Only bound methods of classes or GSONable instances are supported.")
+                    "Only bound methods of classes or GSONable instances are supported."
+                )
 
     return {
         "@module": o.__module__,

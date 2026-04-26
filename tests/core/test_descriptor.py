@@ -2,8 +2,16 @@ from unittest import TestCase
 from dataclasses import dataclass
 from typing import Any
 
-from simsopt._core.descriptor import OneOf, OneofStrings, OneofIntegers, \
-    Float, Integer, String, PositiveInteger, PositiveFloat
+from simsopt._core.descriptor import (
+    OneOf,
+    OneofStrings,
+    OneofIntegers,
+    Float,
+    Integer,
+    String,
+    PositiveInteger,
+    PositiveFloat,
+)
 
 
 @dataclass
@@ -20,15 +28,15 @@ class OneOfTest(TestCase):
 
     def test_invalid_args(self):
         with self.assertRaises(ValueError):
-            OneOfTstComposite("three", 180)     # Invalid args
+            OneOfTstComposite("three", 180)  # Invalid args
         with self.assertRaises(ValueError):
-            OneOfTstComposite(a="PI", b=1)      # Opposite type args
+            OneOfTstComposite(a="PI", b=1)  # Opposite type args
         with self.assertRaises(ValueError):
             OneOfTstComposite(b="one", a="PI")  # Opposite order
         with self.assertRaises(ValueError):
-            OneOfTstComposite("1", "PI")        # Wrong option for one arg
+            OneOfTstComposite("1", "PI")  # Wrong option for one arg
         with self.assertRaises(ValueError):
-            OneOfTstComposite('two', 180)
+            OneOfTstComposite("two", 180)
 
 
 @dataclass
@@ -135,7 +143,9 @@ class OneofIntTest(TestCase):
         with self.assertRaises(TypeError):
             OneOfIntsComposite(1, "one")
         with self.assertRaises(TypeError):
-            OneOfIntsComposite(degree=2, flag="False")  # Note boolean gets converted to int
+            OneOfIntsComposite(
+                degree=2, flag="False"
+            )  # Note boolean gets converted to int
 
         with self.assertRaises(ValueError):
             OneOfIntsComposite(2, 4)  # Invalid args
@@ -156,8 +166,7 @@ class StrComposite:
     c: str = String(maxsize=8)
     d: str = String(minsize=5, maxsize=10)
     e: str = String(predicate=lambda x: x.isupper())
-    f: str = String(minsize=3, maxsize=8,
-                    predicate=lambda x: x.islower())
+    f: str = String(minsize=3, maxsize=8, predicate=lambda x: x.islower())
 
 
 class StrTests(TestCase):
@@ -201,10 +210,12 @@ class OneofStringTest(TestCase):
         with self.assertRaises(ValueError):
             OneOfStringsTstComposite("four", "boozer")  # Invalid args
         with self.assertRaises(ValueError):
-            OneOfStringsTstComposite(flag="cylindrical", coords="one")  # Opposite type args
+            OneOfStringsTstComposite(
+                flag="cylindrical", coords="one"
+            )  # Opposite type args
         with self.assertRaises(ValueError):
             OneOfStringsTstComposite(coords="two", flag="spherical")  # Opposite order
         with self.assertRaises(ValueError):
             OneOfStringsTstComposite("1", "cartesian")  # Wrong option for one arg
         with self.assertRaises(ValueError):
-            OneOfStringsTstComposite('two', "boozer")
+            OneOfStringsTstComposite("two", "boozer")

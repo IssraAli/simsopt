@@ -20,7 +20,7 @@ from .._core.util import ObjectiveFailure
 class Identity(Optimizable):
     """
     Represents a term in an objective function which is just
-    the identity. It has one degree of freedom. Conforms to the 
+    the identity. It has one degree of freedom. Conforms to the
     graph based Optimizable framework.
 
     The output of the method `f` is equal to this degree of freedom.
@@ -33,13 +33,8 @@ class Identity(Optimizable):
         dof_fixed: To specify if the dof is fixed
     """
 
-    def __init__(self,
-                 x: Real = 0.0,
-                 dof_name: str = None,
-                 dof_fixed: bool = False):
-        super().__init__([x],
-                         [dof_name] if dof_name is not None else None,
-                         [dof_fixed])
+    def __init__(self, x: Real = 0.0, dof_name: str = None, dof_fixed: bool = False):
+        super().__init__([x], [dof_name] if dof_name is not None else None, [dof_fixed])
 
     def f(self):
         """
@@ -55,7 +50,7 @@ class Identity(Optimizable):
                 self.x = x
         return np.array([1.0])
 
-    return_fn_map = {'f': f}
+    return_fn_map = {"f": f}
 
     def as_dict(self, serial_objs_dict: dict) -> dict:
         d = {}
@@ -109,7 +104,7 @@ class Adder(Optimizable):
         """
         return self.dJ()
 
-    return_fn_map = {'sum': sum}
+    return_fn_map = {"sum": sum}
 
 
 class Rosenbrock(Optimizable):
@@ -174,7 +169,7 @@ class Rosenbrock(Optimizable):
         t2 = self.term2
         return t1 * t1 + t2 * t2
 
-    return_fn_map = {'f': f}
+    return_fn_map = {"f": f}
 
     @property
     def terms(self):
@@ -187,8 +182,9 @@ class Rosenbrock(Optimizable):
         """
         Returns the 2x2 Jacobian for term1 and term2.
         """
-        return np.array([[1.0, 0.0],
-                         [2 * self.local_full_x['x'] / self._sqrtb, -1.0 / self._sqrtb]])
+        return np.array(
+            [[1.0, 0.0], [2 * self.local_full_x["x"] / self._sqrtb, -1.0 / self._sqrtb]]
+        )
 
     @property
     def b(self):
@@ -208,25 +204,24 @@ class TestObject1(Optimizable):
               added as parents
     """
 
-    def __init__(self, x0: Real, depends_on: Sequence[Optimizable] = None,
-                 **kwargs):
+    def __init__(self, x0: Real, depends_on: Sequence[Optimizable] = None, **kwargs):
         if depends_on is None:
             depends_on = [Adder(3), Adder(2)]
         if isinstance(x0, Number):
             x0 = [x0]
         if "names" not in kwargs:
             kwargs["names"] = ["val"]
-        super().__init__(x0=x0, depends_on=depends_on,
-                         **kwargs)
+        super().__init__(x0=x0, depends_on=depends_on, **kwargs)
 
     def f(self):
         """
         Implements an objective function
         """
-        return (self.local_full_x[0] + 2 * self.parents[0]()) / \
-               (10.0 + self.parents[1]())
+        return (self.local_full_x[0] + 2 * self.parents[0]()) / (
+            10.0 + self.parents[1]()
+        )
 
-    return_fn_map = {'f': f}
+    return_fn_map = {"f": f}
 
     def dJ(self):
         """
@@ -236,9 +231,12 @@ class TestObject1(Optimizable):
         a1 = self.parents[0]()
         a2 = self.parents[1]()
         return np.concatenate(
-            (np.array([1.0 / (10.0 + a2)]),
-             np.full(self.parents[0].n, 2.0 / (10.0 + a2)),
-             np.full(self.parents[1].n, -(v + 2 * a1) / ((10.0 + a2) ** 2))))
+            (
+                np.array([1.0 / (10.0 + a2)]),
+                np.full(self.parents[0].n, 2.0 / (10.0 + a2)),
+                np.full(self.parents[1].n, -(v + 2 * a1) / ((10.0 + a2) ** 2)),
+            )
+        )
 
     @property
     def depends_on(self):
@@ -266,7 +264,7 @@ class Affine(Optimizable):
     def f(self):
         return np.matmul(self.A, self.full_x) + self.B
 
-    return_fn_map = {'f': f}
+    return_fn_map = {"f": f}
 
     def dJ(self):
         return self.A
@@ -285,10 +283,7 @@ class Failer(Optimizable):
         fail_index: Which function evaluation to fail on.
     """
 
-    def __init__(self,
-                 nparams: int = 2,
-                 nvals: int = 3,
-                 fail_index: int = 2):
+    def __init__(self, nparams: int = 2, nvals: int = 3, fail_index: int = 2):
         self.nparams = nparams
         self.nvals = nvals
         self.fail_index = fail_index
@@ -329,6 +324,6 @@ class Beale(Optimizable):
     def J(self):
         x = self.local_full_x[0]
         y = self.local_full_x[1]
-        return np.array([1.5 - x + x * y,
-                         2.25 - x + x * y * y,
-                         2.625 - x + x * y * y * y])
+        return np.array(
+            [1.5 - x + x * y, 2.25 - x + x * y * y, 2.625 - x + x * y * y * y]
+        )

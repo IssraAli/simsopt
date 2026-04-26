@@ -20,7 +20,7 @@ from .._core.optimizable import Optimizable
 from .._core.util import ObjectiveFailure
 from .._core.types import RealArray
 
-__all__ = ['LeastSquaresProblem']
+__all__ = ["LeastSquaresProblem"]
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ StrSeq = Union[Sequence, Sequence[Sequence[str]]]
 
 class LeastSquaresProblem(Optimizable):
     """
-    Represents a nonlinear-least-squares problem implemented using the 
+    Represents a nonlinear-least-squares problem implemented using the
     graph based optimization framework. A LeastSquaresProblem instance has
     3 basic attributes: a set of functions (`f_in`), target values for each
     of the functions (`goal`), and weights.  The residual
@@ -51,20 +51,22 @@ class LeastSquaresProblem(Optimizable):
                 object
     """
 
-    def __init__(self,
-                 goals: Union[Real, RealArray],
-                 weights: Union[Real, RealArray],
-                 funcs_in: Sequence[Callable] = None,
-                 depends_on: Union[Optimizable, Sequence[Optimizable]] = None,
-                 opt_return_fns: StrSeq = None,
-                 fail: Union[None, float] = 1.0e12):
+    def __init__(
+        self,
+        goals: Union[Real, RealArray],
+        weights: Union[Real, RealArray],
+        funcs_in: Sequence[Callable] = None,
+        depends_on: Union[Optimizable, Sequence[Optimizable]] = None,
+        opt_return_fns: StrSeq = None,
+        fail: Union[None, float] = 1.0e12,
+    ):
 
         if isinstance(goals, Real):
             goals = [goals]
         if isinstance(weights, Real):
             weights = [weights]
         if np.any(np.asarray(weights) < 0):
-            raise ValueError('Weight cannot be negative')
+            raise ValueError("Weight cannot be negative")
         self.goals = np.asarray(goals)
         self.inp_weights = np.asarray(weights)
         self.fail = fail
@@ -79,17 +81,20 @@ class LeastSquaresProblem(Optimizable):
                 if opt_return_fns is not None:
                     opt_return_fns = [opt_return_fns]
 
-        super().__init__(depends_on=depends_on, opt_return_fns=opt_return_fns,
-                         funcs_in=funcs_in)
+        super().__init__(
+            depends_on=depends_on, opt_return_fns=opt_return_fns, funcs_in=funcs_in
+        )
 
     @classmethod
-    def from_sigma(cls,
-                   goals: Union[Real, RealArray],
-                   sigma: Union[Real, RealArray],
-                   funcs_in: Sequence[Callable] = None,
-                   depends_on: Union[Optimizable, Sequence[Optimizable]] = None,
-                   opt_return_fns: StrSeq = None,
-                   fail: Union[None, float] = 1.0e12) -> LeastSquaresProblem:
+    def from_sigma(
+        cls,
+        goals: Union[Real, RealArray],
+        sigma: Union[Real, RealArray],
+        funcs_in: Sequence[Callable] = None,
+        depends_on: Union[Optimizable, Sequence[Optimizable]] = None,
+        opt_return_fns: StrSeq = None,
+        fail: Union[None, float] = 1.0e12,
+    ) -> LeastSquaresProblem:
         r"""
         Define the LeastSquaresProblem with
 
@@ -110,20 +115,25 @@ class LeastSquaresProblem(Optimizable):
                 object
         """
         if np.any(np.array(sigma) == 0):
-            raise ValueError('sigma cannot be 0')
+            raise ValueError("sigma cannot be 0")
         if not isinstance(sigma, Real):
             sigma = np.array(sigma)
 
-        return cls(goals, 1.0 / (sigma * sigma),
-                   depends_on=depends_on,
-                   opt_return_fns=opt_return_fns,
-                   funcs_in=funcs_in,
-                   fail=fail)
+        return cls(
+            goals,
+            1.0 / (sigma * sigma),
+            depends_on=depends_on,
+            opt_return_fns=opt_return_fns,
+            funcs_in=funcs_in,
+            fail=fail,
+        )
 
     @classmethod
-    def from_tuples(cls,
-                    tuples: Sequence[Tuple[Callable, Real, Real]],
-                    fail: Union[None, float] = 1.0e12) -> LeastSquaresProblem:
+    def from_tuples(
+        cls,
+        tuples: Sequence[Tuple[Callable, Real, Real]],
+        fail: Union[None, float] = 1.0e12,
+    ) -> LeastSquaresProblem:
         """
         Initializes graph based LeastSquaresProblem from a sequence of tuples
         containing *f_in*, *goal*, and *weight*.
@@ -213,14 +223,15 @@ class LeastSquaresProblem(Optimizable):
         logger.info(f"objective(): {s}")
         return s
 
-    return_fn_map = {'residuals': residuals, 'objective': objective}
+    return_fn_map = {"residuals": residuals, "objective": objective}
 
     def __add__(self, other: LeastSquaresProblem) -> LeastSquaresProblem:
         return LeastSquaresProblem(
             np.concatenate([self.goals, other.goals]),
             np.concatenate([self.inp_weights, other.inp_weights]),
             depends_on=(self.parents + other.parents),
-            opt_return_fns=(self.get_parent_return_fns_list() +
-                            other.get_parent_return_fns_list()),
-            fail=max(self.fail, other.fail)
+            opt_return_fns=(
+                self.get_parent_return_fns_list() + other.get_parent_return_fns_list()
+            ),
+            fail=max(self.fail, other.fail),
         )

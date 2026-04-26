@@ -19,23 +19,23 @@ from .._core.optimizable import Optimizable
 from .._core.util import ObjectiveFailure
 from .._core.types import RealArray
 
-__all__ = ['ConstrainedProblem']
+__all__ = ["ConstrainedProblem"]
 
 logger = logging.getLogger(__name__)
 
 
 class ConstrainedProblem(Optimizable):
     """
-    Represents a nonlinear, constrained optimization problem implemented using the 
+    Represents a nonlinear, constrained optimization problem implemented using the
     graph based optimization framework. A ``ConstrainedProblem`` instance has
-    4 basic attributes: an objective, nonlinear constraints, 
+    4 basic attributes: an objective, nonlinear constraints,
     linear constraints, and bound constraints. Problems take the general form:
 
         .. math::
 
-            \\min_x f(x) 
+            \\min_x f(x)
 
-            \\text{s.t.} 
+            \\text{s.t.}
 
             l_{\\text{nlc}} \\leq c(x) \\leq u_{\\text{nlc}}
 
@@ -45,35 +45,39 @@ class ConstrainedProblem(Optimizable):
     ``constrained_serial_solve`` functions. Typically, this class is used for Stage-I optimization.
 
     Whereas linear and nonlinear constraints are passed as arguments to this class, bound constraints
-    should be specified directly through the Optimizable objects. For instance, with an optimizable 
-    object ``v`` we can set the upper bounds of the free DOFs associated with the current Optimizable object 
-    and those of its ancestors via ``v.upper_bounds = ub`` where ``ub`` is a 1d-array. 
+    should be specified directly through the Optimizable objects. For instance, with an optimizable
+    object ``v`` we can set the upper bounds of the free DOFs associated with the current Optimizable object
+    and those of its ancestors via ``v.upper_bounds = ub`` where ``ub`` is a 1d-array.
     To set the upper bounds on the free dofs of a single optimizable object (and not
     it's ancestors) use ``v.local_upper_bounds = ub``.
     The upper bound of a single dof can be set with ``v.set_upper_bound(dof_name,value)``.
 
     Args:
         f_obj (Callable): objective function handle (generally a method of an Optimizable instance)
-        tuples_nlc (list): Nonlinear constraints as a sequence of triples containing 
+        tuples_nlc (list): Nonlinear constraints as a sequence of triples containing
             the nonlinear constraint function, :math:`c`, with lower and upper bounds
             i.e. ``[(c,l_{nlc},u_{nlc}), ...]``.
-            Each constraint handle, :math:`c`, can be scalar-valued or be vector valued. Similarly, 
+            Each constraint handle, :math:`c`, can be scalar-valued or be vector valued. Similarly,
             the constraint bounds :math:`l_{\\text{nlc}}`, :math:`u_{\\text{nlc}}` can be scalars or 1d-arrays.
-            Use ``+-np.inf`` to indicate unbounded components, and define equality constraints 
+            Use ``+-np.inf`` to indicate unbounded components, and define equality constraints
             by using equal upper and lower bounds.
         tuple_lc (tuple): A tuple containing the matrix :math:`A`, lower and upper bounds, for the linear
             constraints i.e. :math:`(A, l_{\\text{lc}}, u_{\\text{lc}})`. Constraint bounds can be 1d-arrays or scalars.
-            Use ``+-np.inf`` in the bounds to indicate unbounded components, define equality constraints 
+            Use ``+-np.inf`` in the bounds to indicate unbounded components, define equality constraints
             by using equal upper and lower bounds.
         fail (float, optional): If an objective or nonlinear constraint evaluation fails, the value returned
             is set to this value.
     """
 
-    def __init__(self,
-                 f_obj: Callable,
-                 tuples_nlc: Sequence[Tuple[Callable, Real, Real]] = None,
-                 tuple_lc: Tuple[RealArray, Union[RealArray, Real], Union[RealArray, Real]] = None,
-                 fail: Optional[float] = 1.0e12):
+    def __init__(
+        self,
+        f_obj: Callable,
+        tuples_nlc: Sequence[Tuple[Callable, Real, Real]] = None,
+        tuple_lc: Tuple[
+            RealArray, Union[RealArray, Real], Union[RealArray, Real]
+        ] = None,
+        fail: Optional[float] = 1.0e12,
+    ):
 
         self.fail = fail
 
@@ -96,8 +100,12 @@ class ConstrainedProblem(Optimizable):
         # unpack the linear constraints
         if tuple_lc:
             self.A_lc = np.asarray(tuple_lc[0])
-            self.l_lc = np.asarray(tuple_lc[1]) if np.ndim(tuple_lc[1]) else float(tuple_lc[1])
-            self.u_lc = np.asarray(tuple_lc[2]) if np.ndim(tuple_lc[2]) else float(tuple_lc[2])
+            self.l_lc = (
+                np.asarray(tuple_lc[1]) if np.ndim(tuple_lc[1]) else float(tuple_lc[1])
+            )
+            self.u_lc = (
+                np.asarray(tuple_lc[2]) if np.ndim(tuple_lc[2]) else float(tuple_lc[2])
+            )
             self.has_lc = True
         else:
             self.has_lc = False
@@ -134,10 +142,9 @@ class ConstrainedProblem(Optimizable):
             # No nonlinear constraints to evaluate
             raise RuntimeError
 
-        if (self.constraint_cache is None):
+        if self.constraint_cache is None:
             outputs = []
             for i, fn in enumerate(fn_nlc):
-
                 try:
                     out = fn(*args, **kwargs)
                 except ObjectiveFailure:
@@ -201,7 +208,7 @@ class ConstrainedProblem(Optimizable):
             self.objective_cache = None
             self.constraint_cache = None
 
-        if (self.objective_cache is None):
+        if self.objective_cache is None:
             fn = self.funcs_in[0]
             try:
                 out = fn(*args, **kwargs)
@@ -231,7 +238,7 @@ class ConstrainedProblem(Optimizable):
             kwargs: Keyword arguments passed to the objective and nonlinear constraint functions.
 
         Returns:
-            Array containing the objective and nonlinear constraints, ordered as 
+            Array containing the objective and nonlinear constraints, ordered as
             :math:`[f(x), l_{\\text{nlc}} - c(x), c(x) - u_{\\text{nlc}},...]`
         """
         f_obj = self.objective(x, *args, **kwargs)

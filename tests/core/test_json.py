@@ -12,6 +12,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -23,6 +24,7 @@ import unittest
 from enum import Enum
 
 import numpy as np
+
 try:
     import pandas as pd
 except ImportError:
@@ -32,7 +34,14 @@ try:
 except ImportError:
     ObjectId = None
 
-from simsopt._core.json import GSONDecoder, GSONEncoder, GSONable, _load_redirect, jsanitize, SIMSON
+from simsopt._core.json import (
+    GSONDecoder,
+    GSONEncoder,
+    GSONable,
+    _load_redirect,
+    jsanitize,
+    SIMSON,
+)
 
 test_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "test_files")
 
@@ -218,12 +227,15 @@ class GSONableTest(unittest.TestCase):
                 "list5": [GGC(15, 15.0, "fifteen")],
             },
         ]
-        obj = GoodNestedGSONClass(a_list=a_list, b_dict=b_dict, c_list_dict_list=c_list_dict_list)
+        obj = GoodNestedGSONClass(
+            a_list=a_list, b_dict=b_dict, c_list_dict_list=c_list_dict_list
+        )
 
         serial_objs_dict = {}
         obj_dict = obj.as_dict(serial_objs_dict=serial_objs_dict)
-        obj2 = GoodNestedGSONClass.from_dict(obj_dict, serial_objs_dict=serial_objs_dict,
-                                             recon_objs={})
+        obj2 = GoodNestedGSONClass.from_dict(
+            obj_dict, serial_objs_dict=serial_objs_dict, recon_objs={}
+        )
         self.assertTrue([obj2.a_list[ii] == aa for ii, aa in enumerate(obj.a_list)])
         self.assertTrue([obj2.b_dict[kk] == val for kk, val in obj.b_dict.items()])
         self.assertEqual(len(obj.a_list), len(obj2.a_list))
@@ -315,7 +327,9 @@ class SIMSONTest(unittest.TestCase):
                 "list5": [GGC(15, 15.0, "fifteen")],
             },
         ]
-        obj = GoodNestedGSONClass(a_list=a_list, b_dict=b_dict, c_list_dict_list=c_list_dict_list)
+        obj = GoodNestedGSONClass(
+            a_list=a_list, b_dict=b_dict, c_list_dict_list=c_list_dict_list
+        )
 
         s = json.dumps(SIMSON(obj), cls=GSONEncoder)
         obj4 = json.loads(s, cls=GSONDecoder)
@@ -427,7 +441,9 @@ class JsonTest(unittest.TestCase):
         d = json.loads(djson)
         self.assertEqual(d["@class"], "array")
         self.assertEqual(d["@module"], "numpy")
-        self.assertEqual(d["data"], [[[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]]])
+        self.assertEqual(
+            d["data"], [[[1.0, 2.0], [3.0, 4.0]], [[1.0, 1.0], [1.0, 1.0]]]
+        )
         self.assertEqual(d["dtype"], "complex64")
         x = json.loads(djson, cls=GSONDecoder)
         self.assertEqual(type(x), np.ndarray)
@@ -451,7 +467,9 @@ class JsonTest(unittest.TestCase):
     @unittest.skipIf(pd is None, "Pandas not found")
     def test_pandas(self):
 
-        cls = ClassContainingDataFrame(df=pd.DataFrame([{"a": 1, "b": 1}, {"a": 1, "b": 2}]))
+        cls = ClassContainingDataFrame(
+            df=pd.DataFrame([{"a": 1, "b": 1}, {"a": 1, "b": 2}])
+        )
 
         json_str = GSONEncoder().encode(SIMSON(cls))
         obj = json.loads(json_str, cls=GSONDecoder)
@@ -467,7 +485,9 @@ class JsonTest(unittest.TestCase):
         self.assertIsInstance(obj.s, pd.Series)
         self.assertEqual(list(obj.s.a), [1, 2, 3])
 
-        cls = ClassContainingSeries(s={"df": [pd.Series({"a": [1, 2, 3], "b": [4, 5, 6]})]})
+        cls = ClassContainingSeries(
+            s={"df": [pd.Series({"a": [1, 2, 3], "b": [4, 5, 6]})]}
+        )
 
         json_str = GSONEncoder().encode(SIMSON(cls))
         obj = json.loads(json_str, cls=GSONDecoder)
@@ -634,7 +654,9 @@ class JsonTest(unittest.TestCase):
         self.assertEqual(clean, s.to_dict())
 
     def test_redirect(self):
-        GSONable.REDIRECT["core.test_json"] = {"test_class": {"@class": "GoodGSONClass", "@module": "core.test_json"}}
+        GSONable.REDIRECT["core.test_json"] = {
+            "test_class": {"@class": "GoodGSONClass", "@module": "core.test_json"}
+        }
 
         d = {
             "@class": "test_class",
@@ -655,7 +677,11 @@ class JsonTest(unittest.TestCase):
         data = _load_redirect(os.path.join(test_dir, "test_settings.yaml"))
         self.assertEqual(
             data,
-            {"old_module": {"old_class": {"@class": "new_class", "@module": "new_module"}}},
+            {
+                "old_module": {
+                    "old_class": {"@class": "new_class", "@module": "new_module"}
+                }
+            },
         )
 
 

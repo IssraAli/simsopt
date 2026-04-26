@@ -9,7 +9,7 @@ from .._core.util import RealArray
 import simsoptpp as sopp
 from simsopt.geo.curve import Curve
 
-__all__ = ['GaussianSampler', 'PerturbationSample', 'CurvePerturbed']
+__all__ = ["GaussianSampler", "PerturbationSample", "CurvePerturbed"]
 
 
 @dataclass
@@ -52,22 +52,27 @@ class GaussianSampler(GSONable):
     def __post_init__(self):
         xs = self.points
         n = len(xs)
-        cov_mat = np.zeros((n*(self.n_derivs+1), n*(self.n_derivs+1)))
+        cov_mat = np.zeros((n * (self.n_derivs + 1), n * (self.n_derivs + 1)))
 
         def kernel(x, y):
-            return sum((self.sigma**2)*exp(-(x-y+i)**2/(self.length_scale**2)) for i in range(-5, 6))
+            return sum(
+                (self.sigma**2) * exp(-((x - y + i) ** 2) / (self.length_scale**2))
+                for i in range(-5, 6)
+            )
 
-        XX, YY = np.meshgrid(xs, xs, indexing='ij')
+        XX, YY = np.meshgrid(xs, xs, indexing="ij")
         x = Symbol("x")
         y = Symbol("y")
         f = kernel(x, y)
-        for ii in range(self.n_derivs+1):
-            for jj in range(self.n_derivs+1):
+        for ii in range(self.n_derivs + 1):
+            for jj in range(self.n_derivs + 1):
                 if ii + jj == 0:
                     lam = lambdify((x, y), f, "numpy")
                 else:
                     lam = lambdify((x, y), f.diff(*(ii * [x] + jj * [y])), "numpy")
-                cov_mat[(ii*n):((ii+1)*n), (jj*n):((jj+1)*n)] = lam(XX, YY)
+                cov_mat[(ii * n) : ((ii + 1) * n), (jj * n) : ((jj + 1) * n)] = lam(
+                    XX, YY
+                )
 
         # we need to compute the sqrt of the covariance matrix. we used to do this using scipy.linalg.sqrtm,
         # but it seems sometime between scipy 1.11.1 and 1.11.2 that function broke/changed behaviour.
@@ -75,6 +80,7 @@ class GaussianSampler(GSONable):
         # from scipy.linalg import sqrtm, ldl
         # self.L = np.real(sqrtm(cov_mat))
         from scipy.linalg import ldl
+
         lu, d, _ = ldl(cov_mat)
         self.L = lu @ np.sqrt(np.maximum(d, 0))
 
@@ -87,9 +93,11 @@ class GaussianSampler(GSONable):
         n_derivs = self.n_derivs
         if randomgen is None:
             randomgen = np.random.Generator(np.random.PCG64DXSM())
-        z = randomgen.standard_normal(size=(n*(n_derivs+1), 3))
-        curve_and_derivs = self.L@z
-        return [curve_and_derivs[(i*n):((i+1)*n), :] for i in range(n_derivs+1)]
+        z = randomgen.standard_normal(size=(n * (n_derivs + 1), 3))
+        curve_and_derivs = self.L @ z
+        return [
+            curve_and_derivs[(i * n) : ((i + 1) * n), :] for i in range(n_derivs + 1)
+        ]
 
 
 class PerturbationSample(GSONable):
@@ -109,7 +117,7 @@ class PerturbationSample(GSONable):
 
     def __init__(self, sampler, randomgen=None, sample=None):
         self.sampler = sampler
-        self.randomgen = randomgen   # If not None, most likely fail with serialization
+        self.randomgen = randomgen  # If not None, most likely fail with serialization
         if sample:
             self._sample = sample
         else:
@@ -132,7 +140,6 @@ Adjust the `n_derivs` parameter of the sampler to access higher derivatives.
 
 
 class CurvePerturbed(sopp.Curve, Curve):
-
     """A perturbed curve."""
 
     def __init__(self, curve, sample):

@@ -19,7 +19,12 @@ from simsopt._core.optimizable import make_optimizable
 from simsopt.objectives.least_squares import LeastSquaresProblem
 from simsopt.geo import SurfaceRZFourier, create_equally_spaced_curves
 from simsopt.field import Current, BiotSavart, coils_via_symmetries
-from simsopt.mhd.profiles import ProfilePolynomial, ProfileSpline, ProfileScaled, ProfilePressure
+from simsopt.mhd.profiles import (
+    ProfilePolynomial,
+    ProfileSpline,
+    ProfileScaled,
+    ProfilePressure,
+)
 from simsopt.solve.serial import least_squares_serial_solve
 from simsopt.util.constants import ELEMENTARY_CHARGE
 
@@ -28,7 +33,7 @@ from simsopt.mhd.vmec import Vmec
 from . import TEST_DIR
 
 logger = logging.getLogger(__name__)
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 
 def netcdf_to_str(arr):
@@ -37,7 +42,7 @@ def netcdf_to_str(arr):
     loaded as a numpy array of bytestrings. This function converts
     them to standard python strings.
     """
-    return ''.join(x.decode() for x in arr)
+    return "".join(x.decode() for x in arr)
 
 
 class InitializedFromWout(unittest.TestCase):
@@ -54,7 +59,9 @@ class InitializedFromWout(unittest.TestCase):
         are correct.
 
         """
-        filename = os.path.join(TEST_DIR, 'wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc')
+        filename = os.path.join(
+            TEST_DIR, "wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc"
+        )
         vmec = Vmec(filename)
 
         well_vmec = vmec.vacuum_well()
@@ -70,16 +77,20 @@ class InitializedFromWout(unittest.TestCase):
         d2_volume_d_psi2 = 25.3041656424299
 
         # See also "20210504-01 Computing magnetic well from VMEC.docx" by MJL
-        well_analytic = -abs_psi_a * B0 * B0 * d2_volume_d_psi2 / (4 * np.pi * np.pi * np.abs(G0))
+        well_analytic = (
+            -abs_psi_a * B0 * B0 * d2_volume_d_psi2 / (4 * np.pi * np.pi * np.abs(G0))
+        )
 
-        logger.info(f'well_vmec: {well_vmec}  well_analytic: {well_analytic}')
+        logger.info(f"well_vmec: {well_vmec}  well_analytic: {well_analytic}")
         np.testing.assert_allclose(well_vmec, well_analytic, rtol=2e-2, atol=0)
 
     def test_iota(self):
         """
         Test the functions related to iota.
         """
-        filename = os.path.join(TEST_DIR, 'wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc')
+        filename = os.path.join(
+            TEST_DIR, "wout_LandremanSengupta2019_section5.4_B2_A80_reference.nc"
+        )
         vmec = Vmec(filename)
 
         iota_axis = vmec.iota_axis()
@@ -103,7 +114,10 @@ class InitializedFromWout(unittest.TestCase):
         """
         Test the external_current() function.
         """
-        filename = os.path.join(TEST_DIR, 'wout_20220102-01-053-003_QH_nfp4_aspect6p5_beta0p05_iteratedWithSfincs_reference.nc')
+        filename = os.path.join(
+            TEST_DIR,
+            "wout_20220102-01-053-003_QH_nfp4_aspect6p5_beta0p05_iteratedWithSfincs_reference.nc",
+        )
         vmec = Vmec(filename)
         bsubvmnc = 1.5 * vmec.wout.bsubvmnc[0, -1] - 0.5 * vmec.wout.bsubvmnc[0, -2]
         mu0 = 4 * np.pi * (1.0e-7)
@@ -126,13 +140,17 @@ class InitializedFromWout(unittest.TestCase):
         R0 = 5.5
         R1 = 1.25
         order = 6
-        filename = 'wout_W7-X_without_coil_ripple_beta0p05_d23p4_tm_reference.nc'
+        filename = "wout_W7-X_without_coil_ripple_beta0p05_d23p4_tm_reference.nc"
         vmec_file = TEST_DIR / filename
         vmec = Vmec(vmec_file)
         s = vmec.boundary
         total_current = vmec.external_current() / (2 * s.nfp)
-        base_curves = create_equally_spaced_curves(ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order, numquadpoints=128)
-        base_currents = [Current(total_current / ncoils * 1e-5) * 1e5 for _ in range(ncoils-1)]
+        base_curves = create_equally_spaced_curves(
+            ncoils, s.nfp, stellsym=True, R0=R0, R1=R1, order=order, numquadpoints=128
+        )
+        base_currents = [
+            Current(total_current / ncoils * 1e-5) * 1e5 for _ in range(ncoils - 1)
+        ]
         total_current = Current(total_current)
         total_current.fix_all()
         base_currents += [total_current - sum(base_currents)]
@@ -150,7 +168,7 @@ class InitializedFromWout(unittest.TestCase):
         are then changed, vmec output functions should raise an
         exception.
         """
-        filename = os.path.join(TEST_DIR, 'wout_li383_low_res_reference.nc')
+        filename = os.path.join(TEST_DIR, "wout_li383_low_res_reference.nc")
         vmec = Vmec(filename)
         _ = vmec.mean_iota()
         vmec.boundary.set_rc(1, 0, 2.0)
@@ -158,7 +176,9 @@ class InitializedFromWout(unittest.TestCase):
             vmec.mean_iota()
 
 
-@unittest.skipIf((MPI is not None) and (vmec_mod is not None), "Interface to MPI and VMEC found")
+@unittest.skipIf(
+    (MPI is not None) and (vmec_mod is not None), "Interface to MPI and VMEC found"
+)
 class VmecTestsWithoutMPIorvmec(unittest.TestCase):
     def test_runnable_raises(self):
         """
@@ -166,11 +186,14 @@ class VmecTestsWithoutMPIorvmec(unittest.TestCase):
         input file without vmec or MPI
         """
         from simsopt.mhd.vmec import Vmec
+
         with self.assertRaises(RuntimeError):
             Vmec()
 
 
-@unittest.skipIf((MPI is None) or (vmec_mod is None), "Valid Python interface to VMEC not found")
+@unittest.skipIf(
+    (MPI is None) or (vmec_mod is None), "Valid Python interface to VMEC not found"
+)
 class VmecTests(unittest.TestCase):
     def test_init_defaults(self):
         """
@@ -197,7 +220,7 @@ class VmecTests(unittest.TestCase):
         Try creating a Vmec instance from a specified input file.
         """
 
-        filename = os.path.join(TEST_DIR, 'input.li383_low_res')
+        filename = os.path.join(TEST_DIR, "input.li383_low_res")
         with ScratchDir("."):
             v = Vmec(filename)
             self.assertEqual(v.indata.nfp, 3)
@@ -210,10 +233,10 @@ class VmecTests(unittest.TestCase):
             self.assertAlmostEqual(v.boundary.get_rc(0, 0), 1.3782)
 
             # n = 0, m = 1:
-            self.assertAlmostEqual(v.boundary.get_zs(1, 0), 4.6465E-01)
+            self.assertAlmostEqual(v.boundary.get_zs(1, 0), 4.6465e-01)
 
             # n = 1, m = 1:
-            self.assertAlmostEqual(v.boundary.get_zs(1, 1), 1.6516E-01)
+            self.assertAlmostEqual(v.boundary.get_zs(1, 1), 1.6516e-01)
 
             self.assertEqual(v.indata.ncurr, 1)
             self.assertFalse(v.free_boundary)
@@ -229,18 +252,22 @@ class VmecTests(unittest.TestCase):
         """
 
         def compare_surfaces_sym(s1, s2):
-            logger.debug('compare_surfaces_sym called')
+            logger.debug("compare_surfaces_sym called")
             mpol = min(s1.mpol, s2.mpol)
             ntor = min(s1.ntor, s2.ntor)
             places = 13
             for m in range(mpol + 1):
                 nmin = 0 if m == 0 else -ntor
                 for n in range(nmin, ntor + 1):
-                    self.assertAlmostEqual(s1.get_rc(m, n), s2.get_rc(m, n), places=places)
-                    self.assertAlmostEqual(s1.get_zs(m, n), s2.get_zs(m, n), places=places)
+                    self.assertAlmostEqual(
+                        s1.get_rc(m, n), s2.get_rc(m, n), places=places
+                    )
+                    self.assertAlmostEqual(
+                        s1.get_zs(m, n), s2.get_zs(m, n), places=places
+                    )
 
         def compare_surfaces_asym(s1, s2, places):
-            logger.debug('compare_surfaces_asym called')
+            logger.debug("compare_surfaces_asym called")
             self.assertAlmostEqual(np.abs(s1.volume()), np.abs(s2.volume()), places=13)
             self.assertAlmostEqual(s1.area(), s2.area(), places=7)
             mpol = min(s1.mpol, s2.mpol)
@@ -248,14 +275,22 @@ class VmecTests(unittest.TestCase):
             for m in range(mpol + 1):
                 nmin = 0 if m == 0 else -ntor
                 for n in range(nmin, ntor + 1):
-                    self.assertAlmostEqual(s1.get_rc(m, n), s2.get_rc(m, n), places=places)
-                    self.assertAlmostEqual(s1.get_zs(m, n), s2.get_zs(m, n), places=places)
-                    self.assertAlmostEqual(s1.get_rs(m, n), s2.get_rs(m, n), places=places)
-                    self.assertAlmostEqual(s1.get_zc(m, n), s2.get_zc(m, n), places=places)
+                    self.assertAlmostEqual(
+                        s1.get_rc(m, n), s2.get_rc(m, n), places=places
+                    )
+                    self.assertAlmostEqual(
+                        s1.get_zs(m, n), s2.get_zs(m, n), places=places
+                    )
+                    self.assertAlmostEqual(
+                        s1.get_rs(m, n), s2.get_rs(m, n), places=places
+                    )
+                    self.assertAlmostEqual(
+                        s1.get_zc(m, n), s2.get_zc(m, n), places=places
+                    )
 
         # First try a stellarator-symmetric example:
-        filename1 = os.path.join(TEST_DIR, 'input.li383_low_res')
-        filename2 = os.path.join(TEST_DIR, 'wout_li383_low_res_reference.nc')
+        filename1 = os.path.join(TEST_DIR, "input.li383_low_res")
+        filename2 = os.path.join(TEST_DIR, "wout_li383_low_res_reference.nc")
         with ScratchDir("."):
             v = Vmec(filename1)
             s1 = v.boundary
@@ -281,8 +316,10 @@ class VmecTests(unittest.TestCase):
         # be shifted by the hiddenSymmetries VMEC2000 module.  For any
         # input file and version of VMEC, we can compare
         # coordinate-independent properties like the volume.
-        filename1 = os.path.join(TEST_DIR, 'input.LandremanSenguptaPlunk_section5p3')
-        filename2 = os.path.join(TEST_DIR, 'wout_LandremanSenguptaPlunk_section5p3_reference.nc')
+        filename1 = os.path.join(TEST_DIR, "input.LandremanSenguptaPlunk_section5p3")
+        filename2 = os.path.join(
+            TEST_DIR, "wout_LandremanSenguptaPlunk_section5p3_reference.nc"
+        )
         with ScratchDir("."):
             v = Vmec(filename1)
             s1 = v.boundary
@@ -307,12 +344,16 @@ class VmecTests(unittest.TestCase):
         for jsym in range(2):
             if jsym == 0:
                 # Try a stellarator-symmetric scenario:
-                filename1 = os.path.join(TEST_DIR, 'wout_li383_low_res_reference.nc')
-                filename2 = os.path.join(TEST_DIR, 'input.li383_low_res')
+                filename1 = os.path.join(TEST_DIR, "wout_li383_low_res_reference.nc")
+                filename2 = os.path.join(TEST_DIR, "input.li383_low_res")
             else:
                 # Try a non-stellarator-symmetric scenario:
-                filename1 = os.path.join(TEST_DIR, 'wout_LandremanSenguptaPlunk_section5p3_reference.nc')
-                filename2 = os.path.join(TEST_DIR, 'input.LandremanSenguptaPlunk_section5p3')
+                filename1 = os.path.join(
+                    TEST_DIR, "wout_LandremanSenguptaPlunk_section5p3_reference.nc"
+                )
+                filename2 = os.path.join(
+                    TEST_DIR, "input.LandremanSenguptaPlunk_section5p3"
+                )
 
             with ScratchDir("."):
                 vmec1 = Vmec(filename1)
@@ -334,7 +375,7 @@ class VmecTests(unittest.TestCase):
         doesn't crash in this case.
         """
         for verbose in [True, False]:
-            filename = os.path.join(TEST_DIR, 'input.li383_low_res')
+            filename = os.path.join(TEST_DIR, "input.li383_low_res")
             with ScratchDir("."):
                 Vmec(filename, verbose=verbose).run()
 
@@ -345,22 +386,22 @@ class VmecTests(unittest.TestCase):
         """
         with ScratchDir("."):
             for j in range(2):
-                filename = os.path.join(TEST_DIR, 'input.li383_low_res')
+                filename = os.path.join(TEST_DIR, "input.li383_low_res")
                 vmec = Vmec(filename)
                 # Use the objective function from
                 # stellopt_scenarios_2DOF_targetIotaAndVolume:
                 if j == 0:
                     prob = LeastSquaresProblem.from_tuples(
-                        [(vmec.iota_axis, 0.41, 1),
-                         (vmec.volume, 0.15, 1)])
+                        [(vmec.iota_axis, 0.41, 1), (vmec.volume, 0.15, 1)]
+                    )
                     fail_val = 1e12
                 else:
                     # Try a custom failure value
                     fail_val = 2.0e30
                     prob = LeastSquaresProblem.from_tuples(
-                        [(vmec.iota_axis, 0.41, 1),
-                         (vmec.volume, 0.15, 1)],
-                        fail=fail_val)
+                        [(vmec.iota_axis, 0.41, 1), (vmec.volume, 0.15, 1)],
+                        fail=fail_val,
+                    )
 
                 r00 = vmec.boundary.get_rc(0, 0)
                 # The first evaluation should succeed.
@@ -410,7 +451,7 @@ class VmecTests(unittest.TestCase):
         the pressure we requested.
         """
         # First, try a polynomial Profile with vmec using a power series:
-        filename = os.path.join(TEST_DIR, 'input.circular_tokamak')
+        filename = os.path.join(TEST_DIR, "input.circular_tokamak")
         with ScratchDir("."):
             vmec = Vmec(filename)
             vmec.indata.pres_scale = 5.0  # Vmec should change this to 1
@@ -424,54 +465,68 @@ class VmecTests(unittest.TestCase):
             pressure.x = 1.0e4 * np.array([1, 2, -3.0])
             vmec.run()
             self.assertAlmostEqual(vmec.indata.pres_scale, 1.0)
-            np.testing.assert_allclose(vmec.wout.pres[1:], 1.0e4 * (1 + 2 * s - 3 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), 'power_series')
-            #assert vmec.wout.pmass_type[:12] == b'power_series'
+            np.testing.assert_allclose(
+                vmec.wout.pres[1:], 1.0e4 * (1 + 2 * s - 3 * s * s)
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), "power_series")
+            # assert vmec.wout.pmass_type[:12] == b'power_series'
 
             # Now try a spline Profile with vmec using a power series:
             s_spline = np.linspace(0, 1, 5)
-            pressure2 = ProfileSpline(s_spline, 1.0e4 * (2.0 + 0.6 * s_spline - 1.5 * s_spline ** 2))
+            pressure2 = ProfileSpline(
+                s_spline, 1.0e4 * (2.0 + 0.6 * s_spline - 1.5 * s_spline**2)
+            )
             vmec.pressure_profile = pressure2
             vmec.run()
-            np.testing.assert_allclose(vmec.wout.pres[1:], 1.0e4 * (2.0 + 0.6 * s - 1.5 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), 'power_series')
+            np.testing.assert_allclose(
+                vmec.wout.pres[1:], 1.0e4 * (2.0 + 0.6 * s - 1.5 * s * s)
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), "power_series")
 
             # Now try a spline Profile with vmec using splines:
-            vmec.indata.pmass_type = 'cubic_spline'
-            pressure2.local_full_x = 1.0e4 * (2.2 - 0.7 * s_spline - 1.1 * s_spline ** 2)
+            vmec.indata.pmass_type = "cubic_spline"
+            pressure2.local_full_x = 1.0e4 * (2.2 - 0.7 * s_spline - 1.1 * s_spline**2)
             vmec.run()
-            np.testing.assert_allclose(vmec.wout.pres[1:], 1.0e4 * (2.2 - 0.7 * s - 1.1 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), 'cubic_spline')
+            np.testing.assert_allclose(
+                vmec.wout.pres[1:], 1.0e4 * (2.2 - 0.7 * s - 1.1 * s * s)
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), "cubic_spline")
 
             # Now try a polynomial Profile with vmec using splines:
             vmec.pressure_profile = pressure
             # Try lowering the number of spline nodes:
             vmec.n_pressure = 7
             vmec.run()
-            np.testing.assert_allclose(vmec.wout.pres[1:], 1.0e4 * (1 + 2 * s - 3 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), 'cubic_spline')
+            np.testing.assert_allclose(
+                vmec.wout.pres[1:], 1.0e4 * (1 + 2 * s - 3 * s * s)
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), "cubic_spline")
 
             # Now try a spline Profile with vmec using Amika splines:
             vmec.pressure_profile = pressure2
-            vmec.indata.pmass_type = 'akima_spline'
+            vmec.indata.pmass_type = "akima_spline"
             vmec.run()
-            np.testing.assert_allclose(vmec.wout.pres[1:], 1.0e4 * (2.2 - 0.7 * s - 1.1 * s * s), rtol=0.02)
-            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), 'akima_spline')
+            np.testing.assert_allclose(
+                vmec.wout.pres[1:], 1.0e4 * (2.2 - 0.7 * s - 1.1 * s * s), rtol=0.02
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), "akima_spline")
 
             # Now try a polynomial Profile with vmec using splines:
             vmec.pressure_profile = pressure
             # Try lowering the number of spline nodes:
             vmec.n_pressure = 7
             vmec.run()
-            np.testing.assert_allclose(vmec.wout.pres[1:], 1.0e4 * (1 + 2 * s - 3 * s * s), atol=250)
-            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), 'akima_spline')
+            np.testing.assert_allclose(
+                vmec.wout.pres[1:], 1.0e4 * (1 + 2 * s - 3 * s * s), atol=250
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), "akima_spline")
 
             # Now try having vmec use line_segment:
             vmec.pressure_profile = ProfilePolynomial([2.0e4, -1.9e4])
-            vmec.indata.pmass_type = 'line_segment'
+            vmec.indata.pmass_type = "line_segment"
             vmec.run()
             np.testing.assert_allclose(vmec.wout.pres[1:], 2.0e4 - 1.9e4 * s)
-            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), 'line_segment')
+            self.assertEqual(netcdf_to_str(vmec.wout.pmass_type[:12]), "line_segment")
 
     def test_current_profile(self):
         """
@@ -479,7 +534,7 @@ class VmecTests(unittest.TestCase):
         the current we requested.
         """
         # First, try a polynomial Profile with vmec using a power series:
-        filename = os.path.join(TEST_DIR, 'input.circular_tokamak')
+        filename = os.path.join(TEST_DIR, "input.circular_tokamak")
         with ScratchDir("."):
             vmec = Vmec(filename)
             vmec.indata.ncurr = 1
@@ -493,8 +548,11 @@ class VmecTests(unittest.TestCase):
             s = vmec.s_full_grid
             s_test = s[1:-1]
             # Vmec's jcurv is (dI/ds) / (2pi) where I(s) is the current enclosed by the surface s.
-            np.testing.assert_allclose(vmec.wout.jcurv[1:-1] * 2 * np.pi,
-                                       factor * (1 + s_test - 1.5 * s_test ** 2), rtol=1e-3)
+            np.testing.assert_allclose(
+                vmec.wout.jcurv[1:-1] * 2 * np.pi,
+                factor * (1 + s_test - 1.5 * s_test**2),
+                rtol=1e-3,
+            )
 
             # Change the Profile dofs, and confirm that the output current from VMEC is updated:
             current.local_unfix_all()
@@ -502,33 +560,46 @@ class VmecTests(unittest.TestCase):
             # Now the total (s-integrated) current is factor * 1.2666666666
             vmec.run()
             np.testing.assert_allclose(vmec.wout.ctor, factor * 1.266666666, rtol=1e-2)
-            np.testing.assert_allclose(vmec.wout.jcurv[1:-1] * 2 * np.pi,
-                                       factor * (1 + 2 * s_test - 2.2 * s_test ** 2), rtol=1e-3)
-            self.assertEqual(netcdf_to_str(vmec.wout.pcurr_type[:12]), 'power_series')
+            np.testing.assert_allclose(
+                vmec.wout.jcurv[1:-1] * 2 * np.pi,
+                factor * (1 + 2 * s_test - 2.2 * s_test**2),
+                rtol=1e-3,
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pcurr_type[:12]), "power_series")
 
             # Now try a spline Profile with vmec using a power series:
             s_spline = np.linspace(0, 1, 5)
-            current2 = ProfileSpline(s_spline, factor * (2.0 + 0.6 * s_spline - 1.5 * s_spline ** 2))
+            current2 = ProfileSpline(
+                s_spline, factor * (2.0 + 0.6 * s_spline - 1.5 * s_spline**2)
+            )
             # Now the total (s-integrated) current is factor * 1.8
             vmec.current_profile = current2
             vmec.run()
             np.testing.assert_allclose(vmec.wout.ctor, factor * 1.8, rtol=1e-2)
-            np.testing.assert_allclose(vmec.wout.jcurv[1:-1] * 2 * np.pi,
-                                       factor * (2.0 + 0.6 * s_test - 1.5 * s_test ** 2), rtol=1e-3)
-            self.assertEqual(netcdf_to_str(vmec.wout.pcurr_type[:12]), 'power_series')
+            np.testing.assert_allclose(
+                vmec.wout.jcurv[1:-1] * 2 * np.pi,
+                factor * (2.0 + 0.6 * s_test - 1.5 * s_test**2),
+                rtol=1e-3,
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.pcurr_type[:12]), "power_series")
 
             # Now try a spline Profile with vmec using splines. Note that
             # current is different from pressure and iota in that the
             # "cubic_spline" option in VMEC is replaced by
             # "cubic_spline_ip" or "cubic_spline_i"
-            vmec.indata.pcurr_type = 'cubic_spline_ip'
+            vmec.indata.pcurr_type = "cubic_spline_ip"
             current2.local_unfix_all()
-            current2.x = factor * (1.0 + 1.0 * s_spline - 1.5 * s_spline ** 2)
+            current2.x = factor * (1.0 + 1.0 * s_spline - 1.5 * s_spline**2)
             vmec.run()
             np.testing.assert_allclose(vmec.wout.ctor, factor * 1.0, rtol=1e-2)
-            np.testing.assert_allclose(vmec.wout.jcurv[1:-1] * 2 * np.pi,
-                                       factor * (1.0 + 1.0 * s_test - 1.5 * s_test ** 2), rtol=1e-3)
-            self.assertEqual(netcdf_to_str(vmec.wout.pcurr_type[:15]), 'cubic_spline_ip')
+            np.testing.assert_allclose(
+                vmec.wout.jcurv[1:-1] * 2 * np.pi,
+                factor * (1.0 + 1.0 * s_test - 1.5 * s_test**2),
+                rtol=1e-3,
+            )
+            self.assertEqual(
+                netcdf_to_str(vmec.wout.pcurr_type[:15]), "cubic_spline_ip"
+            )
 
             # Now try a polynomial Profile with vmec using splines:
             vmec.current_profile = current
@@ -536,27 +607,50 @@ class VmecTests(unittest.TestCase):
             vmec.n_current = 7
             vmec.run()
             np.testing.assert_allclose(vmec.wout.ctor, factor * 1.266666666, rtol=1e-2)
-            np.testing.assert_allclose(vmec.wout.jcurv[1:-1] * 2 * np.pi,
-                                       factor * (1 + 2 * s_test - 2.2 * s_test ** 2), rtol=1e-3)
-            self.assertEqual(netcdf_to_str(vmec.wout.pcurr_type[:15]), 'cubic_spline_ip')
+            np.testing.assert_allclose(
+                vmec.wout.jcurv[1:-1] * 2 * np.pi,
+                factor * (1 + 2 * s_test - 2.2 * s_test**2),
+                rtol=1e-3,
+            )
+            self.assertEqual(
+                netcdf_to_str(vmec.wout.pcurr_type[:15]), "cubic_spline_ip"
+            )
 
             # Now we try a current profile setting the total current instead
             # of its derivative. We do this by using "cubic_spline_i" instead
             # of 'cubic_spline_ip'
-            vmec.indata.pcurr_type = 'cubic_spline_i'
+            vmec.indata.pcurr_type = "cubic_spline_i"
             current2.local_unfix_all()
-            current2.x = factor * (1.0 * s_spline - 0.4 * s_spline ** 2)
+            current2.x = factor * (1.0 * s_spline - 0.4 * s_spline**2)
             vmec.current_profile = current2
-            #vmec.recompute_bell()
+            # vmec.recompute_bell()
             vmec.run()
             np.testing.assert_allclose(vmec.wout.ctor, factor * 0.6, rtol=1e-2)
-            output_jcurv = np.array([795774.715459479, 755985.979686504, 716197.243913528,
-                                     676408.508140556, 636619.772367582, 596831.036594607, 557042.300821634,
-                                     517253.565048661, 477464.829275686, 437676.09350271, 397887.357729738,
-                                     358098.621956765, 318309.886183791, 278521.150410821, 238732.414637841,
-                                     198943.678864868, 159154.943091895])
+            output_jcurv = np.array(
+                [
+                    795774.715459479,
+                    755985.979686504,
+                    716197.243913528,
+                    676408.508140556,
+                    636619.772367582,
+                    596831.036594607,
+                    557042.300821634,
+                    517253.565048661,
+                    477464.829275686,
+                    437676.09350271,
+                    397887.357729738,
+                    358098.621956765,
+                    318309.886183791,
+                    278521.150410821,
+                    238732.414637841,
+                    198943.678864868,
+                    159154.943091895,
+                ]
+            )
             np.testing.assert_allclose(vmec.wout.jcurv, output_jcurv, rtol=1e-3)
-            self.assertEqual(netcdf_to_str(vmec.wout.pcurr_type[:15]), 'cubic_spline_i ')
+            self.assertEqual(
+                netcdf_to_str(vmec.wout.pcurr_type[:15]), "cubic_spline_i "
+            )
 
     def test_iota_profile(self):
         """
@@ -564,7 +658,7 @@ class VmecTests(unittest.TestCase):
         the iota we requested.
         """
         # First, try a polynomial Profile with vmec using a power series:
-        filename = os.path.join(TEST_DIR, 'input.circular_tokamak')
+        filename = os.path.join(TEST_DIR, "input.circular_tokamak")
         with ScratchDir("."):
             vmec = Vmec(filename)
             vmec.indata.ncurr = 0
@@ -578,23 +672,27 @@ class VmecTests(unittest.TestCase):
             iota.x = np.array([1, 2, -3.0])
             vmec.run()
             np.testing.assert_allclose(vmec.wout.iotas[1:], (1 + 2 * s - 3 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), 'power_series')
+            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), "power_series")
 
             # Now try a spline Profile with vmec using a power series:
             s_spline = np.linspace(0, 1, 5)
-            iota2 = ProfileSpline(s_spline, (2.0 + 0.6 * s_spline - 1.5 * s_spline ** 2))
+            iota2 = ProfileSpline(s_spline, (2.0 + 0.6 * s_spline - 1.5 * s_spline**2))
             vmec.iota_profile = iota2
             vmec.run()
-            np.testing.assert_allclose(vmec.wout.iotas[1:], (2.0 + 0.6 * s - 1.5 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), 'power_series')
+            np.testing.assert_allclose(
+                vmec.wout.iotas[1:], (2.0 + 0.6 * s - 1.5 * s * s)
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), "power_series")
 
             # Now try a spline Profile with vmec using splines:
-            vmec.indata.piota_type = 'cubic_spline'
+            vmec.indata.piota_type = "cubic_spline"
             iota2.local_unfix_all()
-            iota2.x = (2.2 - 0.7 * s_spline - 1.1 * s_spline ** 2)
+            iota2.x = 2.2 - 0.7 * s_spline - 1.1 * s_spline**2
             vmec.run()
-            np.testing.assert_allclose(vmec.wout.iotas[1:], (2.2 - 0.7 * s - 1.1 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), 'cubic_spline')
+            np.testing.assert_allclose(
+                vmec.wout.iotas[1:], (2.2 - 0.7 * s - 1.1 * s * s)
+            )
+            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), "cubic_spline")
 
             # Now try a polynomial Profile with vmec using splines:
             vmec.iota_profile = iota
@@ -602,19 +700,19 @@ class VmecTests(unittest.TestCase):
             vmec.n_iota = 7
             vmec.run()
             np.testing.assert_allclose(vmec.wout.iotas[1:], (1 + 2 * s - 3 * s * s))
-            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), 'cubic_spline')
+            self.assertEqual(netcdf_to_str(vmec.wout.piota_type[:12]), "cubic_spline")
 
     def test_profile_invalid(self):
         """
         When using a simsopt profile, the Vmec profile type must be
         "power_series" or "cubic_spline"
         """
-        filename = os.path.join(TEST_DIR, 'input.circular_tokamak')
+        filename = os.path.join(TEST_DIR, "input.circular_tokamak")
         with ScratchDir("."):
             vmec = Vmec(filename)
             pressure = ProfilePolynomial(1.0e4 * np.array([1, 1, -2.0]))
             vmec.pressure_profile = pressure
-            vmec.indata.pmass_type = 'two_power'
+            vmec.indata.pmass_type = "two_power"
             with self.assertRaises(RuntimeError):
                 vmec.run()
 
@@ -627,15 +725,17 @@ class VmecTests(unittest.TestCase):
         Ti = ProfileSpline([0, 0.5, 0.8, 1], 7.0e3 * np.array([1, 0.9, 0.8, 0.1]))
         ni = ne
         pressure = ProfilePressure(ne, Te, ni, Ti)  # p = ne * Te + ni * Ti
-        pressure_Pa = ProfileScaled(pressure, ELEMENTARY_CHARGE)  # Te and Ti profiles were in eV, so convert to SI here.
-        filename = os.path.join(TEST_DIR, 'input.circular_tokamak')
+        pressure_Pa = ProfileScaled(
+            pressure, ELEMENTARY_CHARGE
+        )  # Te and Ti profiles were in eV, so convert to SI here.
+        filename = os.path.join(TEST_DIR, "input.circular_tokamak")
         with ScratchDir("."):
             vmec = Vmec(filename)
             vmec.pressure_profile = pressure_Pa
             vmec.indata.pmass_type = "cubic_spline"
             vmec.n_pressure = 8  # Use 8 spline nodes
             vmec.run()
-            logging.info(f'betatotal: {vmec.wout.betatotal}')
+            logging.info(f"betatotal: {vmec.wout.betatotal}")
             np.testing.assert_allclose(vmec.wout.betatotal, 0.0127253894792956)
 
     def test_profile_optimization(self):
@@ -647,7 +747,7 @@ class VmecTests(unittest.TestCase):
         base_pressure = ProfilePolynomial([1, -1])
         pressure = ProfileScaled(base_pressure, 1.0e4)
         pressure.local_unfix_all()
-        filename = os.path.join(TEST_DIR, 'input.circular_tokamak')
+        filename = os.path.join(TEST_DIR, "input.circular_tokamak")
         with ScratchDir("."):
             vmec = Vmec(filename)
             vmec.boundary.local_fix_all()
@@ -657,7 +757,9 @@ class VmecTests(unittest.TestCase):
                 vmec.run()
                 return vmec.wout.betatotal
 
-            prob = LeastSquaresProblem.from_tuples([(make_optimizable(beta_func, vmec).J, 0.03, 1)])
+            prob = LeastSquaresProblem.from_tuples(
+                [(make_optimizable(beta_func, vmec).J, 0.03, 1)]
+            )
             assert len(prob.x) == 1
             least_squares_serial_solve(prob, gtol=1e-15)
             np.testing.assert_allclose(prob.x, [644053.93838138])
@@ -666,13 +768,17 @@ class VmecTests(unittest.TestCase):
         """
         Check that working input files can be written
         """
-        configs = ['li383_low_res', 'LandremanSenguptaPlunk_section5p3', 'circular_tokamak']
+        configs = [
+            "li383_low_res",
+            "LandremanSenguptaPlunk_section5p3",
+            "circular_tokamak",
+        ]
         for config in configs:
-            infilename = os.path.join(TEST_DIR, 'input.' + config)
-            outfilename = os.path.join(TEST_DIR, 'wout_' + config + '_reference.nc')
+            infilename = os.path.join(TEST_DIR, "input." + config)
+            outfilename = os.path.join(TEST_DIR, "wout_" + config + "_reference.nc")
             with ScratchDir("."):
                 vmec1 = Vmec(infilename)
-                newfile = 'input.test'
+                newfile = "input.test"
                 vmec1.write_input(newfile)
                 # Now read in the newly created input file and run:
                 vmec2 = Vmec(newfile)
@@ -689,49 +795,60 @@ class VmecTests(unittest.TestCase):
         """
         This test confirms that the non-stellarator-symmetric boundary components of a non-stellarator-symmetric configuration are modified during a simple optimization.
         """
+
         def find_latest_file():
             import re
-            
-            pattern = r'wout_LandremanSenguptaPlunk_section5p3_000_(\d+)\.nc'
-            
+
+            pattern = r"wout_LandremanSenguptaPlunk_section5p3_000_(\d+)\.nc"
+
             max_number = -1
             latest_file = None
-            
-            for filename in os.listdir('.'):
+
+            for filename in os.listdir("."):
                 match = re.match(pattern, filename)
                 if match:
                     number = int(match.group(1))
                     if number > max_number:
                         max_number = number
                         latest_file = filename
-            
+
             return latest_file
-        
-        input_filename = os.path.join(TEST_DIR, 'input.LandremanSenguptaPlunk_section5p3')
-        wout_filename = os.path.join(TEST_DIR, 'wout_LandremanSenguptaPlunk_section5p3_reference.nc')
+
+        input_filename = os.path.join(
+            TEST_DIR, "input.LandremanSenguptaPlunk_section5p3"
+        )
+        wout_filename = os.path.join(
+            TEST_DIR, "wout_LandremanSenguptaPlunk_section5p3_reference.nc"
+        )
         with ScratchDir("."):
             vmec = Vmec(input_filename)
             surf = vmec.boundary
-            
-            prob = LeastSquaresProblem.from_tuples([
-                (vmec.aspect,       6, 1e0),
-                (vmec.iota_edge, -0.5, 1e0),
-            ])
-            
+
+            prob = LeastSquaresProblem.from_tuples(
+                [
+                    (vmec.aspect, 6, 1e0),
+                    (vmec.iota_edge, -0.5, 1e0),
+                ]
+            )
+
             surf.fix_all()
             surf.fixed_range(mmin=0, mmax=1, nmin=-1, nmax=1, fixed=False)
             surf.fix("rc(0,0)")
             surf.fix("zc(0,0)")
-            
+
             least_squares_serial_solve(prob, grad=True, bounds=prob.bounds)
-    
+
             newfile = find_latest_file()
             vmec1 = Vmec(wout_filename)
             vmec2 = Vmec(newfile)
-            assert not np.allclose(vmec1.wout.rmns[:, -1], vmec2.wout.rmns[:, -1], atol=1e-10)
-            assert not np.allclose(vmec1.wout.zmnc[:, -1], vmec2.wout.zmnc[:, -1], atol=1e-10)
+            assert not np.allclose(
+                vmec1.wout.rmns[:, -1], vmec2.wout.rmns[:, -1], atol=1e-10
+            )
+            assert not np.allclose(
+                vmec1.wout.zmnc[:, -1], vmec2.wout.zmnc[:, -1], atol=1e-10
+            )
 
-    #def test_stellopt_scenarios_1DOF_circularCrossSection_varyR0_targetVolume(self):
+        # def test_stellopt_scenarios_1DOF_circularCrossSection_varyR0_targetVolume(self):
         """
         This script implements the "1DOF_circularCrossSection_varyR0_targetVolume"
         example from

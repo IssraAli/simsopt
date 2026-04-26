@@ -12,6 +12,7 @@ from simsopt.geo.surfacerzfourier import SurfaceRZFourier
 from simsopt.geo.surfacegarabedian import SurfaceGarabedian
 from simsopt.objectives.least_squares import LeastSquaresProblem
 from simsopt.solve.serial import least_squares_serial_solve
+
 if MPI is not None:
     from simsopt.util.mpi import MpiPartition
     from simsopt.solve.mpi import least_squares_mpi_solve
@@ -25,7 +26,7 @@ solvers = [least_squares_serial_solve]
 if MPI is not None:
     solvers.append(mpi_solve_1group)
 
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 
 class IntegratedTests(unittest.TestCase):
@@ -53,15 +54,15 @@ class IntegratedTests(unittest.TestCase):
             # optimized.  You can choose to exclude any subset of the variables
             # from the space of independent variables by setting their 'fixed'
             # property to True.
-            surf.fix('rc(0,0)')
+            surf.fix("rc(0,0)")
 
             # Each function you want in the objective function is then
             # equipped with a shift and weight, to become a term in a
             # least-squares objective function. A list of terms are
             # combined to form a nonlinear-least-squares problem.
             prob = LeastSquaresProblem.from_tuples(
-                [(surf.volume, desired_volume, 1),
-                 (surf.area, desired_area, 1)])
+                [(surf.volume, desired_volume, 1), (surf.area, desired_area, 1)]
+            )
 
             # Verify the state vector is what we expect
             np.testing.assert_allclose(prob.x, [0.1, 0.2])
@@ -107,16 +108,16 @@ class IntegratedTests(unittest.TestCase):
             # from the space of independent variables by setting their 'fixed'
             # property to True.
             surf.local_fix_all()
-            surf.unfix('Delta(0,0)')  # Minor radius
-            surf.unfix('Delta(2,0)')  # Elongation
+            surf.unfix("Delta(0,0)")  # Minor radius
+            surf.unfix("Delta(2,0)")  # Elongation
 
             # Each function you want in the objective function is then
             # equipped with a shift and weight, to become a term in a
             # least-squares objective function. A list of terms are
             # combined to form a nonlinear-least-squares problem.
             prob = LeastSquaresProblem.from_tuples(
-                [(surf.volume, desired_volume, 1),
-                 (surf.area, desired_area, 1)])
+                [(surf.volume, desired_volume, 1), (surf.area, desired_area, 1)]
+            )
 
             # Verify the state vector is what we expect
             np.testing.assert_allclose(prob.x, [0.1, -0.1])

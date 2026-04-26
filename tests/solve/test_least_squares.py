@@ -2,6 +2,7 @@ import unittest
 
 from monty.tempfile import ScratchDir
 import numpy as np
+
 try:
     from mpi4py import MPI
 except ImportError:
@@ -10,6 +11,7 @@ except ImportError:
 from simsopt.objectives.functions import Identity, Rosenbrock
 from simsopt.objectives.least_squares import LeastSquaresProblem
 from simsopt.solve.serial import least_squares_serial_solve
+
 if MPI is not None:
     from simsopt.util.mpi import MpiPartition
     from simsopt.solve.mpi import least_squares_mpi_solve
@@ -47,7 +49,7 @@ class LeastSquaresProblemTests(unittest.TestCase):
 
     def test_solve_quadratic_bounds(self):
         """
-        Same as test_solve_quadratic, except with different bounds. The solver 
+        Same as test_solve_quadratic, except with different bounds. The solver
         should therefore run into the bounds instead of the regular minimum.
 
         The optimization problem is
@@ -80,12 +82,12 @@ class LeastSquaresProblemTests(unittest.TestCase):
         """
         with ScratchDir("."):
             for solver in solvers:
-                iden1 = Identity(4, dof_name='x1', dof_fixed=True)
-                iden2 = Identity(5, dof_name='x2')
-                iden3 = Identity(6, dof_name='x3', dof_fixed=True)
+                iden1 = Identity(4, dof_name="x1", dof_fixed=True)
+                iden2 = Identity(5, dof_name="x2")
+                iden3 = Identity(6, dof_name="x3", dof_fixed=True)
                 term1 = (iden1.f, 1, 1)
-                term2 = (iden2.f, 2, 1 / 4.)
-                term3 = (iden3.f, 3, 1 / 9.)
+                term2 = (iden2.f, 2, 1 / 4.0)
+                term3 = (iden3.f, 3, 1 / 9.0)
                 prob = LeastSquaresProblem.from_tuples([term1, term2, term3])
                 solver(prob)
                 self.assertAlmostEqual(prob.objective(), 10)
@@ -101,7 +103,7 @@ class LeastSquaresProblemTests(unittest.TestCase):
         with ScratchDir("."):
             for solver in solvers:
                 for save_residuals in [True, False]:
-                    #for grad in [True, False]:
+                    # for grad in [True, False]:
                     r = Rosenbrock()
                     prob = LeastSquaresProblem(0, 1, depends_on=r)
                     solver(prob, save_residuals=save_residuals)  # , grad=grad)
