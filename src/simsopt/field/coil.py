@@ -487,7 +487,8 @@ class ScaledCurrent(sopp.CurrentBase, CurrentBase):
         This sets the underlying current's DOFs by dividing by the scale factor.
 
         The write goes through the underlying :class:`Current`'s
-        ``local_full_x`` setter (i.e. ``Dofs.full_x``), NOT through
+        ``local_full_x`` setter (i.e. ``Dofs.full_x``) when the wrapped
+        object owns the scalar DOF directly, NOT through
         ``current_to_scale.set_dofs`` directly.  The latter would dispatch
         to the C++ ``sopp.Current.set_dofs`` external setter, which only
         updates the internal C++ ``_current`` state and bypasses the
@@ -502,7 +503,9 @@ class ScaledCurrent(sopp.CurrentBase, CurrentBase):
         ``_flag_recompute_opt`` which in turn calls both the external
         C++ setter on the underlying object and ``set_recompute_flag``
         on every dependent :class:`Optimizable`), so all downstream
-        caches are invalidated.
+        caches are invalidated.  If the wrapped object is itself a
+        composite current with no local DOFs, recurse through its
+        ``set_dofs`` method until the owning :class:`Current` is reached.
 
         Args:
             dofs: Array-like object containing the DOF values (should be a single-element array
@@ -525,7 +528,10 @@ class ScaledCurrent(sopp.CurrentBase, CurrentBase):
         underlying_dofs = np.array([dof_value / self.scale])
         # Route through the Optimizable DOF channel (Dofs.full_x setter)
         # so dependent cache invalidation fires; see docstring.
-        self.current_to_scale.local_full_x = underlying_dofs
+        if len(self.current_to_scale.local_full_x) == len(underlying_dofs):
+            self.current_to_scale.local_full_x = underlying_dofs
+        else:
+            self.current_to_scale.set_dofs(underlying_dofs)
 
 
 class CurrentSum(sopp.CurrentBase, CurrentBase):

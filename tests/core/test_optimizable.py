@@ -289,6 +289,13 @@ class OptimizableTestsWithDirectRegisterParentFns(unittest.TestCase):
     def tearDown(self) -> None:
         self.opt = None
 
+    def test_funcs_in_dedupes_parent_object_identity(self):
+        # ``funcs_in`` listed ``opt2`` twice; parents must be [opt1, opt2] once
+        # each (DOF-graph round 4: ``id``-based order-preserving dedup).
+        self.assertEqual(len(self.opt.parents), 2)
+        self.assertIs(self.opt.parents[0], self.opt.opt1)
+        self.assertIs(self.opt.parents[1], self.opt.opt2)
+
     def test_name(self):
         self.assertTrue("OptClassWithDirectRegisterParentFn" in self.opt.name)
         self.assertNotEqual(self.opt.name, OptClassWithDirectRegisterParentFn(10).name)
@@ -1171,6 +1178,16 @@ class OptimizableTests(unittest.TestCase):
         ancestors = test_obj2._get_ancestors()
         self.assertEqual(len(ancestors), 4)
 
+        shared = Identity(x=11, dof_fixed=True)
+        left = OptClassWithParents(12, depends_on=[shared, Adder(n=1)])
+        right = OptClassWithParents(13, depends_on=[shared, Adder(n=1)])
+        diamond = OptClassWithParents(14, depends_on=[left, right])
+        diamond_ancestors = diamond._get_ancestors()
+        self.assertEqual(
+            sum(ancestor is shared for ancestor in diamond_ancestors),
+            1,
+        )
+
     @unittest.skipIf(
         matplotlib is None or pygraphviz is None or networkx is None,
         "Plotting libraries are missing",
@@ -1567,7 +1584,7 @@ class TestSimsoptDeferRecompute(unittest.TestCase):
     in a per-context queue and runs ``set_recompute_flag`` once after
     all ``local_x`` slices have been written.  The final value of every
     objective and gradient must be identical to the eager
-    (default-off) path.
+    (``SIMSOPT_DEFER_RECOMPUTE=0``) path.
     """
 
     def _build_dag(self):

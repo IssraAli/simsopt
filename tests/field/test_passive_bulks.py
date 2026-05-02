@@ -32,8 +32,11 @@ from simsopt.field.psc_bulk import (
     _rotation_matrix_from_quat_jax,
 )
 from simsopt.field.puck_basis import (
+    apply_mode_truncate,
+    build_puck_shell_basis,
     gauge_projection_matrix,
     list_zernike_modes,
+    normalize_mode_truncate,
     zernike_radial,
 )
 from simsopt.geo import CurveXYZFourier
@@ -181,6 +184,196 @@ def test_passive_bulk_field_B_vjp():
     v = np.ones((1, 3))
     dj = bf.B_vjp(v)
     assert dj is not None
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 (psc_bulk_speedups_and_mode_reduction): mode truncation
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_mode_truncate_roundtrip():
+    """:func:`normalize_mode_truncate` is total on the documented inputs.
+
+    Covers ``None`` and empty-mapping no-ops, the canonical "small_on_medium"
+    truncation, and the strict input validation contract (typos and
+    non-mappings raise).
+    """
+    assert normalize_mode_truncate(None) is None
+    assert normalize_mode_truncate({}) is None
+    out = normalize_mode_truncate({"max_m_disk": 2, "max_n_disk": 3, "max_k_side": 1})
+    assert out == (("max_k_side", 1), ("max_m_disk", 2), ("max_n_disk", 3))
+    out_bool = normalize_mode_truncate({"drop_disk_top": True, "drop_side": False})
+    assert out_bool == (("drop_disk_top", True), ("drop_side", False))
+    with pytest.raises(ValueError):
+        normalize_mode_truncate({"max_m": 2})  # typo
+    with pytest.raises(ValueError):
+        normalize_mode_truncate({"max_m_disk": "two"})  # not int
+    with pytest.raises(TypeError):
+        normalize_mode_truncate(("max_m_disk", 2))  # not a mapping
+
+
+def test_apply_mode_truncate_basic_shapes_and_passthrough():
+    """`apply_mode_truncate` prunes columns consistently across all arrays.
+
+    Verifies that the column count drops as predicted by the analytic
+    mode counts, that ``phi_values``, ``grad_phi_local``, ``k_basis_local``,
+    ``dof_names`` and ``basis_spec`` all stay aligned, that ``None``/``{}``
+    return the original instance verbatim, and that requesting a
+    drop-everything truncation raises ``ValueError`` as documented.
+    """
+    basis = build_puck_shell_basis(
+        R=0.05,
+        t=0.02,
+        m_fourier=3,
+        l_zernike=4,
+        k_chebyshev=2,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+    )
+    nd_raw = basis.k_basis_local.shape[1]
+    assert nd_raw == 47  # m_fourier=3, l_zernike=4, k_chebyshev=2
+
+    assert apply_mode_truncate(basis, None) is basis
+    assert apply_mode_truncate(basis, {}) is basis
+
+    pruned = apply_mode_truncate(
+        basis,
+        {"max_m_disk": 2, "max_n_disk": 3, "max_k_side": 1},
+    )
+    assert pruned is not basis
+    nd_pruned = pruned.k_basis_local.shape[1]
+    assert nd_pruned == 30
+    assert pruned.phi_values.shape[1] == nd_pruned
+    assert pruned.grad_phi_local.shape[1] == nd_pruned
+    assert len(pruned.dof_names) == nd_pruned
+    assert len(pruned.basis_spec) == nd_pruned
+    assert pruned.quad_points_local is basis.quad_points_local
+    assert pruned.quad_weights is basis.quad_weights
+
+    # Only disk_top + disk_bot survive when ``drop_side=True``; with the
+    # remaining filters this drops every side column and keeps every disk
+    # column.
+    no_side = apply_mode_truncate(basis, {"drop_side": True})
+    assert all(spec[0] != "side" for spec in no_side.basis_spec)
+
+    with pytest.raises(ValueError):
+        apply_mode_truncate(
+            basis,
+            {"drop_disk_top": True, "drop_disk_bot": True, "drop_side": True},
+        )
+
+
+def _truncate_test_psc_kwargs(eval_pts: np.ndarray) -> dict[str, Any]:
+    """Shared two-puck `medium`-basis fixture used by the truncation tests."""
+    centers = np.array([[0.0, 0.0, 0.15], [0.10, 0.0, 0.0]], dtype=float)
+    axes = np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]], dtype=float)
+    return dict(
+        puck_centers=centers,
+        puck_axes=axes,
+        puck_radii=np.array([0.04, 0.04]),
+        puck_thicknesses=np.array([0.02, 0.02]),
+        coils_TF=[_unit_circle_coil()],
+        eval_points=eval_pts,
+        m_fourier=3,
+        l_zernike=4,
+        k_chebyshev=2,
+        n_rho=6,
+        n_phi=8,
+        n_z=4,
+        nfp=1,
+        stellsym=False,
+    )
+
+
+def test_psc_bulk_mode_truncate_null_equivalence():
+    """`mode_truncate=None` and ``mode_truncate={}`` give bit-exact `B`.
+
+    Regression guard for the Stage 2 wiring: a `mode_truncate` argument
+    that requests no pruning must take the same code path as the
+    untruncated default (no rebuild differences, no JIT-cache divergence,
+    no cache-key staleness).  `B_at_points` is compared bit-for-bit.
+    """
+    eval_pts = np.array(
+        [[0.15, 0.0, 0.25], [0.16, 0.01, 0.25]],
+        dtype=float,
+    )
+    base_kwargs = _truncate_test_psc_kwargs(eval_pts)
+
+    psc_default = PSCBulkArray(**base_kwargs)
+    B_default = np.asarray(psc_default.B_at_points(eval_pts))
+
+    psc_none = PSCBulkArray(mode_truncate=None, **base_kwargs)
+    B_none = np.asarray(psc_none.B_at_points(eval_pts))
+
+    psc_empty = PSCBulkArray(mode_truncate={}, **base_kwargs)
+    B_empty = np.asarray(psc_empty.B_at_points(eval_pts))
+
+    np.testing.assert_array_equal(B_default, B_none)
+    np.testing.assert_array_equal(B_default, B_empty)
+    assert psc_none._mode_truncate_norm is None
+    assert psc_empty._mode_truncate_norm is None
+    assert psc_default._mode_truncate_norm is None
+
+
+def test_psc_bulk_mode_truncate_round_trip():
+    """`mode_truncate` reduces ``nd_per`` and still yields finite, sane `B`.
+
+    Round-trip check: a truncated instance must build, recompute currents,
+    and evaluate the field on the same fixture as an untruncated instance
+    without crashing.  The output is required to be finite, the right
+    shape, and *measurably different* from the untruncated `B` (so the
+    truncation is doing something).  This also exercises the
+    rim-continuity SVD fallback under aggressive pruning.
+    """
+    eval_pts = np.array(
+        [[0.15, 0.0, 0.25], [0.16, 0.01, 0.25]],
+        dtype=float,
+    )
+    base_kwargs = _truncate_test_psc_kwargs(eval_pts)
+
+    psc_full = PSCBulkArray(**base_kwargs)
+    nd_full = psc_full._basis_per_puck[0].k_basis_local.shape[1]
+    B_full = np.asarray(psc_full.B_at_points(eval_pts))
+
+    mt = {"max_m_disk": 2, "max_n_disk": 3, "max_k_side": 1}
+    psc_trunc = PSCBulkArray(mode_truncate=mt, **base_kwargs)
+    nd_trunc = psc_trunc._basis_per_puck[0].k_basis_local.shape[1]
+    B_trunc = np.asarray(psc_trunc.B_at_points(eval_pts))
+
+    assert nd_trunc < nd_full
+    assert B_trunc.shape == B_full.shape
+    assert np.all(np.isfinite(B_trunc))
+    assert not np.allclose(B_trunc, B_full, atol=0.0, rtol=0.0)
+    assert psc_trunc._mode_truncate_norm == (
+        ("max_k_side", 1),
+        ("max_m_disk", 2),
+        ("max_n_disk", 3),
+    )
+
+
+def test_psc_bulk_mode_truncate_basis_spec_consistency():
+    """No surviving column violates the requested truncation thresholds.
+
+    Walks every column of the truncated puck basis and checks that the
+    ``(face, m, n_or_k)`` tuple is consistent with the ``mode_truncate``
+    keys that were set.  Catches the specific failure mode where a future
+    refactor forgets to drop one face's columns or drops the wrong axis.
+    """
+    eval_pts = np.array(
+        [[0.15, 0.0, 0.25], [0.16, 0.01, 0.25]],
+        dtype=float,
+    )
+    base_kwargs = _truncate_test_psc_kwargs(eval_pts)
+    mt = {"max_m_disk": 2, "max_n_disk": 3, "max_m_side": 2, "max_k_side": 1}
+    psc = PSCBulkArray(mode_truncate=mt, **base_kwargs)
+    for face, m, idx, _trig in psc._basis_per_puck[0].basis_spec:
+        if face in ("disk_top", "disk_bot"):
+            assert m <= 2 and idx <= 3
+        elif face == "side":
+            assert m <= 2 and idx <= 1
+        else:  # pragma: no cover - sanity guard for future face labels
+            raise AssertionError(f"unexpected face {face!r}")
 
 
 def _make_small_psc(**kwargs):

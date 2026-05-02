@@ -233,6 +233,22 @@ class ScaledCurrentTesting(unittest.TestCase):
             assert np.linalg.norm((c7.vjp(one) - c0.vjp(one))(c0)) < 1e-15
             assert np.linalg.norm((c7.vjp(one) + c00.vjp(one))(c00)) < 1e-15
 
+    def test_nested_scaled_current_set_dofs_updates_owner(self):
+        """
+        ScaledCurrent.set_dofs should recurse through composite scaled
+        currents until it reaches the Current that owns the scalar DOF.
+        """
+        base_current = Current(2.0)
+        inner_current = base_current * 1e6
+        inner_current.fix_all()
+        outer_current = inner_current * -1
+
+        outer_current.set_dofs(-4e6)
+
+        assert np.isclose(base_current.get_value(), 4.0)
+        assert np.isclose(inner_current.get_value(), 4e6)
+        assert np.isclose(outer_current.get_value(), -4e6)
+
 
 class CoilFormatConvertTesting(unittest.TestCase):
     def test_makegrid(self):

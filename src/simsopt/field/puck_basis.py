@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from math import factorial
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -70,6 +70,8 @@ __all__ = [
     "gauge_projection_matrix",
     "clear_puck_basis_cache",
     "set_puck_basis_cache_max",
+    "apply_mode_truncate",
+    "normalize_mode_truncate",
 ]
 
 
@@ -490,6 +492,238 @@ def build_puck_shell_basis(
         while len(_PUCK_SHELL_BASIS_CACHE) > _PUCK_SHELL_BASIS_CACHE_MAX:
             _PUCK_SHELL_BASIS_CACHE.popitem(last=False)
     return out
+
+
+#: Recognised keys for the ``mode_truncate`` mapping consumed by
+#: :func:`apply_mode_truncate` and (downstream) by
+#: :class:`simsopt.field.psc_bulk.PSCBulkArray`.  Keeping the canonical list
+#: in one place lets the constructor reject typos with a friendly error
+#: instead of silently ignoring them.
+_MODE_TRUNCATE_KEYS: Tuple[str, ...] = (
+    "max_m_disk",
+    "max_n_disk",
+    "max_m_side",
+    "max_k_side",
+    "drop_disk_top",
+    "drop_disk_bot",
+    "drop_side",
+)
+
+
+def normalize_mode_truncate(
+    mode_truncate: Optional[Any],
+) -> Optional[Tuple[Tuple[str, Any], ...]]:
+    """Normalise a ``mode_truncate`` argument to a hashable tuple.
+
+    Accepts ``None``, an empty mapping, or any ``Mapping[str, Any]`` whose
+    keys are a subset of :data:`_MODE_TRUNCATE_KEYS`.  Returns ``None`` for
+    "no truncation requested" (so callers can branch on identity), or a
+    sorted tuple of ``(key, value)`` pairs that uniquely identifies the
+    truncation request.  The tuple is cheap to hash and is used as part of
+    cache keys for downstream JAX caches.
+
+    Args:
+        mode_truncate: Optional mapping of truncation criteria.  See
+            :func:`apply_mode_truncate` for the recognised keys.
+
+    Returns:
+        ``None`` if no truncation is requested (input is ``None`` or an
+        empty mapping with no recognised keys), otherwise a sorted tuple
+        of ``(key, value)`` pairs.
+
+    Raises:
+        TypeError: If ``mode_truncate`` is neither ``None`` nor a mapping.
+        ValueError: If any key is not in :data:`_MODE_TRUNCATE_KEYS`.
+    """
+    if mode_truncate is None:
+        return None
+    if not hasattr(mode_truncate, "items"):
+        raise TypeError(
+            f"mode_truncate must be a mapping or None, got {type(mode_truncate).__name__}"
+        )
+    items: List[Tuple[str, Any]] = []
+    for key, value in mode_truncate.items():
+        skey = str(key)
+        if skey not in _MODE_TRUNCATE_KEYS:
+            raise ValueError(
+                f"unknown mode_truncate key {skey!r}; "
+                f"valid keys are {_MODE_TRUNCATE_KEYS}"
+            )
+        if skey.startswith("max_"):
+            try:
+                items.append((skey, int(value)))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"mode_truncate[{skey!r}] must be an int, got {value!r}"
+                ) from exc
+        else:
+            items.append((skey, bool(value)))
+    if not items:
+        return None
+    items.sort()
+    return tuple(items)
+
+
+def _mode_keep_mask(
+    basis_spec: List[Tuple[str, int, int, str]],
+    mt: Tuple[Tuple[str, Any], ...],
+) -> np.ndarray:
+    """Return a boolean ``keep`` mask of shape ``(len(basis_spec),)``.
+
+    Implements the per-column filter used by :func:`apply_mode_truncate`.
+    The semantics are documented on :func:`apply_mode_truncate`.
+    """
+    truncate_dict: Dict[str, Any] = dict(mt)
+    max_m_disk = truncate_dict.get("max_m_disk")
+    max_n_disk = truncate_dict.get("max_n_disk")
+    max_m_side = truncate_dict.get("max_m_side")
+    max_k_side = truncate_dict.get("max_k_side")
+    drop_disk_top = bool(truncate_dict.get("drop_disk_top", False))
+    drop_disk_bot = bool(truncate_dict.get("drop_disk_bot", False))
+    drop_side = bool(truncate_dict.get("drop_side", False))
+
+    keep = np.ones(len(basis_spec), dtype=bool)
+    for a, (face, m, n_or_k, _trig) in enumerate(basis_spec):
+        if face == "disk_top":
+            if drop_disk_top:
+                keep[a] = False
+                continue
+            if max_m_disk is not None and m > int(max_m_disk):
+                keep[a] = False
+                continue
+            if max_n_disk is not None and n_or_k > int(max_n_disk):
+                keep[a] = False
+                continue
+        elif face == "disk_bot":
+            if drop_disk_bot:
+                keep[a] = False
+                continue
+            if max_m_disk is not None and m > int(max_m_disk):
+                keep[a] = False
+                continue
+            if max_n_disk is not None and n_or_k > int(max_n_disk):
+                keep[a] = False
+                continue
+        elif face == "side":
+            if drop_side:
+                keep[a] = False
+                continue
+            if max_m_side is not None and m > int(max_m_side):
+                keep[a] = False
+                continue
+            if max_k_side is not None and n_or_k > int(max_k_side):
+                keep[a] = False
+                continue
+        else:
+            raise ValueError(f"unrecognised face label {face!r} in basis_spec")
+    return keep
+
+
+def apply_mode_truncate(
+    basis: PuckBasisData,
+    mode_truncate: Optional[Any],
+) -> PuckBasisData:
+    """Return a column-pruned copy of ``basis`` honouring ``mode_truncate``.
+
+    The truncation acts purely on the basis-column axis: quadrature points,
+    weights, normals, and face labels are unchanged.  The ``phi_values``,
+    ``grad_phi_local``, and ``k_basis_local`` arrays each lose the columns
+    corresponding to dropped DOFs; ``dof_names`` and ``basis_spec`` are
+    pruned in lockstep.  The returned :class:`PuckBasisData` therefore has
+    ``nd_per`` equal to the number of *kept* columns.
+
+    Recognised keys in ``mode_truncate`` (all optional; missing keys mean
+    "no constraint on that axis"):
+
+    ``max_m_disk`` (``int``)
+        Drop disk-top and disk-bot modes whose Fourier index ``m`` exceeds
+        this value.
+    ``max_n_disk`` (``int``)
+        Drop disk modes whose Zernike radial order ``n`` exceeds this
+        value.
+    ``max_m_side`` (``int``)
+        Drop side-wall modes whose Fourier index ``m`` exceeds this value.
+    ``max_k_side`` (``int``)
+        Drop side-wall modes whose Chebyshev index ``k`` exceeds this
+        value.
+    ``drop_disk_top`` (``bool``)
+        Drop the disk-top family entirely.  Use only when the geometry
+        and loading are known to be insensitive to one disk face.
+    ``drop_disk_bot`` (``bool``)
+        Drop the disk-bot family entirely.  Use only when the geometry
+        and loading are known to be insensitive to one disk face.
+    ``drop_side`` (``bool``)
+        Drop the side-wall family entirely.  Thin-puck approximation —
+        likely to break rim-continuity unless paired with one of the
+        ``drop_disk_*`` flags.
+
+    The ``cos`` / ``sin`` doubling rule for ``m >= 1`` is preserved (both
+    trigonometric variants survive together), so the semantics match
+    truncating ``m_fourier`` / ``l_zernike`` / ``k_chebyshev`` to their new
+    upper bounds without rebuilding the quadrature.  This makes the knob
+    composable with the existing puck-shell-basis cache: the parent build
+    is cached once per ``(R, t, m_fourier, l_zernike, k_chebyshev,
+    n_rho, n_phi, n_z)`` and the truncation runs on top.
+
+    Aggressive truncation can leave the rim-continuity constraint matrix
+    rank-deficient; downstream
+    :meth:`simsopt.field.psc_bulk.PSCBulkArray._build_rim_continuity_projector`
+    falls back to the identity with a :class:`UserWarning` in that case
+    (or raises when ``strict_rim_continuity=True``).  See that method's
+    docstring for the contract.
+
+    Args:
+        basis: The puck-shell basis returned by
+            :func:`build_puck_shell_basis`.  Must populate ``basis_spec``
+            (always true for instances built by ``build_puck_shell_basis``).
+        mode_truncate: ``None`` or a mapping of truncation criteria.  An
+            empty mapping is a no-op and returns ``basis`` unchanged.
+
+    Returns:
+        A new :class:`PuckBasisData` with the requested columns pruned.
+        Returns ``basis`` itself when no truncation applies (all columns
+        kept), so callers can use ``apply_mode_truncate`` as an idempotent
+        passthrough.
+
+    Raises:
+        ValueError: If ``mode_truncate`` contains an unknown key, an
+            invalid value, or if every column would be dropped.
+        TypeError: If ``mode_truncate`` is neither ``None`` nor a mapping.
+    """
+    mt = normalize_mode_truncate(mode_truncate)
+    if mt is None:
+        return basis
+    if not basis.basis_spec:
+        raise ValueError(
+            "apply_mode_truncate requires basis.basis_spec to be populated; "
+            "rebuild via build_puck_shell_basis"
+        )
+    keep = _mode_keep_mask(basis.basis_spec, mt)
+    if keep.all():
+        return basis
+    if not keep.any():
+        raise ValueError(
+            f"mode_truncate={dict(mt)!r} drops every column; "
+            "loosen at least one constraint"
+        )
+    keep_idx = np.flatnonzero(keep)
+    new_spec = [basis.basis_spec[a] for a in keep_idx]
+    new_names = [basis.dof_names[a] for a in keep_idx]
+    new_phi = np.ascontiguousarray(basis.phi_values[:, keep])
+    new_grad = np.ascontiguousarray(basis.grad_phi_local[:, keep, :])
+    new_k = np.ascontiguousarray(basis.k_basis_local[:, keep, :])
+    return PuckBasisData(
+        quad_points_local=basis.quad_points_local,
+        quad_weights=basis.quad_weights,
+        quad_normals_local=basis.quad_normals_local,
+        face_id=basis.face_id,
+        phi_values=new_phi,
+        grad_phi_local=new_grad,
+        k_basis_local=new_k,
+        dof_names=new_names,
+        basis_spec=new_spec,
+        moments_cache=None,
+    )
 
 
 def build_continuity_constraint(

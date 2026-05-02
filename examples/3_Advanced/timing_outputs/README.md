@@ -85,7 +85,7 @@ Load with: `python -m pstats dipole/<name>.prof` or snakeviz.
 
 PR1 (always-on, low-risk hygiene): closes a W2 correctness gap by clearing `MagneticField._mf_last_seen_dof_versions` whenever `_has_any_free_in_lineage` is invalidated (free-status change or lineage reshape can shift the unique-`Dofs` walk used as the version-map key); documents the `Dofs._state_version` invariant; and refreshes the README. The bell short-circuit originally proposed in the plan was implemented and reverted: the existing W1 `ContextVar`-shared visited set already guarantees `recompute_bell` is called at most once per `Optimizable` per batch, and the `new_x` flag is sticky across batches — so a second-batch short-circuit would skip a needed `clear_cached_properties` (caught by `tests/field/test_passive_bulks.py::test_scaled_current_set_dofs_invalidates_biotsavart_cache`).
 
-PR2 (opt-in via `SIMSOPT_DEFER_RECOMPUTE=1`) collects every `Dofs._flag_recompute_opt` notification during a joint `Optimizable.x` / `full_x` write into a `ContextVar` queue, then runs one `set_recompute_flag` walk per unique dependent root with a shared visited set (collapses `N` walks into 1). `local_dof_setter` still fires immediately so any C++-mirrored DOF state stays in lockstep.
+PR2 (on by default since DOF-graph round 4; set `SIMSOPT_DEFER_RECOMPUTE=0` to opt out) collects every `Dofs._flag_recompute_opt` notification during a joint `Optimizable.x` / `full_x` write into a `ContextVar` queue, then runs one `set_recompute_flag` walk per unique dependent root with a shared visited set (collapses `N` walks into 1). `local_dof_setter` still fires immediately so any C++-mirrored DOF state stays in lockstep.
 
 Quick A/B on `dipole_array_tutorial.py` (`CI=1`, MAXITER=10), cProfile dumps committed at [`tutorial_pr2_off_ci.prof`](dipole/tutorial_pr2_off_ci.prof) / [`tutorial_pr2_on_ci.prof`](dipole/tutorial_pr2_on_ci.prof):
 
@@ -111,6 +111,40 @@ Quick microbench (4 TF coils, 30-puck array, 270 local DOFs, 13 unique `Optimiza
 | NEW `(id(_dofs), _state_version)` tuple | 1.79 | **3.79x** |
 
 Verified with `pytest tests/field/test_passive_bulks.py -k "not test_implicit_solve_vjp_and_cached_pullback_match_default" tests/field/test_psc_multipole.py` (110 + 18 passed).
+
+### Before/after on the four non-bulk dipole / passive-coils examples (CI=1)
+
+Measured with `CI=1`, `MAXITER=10`, and `/usr/bin/time -p conda run -n stellcoilbench_py312 python ...`. The "before" files are the `536c5310` DOF-graph/PSC files, with the nested-`ScaledCurrent.set_dofs` passive-coils correctness fix applied on both sides so `passive_coils_QASH.py` and `passive_coils_CSX.py` can run. The "after" files are the current PR1+PR2+PR3 tree plus that same fix.
+
+- `dipole_array_tutorial.py` — before 13.38 s; after 12.66 s; **1.06x faster**. J trajectory matched exactly over 62 printed objective lines; final toroidally averaged `Bmag` matched exactly.
+- `dipole_array_tutorial_advanced.py` — before 46.37 s; after 45.72 s; **1.01x faster**. The first three printed objective lines matched, then the optimizer trajectory diverged and the after run landed at a lower final printed objective (`2.05e+02` vs `2.57e+02`, final relative delta `2.02e-01`); final toroidally averaged `Bmag` differed by `1.67e-02`. Treat this as a behavioral change to investigate, not a bit-equivalence pass.
+- `passive_coils_QASH.py` — before 118.37 s; after 106.68 s; **1.11x faster**. J trajectory matched exactly over 72 printed objective lines; final toroidally averaged `Bmag` differed by `1.13e-10`.
+- `passive_coils_CSX.py` — before 14.92 s; after 20.20 s; **0.74x** (after slower). J trajectory matched exactly over 48 printed objective lines; final toroidally averaged `Bmag` matched exactly.
+
+### Phase C follow-up: hash-traffic reduction in lineage maintenance
+
+Fresh `cProfile` runs on the post-PR1+PR2+PR3 tree pointed to hash traffic as the next DOF-graph lever:
+
+- `dipole_array_tutorial.py` — `Optimizable.__hash__` was 0.406 s / 3.71M calls; the largest callers were `_update_full_dof_size_indices`, `update_free_dof_size_indices`, and `_get_ancestors`'s `dict.fromkeys`.
+- `passive_coils_QASH.py` — `Optimizable.__hash__` was 0.292 s / 0.98M calls; the same lineage-maintenance functions dominated the DOF-graph subset.
+
+The implemented change replaces hash-based lineage de-duplication in [`Optimizable._get_ancestors`](../../../src/simsopt/_core/optimizable.py), [`update_free_dof_size_indices`](../../../src/simsopt/_core/optimizable.py), and [`_update_full_dof_size_indices`](../../../src/simsopt/_core/optimizable.py) with `id(...)` sets. This is bit-equivalent for graph identity and avoids calling `Optimizable.__hash__` / `Dofs.__hash__` in those hot loops. A regression in [`tests/core/test_optimizable.py`](../../../tests/core/test_optimizable.py) checks a diamond dependency graph keeps a shared ancestor exactly once.
+
+While measuring the passive-coils examples, `PSCArray` exposed a separate correctness bug in nested `ScaledCurrent.set_dofs`: fixed fake PSC currents can be represented as `ScaledCurrent(ScaledCurrent(Current(...)))`, so writing through `current_to_scale.local_full_x` can target a composite current with zero local DOFs. [`ScaledCurrent.set_dofs`](../../../src/simsopt/field/coil.py) now recurses through composite scaled currents until it reaches the scalar `Current` owner, preserving cache invalidation. A regression in [`tests/field/test_coil.py`](../../../tests/field/test_coil.py) covers that nested path.
+
+Phase C CI-mode re-run against the post-PR1+PR2+PR3 after logs:
+
+- `dipole_array_tutorial.py` — after 12.66 s; Phase C 9.92 s; **1.28x faster vs after**; J trajectory and final `Bmag` unchanged.
+- `dipole_array_tutorial_advanced.py` — after 45.72 s; Phase C 40.09 s; **1.14x faster vs after**; optimizer trajectory remains run-sensitive (max printed-J relative delta `9.95e-01`, final `Bmag` delta `1.20e-02`) even comparing two current-tree runs.
+- `passive_coils_QASH.py` — after 106.68 s; Phase C 111.23 s; **0.96x vs after**; J trajectory unchanged; final `Bmag` delta `1.69e-10`.
+- `passive_coils_CSX.py` — after 20.20 s; Phase C 13.13 s; **1.54x faster vs after**; J trajectory and final `Bmag` unchanged.
+
+Verification: `pytest tests/core/test_optimizable.py tests/core/test_dofs.py tests/field/test_recompute_bell_perf.py tests/field/test_coil.py -q` passed (120 passed, 3 skipped, 12 subtests), and `pytest tests/field/test_passive_bulks.py -k "not test_implicit_solve_vjp_and_cached_pullback_match_default" tests/field/test_psc_multipole.py -q` passed (133 passed, 9 skipped, 1 deselected).
+
+### Round 4 (2026-04-26)
+
+- **`SIMSOPT_DEFER_RECOMPUTE` default is now `1`** (set `=0` for the legacy eager walk).  Equivalence is still covered by `TestSimsoptDeferRecompute`.
+- **Parent de-duplication** in the `funcs_in` construction path no longer uses `list(dict.fromkeys(depends_on))` (avoids `Optimizable.__hash__` on every parent insert).  `tests/core/test_optimizable.py::test_funcs_in_dedupes_parent_object_identity` locks the `[opt1, opt2]` behavior when `opt2` is registered twice.
 
 ---
 

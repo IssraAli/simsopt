@@ -44,13 +44,25 @@ Ideal-diamagnetic passive bulk (cylindrical pucks) and :class:`PassiveBulkField`
   :math:`(U,\\Lambda)` snapshot.  Set ``=0`` to fall back to the legacy v1
   body for diagnostics.
 
-**Recommended fast profile** (see ``examples/3_Advanced/passive_bulks_bottleneck_timing.py``
-``--profiles combo_fast``): ``SIMSOPT_PSC_PAIR_FAR_KAPPA=3``,
+**Recommended fast profile** (Stage 3 of plan
+``psc_bulk_speedups_and_mode_reduction``; see
+``examples/3_Advanced/passive_bulks_bottleneck_timing.py``
+``--profiles combo_fast_v2``): ``SIMSOPT_PSC_PAIR_FAR_KAPPA=3``,
 ``SIMSOPT_PSC_TF_LOADING=a_quad``, ``SIMSOPT_PSC_BS_EVAL_FAR_KAPPA=3``,
-``SIMSOPT_PSC_SOLVE_MODE=eigk``.  ``SIMSOPT_PSC_W1_ENVELOPE`` is on by
-default and supplies the implicit-function backward; the legacy
-``SIMSOPT_PSC_FREE_SOLVE_VJP=implicit`` knob is now redundant for the reduced
-free-DOF path.
+``SIMSOPT_PSC_FREE_SOLVE_VJP=implicit``.  ``SIMSOPT_PSC_W1_ENVELOPE`` is on
+by default and supplies the implicit-function backward; the
+``FREE_SOLVE_VJP=implicit`` knob is documented as "redundant under the
+W1 envelope" but in practice is harmless and is left in ``combo_fast_v2``
+for parity with the legacy ``combo_fast`` bundle.
+
+The legacy ``combo_fast`` bundle additionally set
+``SIMSOPT_PSC_SOLVE_MODE=eigk``; the leave-one-out sweep on ``medium/6``
+(see ``examples/3_Advanced/timing_outputs/profiles_medium6_combo_fast_LOO.csv``)
+showed that ``eigk`` adds a per-rebuild eigendecomposition that does *not*
+amortise at small ``n_reduced_dof`` and is responsible for most of the
+``combo_fast`` regression at this scale.  ``combo_fast_v2`` therefore
+drops it.  See ``examples/3_Advanced/timing_outputs/PSC_FLAG_INVENTORY.md``
+for the full per-flag sweep with accuracy deltas.
 
 **Measured speedup** (Apple Silicon CPU, ``stellcoilbench_py312`` env, see
 ``examples/3_Advanced/timing_outputs/RESULTS.md`` for raw CSVs): on the
@@ -98,7 +110,7 @@ import hashlib
 import os
 import tempfile
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 import jax
 import jax.numpy as jnp
@@ -140,8 +152,10 @@ from .force import (
 from .magneticfield import MagneticField
 from .puck_basis import (
     PuckBasisData,
+    apply_mode_truncate,
     build_continuity_constraint,
     build_puck_shell_basis,
+    normalize_mode_truncate,
 )
 from .puck_init import cylindrical_grid_pucks, winding_surface_pucks
 
@@ -3092,6 +3106,24 @@ class PSCBulkArray(Optimizable):
             symmetry-reduced path (the free-DOF JAX VJP re-assembles ``L`` on
             device and does not read :attr:`_L_work`).  Default ``False`` so
             :attr:`_L_work` remains available for tests and Galerkin identities.
+
+        mode_truncate (constructor): Optional ``Mapping[str, Any]`` requesting
+            per-puck basis-column pruning *above* the cached
+            :func:`~simsopt.field.puck_basis.build_puck_shell_basis` output.
+            Recognised keys are ``"max_m_disk"``, ``"max_n_disk"``,
+            ``"max_m_side"``, ``"max_k_side"`` (all ``int``), and
+            ``"drop_disk_top"`` / ``"drop_disk_bot"`` / ``"drop_side"``
+            (all ``bool``).  See
+            :func:`simsopt.field.puck_basis.apply_mode_truncate` for the
+            full semantics.  ``None`` (default) leaves the basis unchanged.
+            Aggressive truncation can drive the rim-continuity matrix
+            rank-deficient; pair with ``strict_rim_continuity=True`` to
+            fail fast in that case, or accept the existing
+            :class:`UserWarning` fallback to the raw basis.  The
+            normalised form of this mapping is stored in
+            :attr:`_mode_truncate_norm` and is intentionally constant
+            after construction (changing the truncation requires a new
+            instance).
     """
 
     # Class-level latch so the ``_L_full`` deprecation warning fires at most
@@ -3130,6 +3162,7 @@ class PSCBulkArray(Optimizable):
         use_symmetry_reduced_free_dof: bool = True,
         checkpoint_l_pairs: Optional[bool] = None,
         jax_pair_row_chunk: int = 0,
+        mode_truncate: Optional[Mapping[str, Any]] = None,
     ):
         self.coils_TF = list(coils_TF)
         self.eval_points = np.asarray(eval_points, dtype=float, order="C")
@@ -3168,6 +3201,20 @@ class PSCBulkArray(Optimizable):
         else:
             self._psc_checkpoint_l_pairs_opt = bool(checkpoint_l_pairs)
         self._jax_pair_row_chunk_ctor: int = int(jax_pair_row_chunk)
+        # Per-puck basis truncation (Stage 2 of the
+        # ``psc_bulk_speedups_and_mode_reduction`` plan).  ``mode_truncate``
+        # is a constant attribute of the instance: it is captured once at
+        # construction, normalised into a hashable tuple, and applied in
+        # :meth:`_rebuild` immediately after :func:`build_puck_shell_basis`.
+        # Storing both the original mapping (for repr/debug) and its
+        # normalised form (for cache keys / equality checks) makes the
+        # downstream code self-documenting.
+        self._mode_truncate_input: Optional[Mapping[str, Any]] = (
+            dict(mode_truncate) if mode_truncate is not None else None
+        )
+        self._mode_truncate_norm: Optional[Tuple[Tuple[str, Any], ...]] = (
+            normalize_mode_truncate(mode_truncate)
+        )
         self._H_full = None
         self._Hw = None
 
@@ -3756,6 +3803,8 @@ class PSCBulkArray(Optimizable):
                 n_phi=self._n_phi,
                 n_z=self._n_z,
             )
+            if self._mode_truncate_norm is not None:
+                basis = apply_mode_truncate(basis, self._mode_truncate_input)
             self._basis_per_puck.append(basis)
             Rmat = _rotation_matrix_from_quat(all_quats_list[idx])
             pts_g = (Rmat @ basis.quad_points_local.T).T + c[None, :]

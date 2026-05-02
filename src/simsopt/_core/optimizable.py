@@ -15,7 +15,7 @@ import weakref
 import hashlib
 from collections.abc import Callable as ABC_Callable, Hashable
 from numbers import Real, Integral
-from typing import Union, Tuple, Dict, Callable, Sequence, List, Optional
+from typing import Any, Union, Tuple, Dict, Callable, Sequence, List, Optional
 from functools import lru_cache
 import logging
 import json
@@ -47,8 +47,8 @@ _recompute_visited_during_batch: contextvars.ContextVar[Optional[set]] = (
     contextvars.ContextVar("recompute_visited_during_batch", default=None)
 )
 
-# Opt-in defer mode (PR2 of the DOF-graph speedup plan).  When enabled
-# via ``SIMSOPT_DEFER_RECOMPUTE=1``, joint ``Optimizable.x`` /
+# Defer mode (PR2 of the DOF-graph speedup plan).  When enabled
+# (default: ``SIMSOPT_DEFER_RECOMPUTE=1``; disable with ``=0``), joint ``Optimizable.x`` /
 # ``full_x`` writes collect the dependent ``Optimizable`` objects in
 # the per-context queue below instead of triggering an immediate
 # ``set_recompute_flag`` walk inside ``Dofs._flag_recompute_opt``.  The
@@ -62,14 +62,37 @@ _recompute_visited_during_batch: contextvars.ContextVar[Optional[set]] = (
 # read field values between ``local_x`` slice writes inside the joint
 # setter.
 #
-# Default: OFF (env var unset or set to anything other than ``"1"``).
+# Default: ON (set ``SIMSOPT_DEFER_RECOMPUTE=0`` to restore one
+# ``set_recompute_flag`` walk per ``Dofs`` notification inside joint
+# ``x`` / ``full_x`` updates).
 _SIMSOPT_DEFER_RECOMPUTE: bool = (
-    os.environ.get("SIMSOPT_DEFER_RECOMPUTE", "0") == "1"
+    os.environ.get("SIMSOPT_DEFER_RECOMPUTE", "1") == "1"
 )
 
 _deferred_recompute_queue: contextvars.ContextVar[Optional[list]] = (
     contextvars.ContextVar("deferred_recompute_queue", default=None)
 )
+
+
+def _unique_optimizables_by_id_preserve_order(
+    items: Sequence[Any],
+) -> List[Any]:
+    """
+    Deduplicate objects by :func:`id`, preserving first-occurrence order.
+
+    Replaces ``list(dict.fromkeys(...))`` for parent lists: that path calls
+    ``Optimizable.__hash__`` for every key insertion.  Identity is the
+    intended notion of duplicate in the parent edge list.
+    """
+    seen_ids: set = set()
+    out: List[Any] = []
+    for x in items:
+        xid = id(x)
+        if xid in seen_ids:
+            continue
+        seen_ids.add(xid)
+        out.append(x)
+    return out
 
 try:
     import networkx as nx
@@ -803,7 +826,7 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
                 opt_in = fn.__self__
                 depends_on.append(opt_in)
                 opt_in.add_return_fn(self, fn.__func__)
-            self.parents = list(dict.fromkeys(depends_on))
+            self.parents = _unique_optimizables_by_id_preserve_order(depends_on)
             for i, parent in enumerate(self.parents):
                 parent._add_child(self)
 
@@ -1048,7 +1071,15 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         for parent in self.parents:
             ancestors += parent.ancestors
         ancestors += self.parents
-        return sorted(dict.fromkeys(ancestors), key=lambda a: a.name)
+        unique_ancestors = []
+        seen_ancestor_ids = set()
+        for ancestor in ancestors:
+            ancestor_id = id(ancestor)
+            if ancestor_id in seen_ancestor_ids:
+                continue
+            seen_ancestor_ids.add(ancestor_id)
+            unique_ancestors.append(ancestor)
+        return sorted(unique_ancestors, key=lambda a: a.name)
 
     @property
     def unique_dof_lineage(self):
@@ -1068,9 +1099,9 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         # TODO: node after fixing/unfixing any DOF
         dof_indices = [0]
         free_dof_size = 0
-        dof_objs = set()
+        dof_ids = set()
         for opt in self._unique_dof_opts:
-            dof_objs.add(opt.dofs)
+            dof_ids.add(id(opt.dofs))
             size = opt.local_dof_size
             free_dof_size += size
             dof_indices.append(free_dof_size)
@@ -1117,12 +1148,13 @@ class Optimizable(ABC_Callable, Hashable, GSONable, metaclass=OptimizableMeta):
         # TODO: node after fixing/unfixing any DOF
         dof_indices = [0]
         full_dof_size = 0
-        dof_objs = set()
+        dof_ids = set()
         self.ancestors = self._get_ancestors()
         self._unique_dof_opts = []
         for opt in self.ancestors + [self]:
-            if opt.dofs not in dof_objs:
-                dof_objs.add(opt.dofs)
+            dofs_id = id(opt.dofs)
+            if dofs_id not in dof_ids:
+                dof_ids.add(dofs_id)
                 full_dof_size += opt.local_full_dof_size
                 dof_indices.append(full_dof_size)
                 self._unique_dof_opts.append(opt)
