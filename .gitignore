@@ -70,3 +70,5 @@ tests/boundary*
 # Version file
 src/simsopt/_version.py
 
+#CMAES stuff
+examples/3_Advanced/spline_cmaes_lsq/cmaes_lsq_outputs
