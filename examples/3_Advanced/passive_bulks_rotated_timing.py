@@ -71,13 +71,13 @@ def main() -> None:
     p.add_argument(
         "--large",
         action="store_true",
-        help="Use the large-scale rotating fixture (n_base up to 128); default sizes 16,32,48,64.",
+        help="Use the large-scale rotating fixture (n_base up to 128); default sizes 16,24,32.",
     )
     p.add_argument(
         "--sizes",
         type=str,
         default=None,
-        help="Comma-separated n_base. Default: 6,8,10,12 (small) or 16,32,48,64 (--large).",
+        help="Comma-separated n_base. Default: 6,8,10,12 (small) or 16,24,32 (--large).",
     )
     p.add_argument(
         "--flags",
@@ -93,9 +93,21 @@ def main() -> None:
     )
     p.add_argument("--warmups", type=int, default=1)
     p.add_argument("--repeats", type=int, default=3)
+    p.add_argument(
+        "--mode-truncation-tol",
+        type=float,
+        default=0.0,
+        help=(
+            "Spectral mode-truncation tolerance forwarded to PSCBulkArray "
+            "(Stage B; default 0.0 = off).  Drops the smallest-eigenvalue "
+            "modes whose cumulative ``1/lambda`` modal beta amplitude is "
+            "below this fraction of the total."
+        ),
+    )
     args = p.parse_args()
     if args.sizes is None:
-        args.sizes = "16,32,48,64" if bool(args.large) else "6,8,10,12"
+        # Cap default --large sweep below ~50 bases: 48/64 rebuilds are often prohibitive.
+        args.sizes = "16,24,32" if bool(args.large) else "6,8,10,12"
 
     os.environ["SIMSOPT_PSCBULK_TIMING"] = "1"
     for token in (args.flags or "").replace(";", " ").split():
@@ -118,12 +130,17 @@ def main() -> None:
                 f"skip n_base={nbase} (fixture supports {n_min}--{n_max} in this mode)"
             )
             continue
+        tol = float(args.mode_truncation_tol or 0.0)
         psc0 = _make(n_base=nbase, seed=0)
+        if tol > 0.0:
+            psc0._mode_truncation_tol = tol
         for _ in range(int(args.warmups)):
             psc0._rebuild()
         medians: List[Dict[str, float]] = []
         for _rep in range(int(args.repeats)):
             psc = _make(n_base=nbase, seed=0)
+            if tol > 0.0:
+                psc._mode_truncation_tol = tol
             t0 = time.perf_counter()
             psc._rebuild()
             tr = time.perf_counter() - t0

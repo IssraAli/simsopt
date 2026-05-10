@@ -13,6 +13,7 @@ import os
 import time
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -26,6 +27,7 @@ from simsopt.field.bulk_inductance import (
     _shell_inductance_matrix_symmetric_reduced_jax,
     reset_psc_far_selfcheck_cache,
 )
+from simsopt.field.psc_bulk import _classify_pairs, _reduced_free_dof_extras_for_jax
 
 pytestmark = pytest.mark.slow
 
@@ -39,6 +41,603 @@ _spec.loader.exec_module(_tpb)
 _make_symmetry_validation_array = _tpb._make_symmetry_validation_array
 _make_rotated_puck_array = _tpb._make_rotated_puck_array
 _make_rotated_puck_array_large = _tpb._make_rotated_puck_array_large
+
+
+def test_classify_pairs_partition_disjoint_and_complete() -> None:
+    """Host far-pair classifier partitions non-self base-by-replica pairs."""
+    centers_all = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [10.0, 10.0, 0.0],
+        ],
+        dtype=float,
+    )
+    r_eff_all = np.ones(4)
+    base_indices = np.array([0, 0, 1, 1], dtype=np.int32)
+    near, far, n_near, n_far = _classify_pairs(
+        centers_all, r_eff_all, base_indices, r_far=3.0
+    )
+    n_base = 2
+    n_pairs = n_base * centers_all.shape[0]
+    assert n_near + n_far == n_pairs - n_base
+    assert {tuple(x) for x in near.tolist()}.isdisjoint(
+        {tuple(x) for x in far.tolist()}
+    )
+
+    near0, far0, n_near0, n_far0 = _classify_pairs(
+        centers_all, r_eff_all, base_indices, r_far=0.0
+    )
+    assert n_near0 == 0
+    assert n_far0 == n_pairs - n_base
+    assert near0.shape == (0, 2)
+    assert far0.shape == (n_pairs - n_base, 2)
+
+    near_inf, far_inf, n_near_inf, n_far_inf = _classify_pairs(
+        centers_all, r_eff_all, base_indices, r_far=np.inf
+    )
+    assert n_near_inf == n_pairs - n_base
+    assert n_far_inf == 0
+    assert near_inf.shape == (n_pairs - n_base, 2)
+    assert far_inf.shape == (0, 2)
+
+
+def test_reduced_free_dof_far_pair_env_overrides_default() -> None:
+    """Env-var kappa remains the highest-priority far-pair control."""
+    prev = os.environ.get("SIMSOPT_PSC_PAIR_FAR_KAPPA")
+    try:
+        os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        use_far, kappa, *_ = _reduced_free_dof_extras_for_jax(3.0)
+        assert use_far is True
+        assert kappa == 3.0
+
+        os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = "0"
+        use_far, kappa, *_ = _reduced_free_dof_extras_for_jax(3.0)
+        assert use_far is False
+        assert kappa == 0.0
+    finally:
+        if prev is None:
+            os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        else:
+            os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = prev
+
+
+def _run_reduced_free_dof_forward(kappa_env_value: str | None) -> np.ndarray:
+    """Build identical reduced-free-DoF fixtures and return ``B_at_points`` output.
+
+    The free-DoF code path is engaged by unfixing a base-puck quaternion DoF.
+    The kappa value is supplied via the ``SIMSOPT_PSC_PAIR_FAR_KAPPA`` env
+    override (highest-priority knob; see :func:`_reduced_free_dof_extras_for_jax`).
+    """
+    prev = os.environ.get("SIMSOPT_PSC_PAIR_FAR_KAPPA")
+    try:
+        if kappa_env_value is None:
+            os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        else:
+            os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = kappa_env_value
+        psc = _make_symmetry_validation_array(nfp=1, stellsym=False, n_base=3)
+        psc.unfix("q0_0")
+        psc.recompute_currents()
+        return np.asarray(psc.B_at_points(psc.eval_points), dtype=np.float64)
+    finally:
+        if prev is None:
+            os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        else:
+            os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = prev
+
+
+def test_far_pair_partition_matches_legacy_when_all_near() -> None:
+    """Forward L → B match between legacy ``vmap`` and partitioned ``lax.scan``.
+
+    Selecting ``SIMSOPT_PSC_PAIR_FAR_KAPPA=1e9`` forces every non-self pair
+    into the *near* partition; the far scan then adds nothing and the
+    partitioned forward must agree with the legacy free-DoF JAX assembly.
+    Allows a tight float-reordering tolerance because scatter-add and
+    ``segment_sum`` accumulate the same set of summands in different
+    orders.
+    """
+    B_legacy = _run_reduced_free_dof_forward(kappa_env_value=None)
+    B_partition = _run_reduced_free_dof_forward(kappa_env_value="1e9")
+    assert B_legacy.shape == B_partition.shape
+    denom = max(float(np.max(np.abs(B_legacy))), 1.0e-30)
+    rel = float(np.max(np.abs(B_legacy - B_partition))) / denom
+    assert rel <= 1.0e-10, (
+        f"partitioned forward disagrees with legacy: rel_max={rel:.3e}, "
+        f"|B_legacy|_max={denom:.3e}"
+    )
+
+
+def _run_reduced_free_dof_vjp(kappa_env_value: str | None) -> np.ndarray:
+    """Build identical reduced-free-DoF fixtures and return ``dJ/dx`` for a scalar J.
+
+    Uses a plain sum-on-``B_at_points`` scalar so the VJP is exercised through
+    the reduced free-DoF runners (``_vjp_reduced_free_dof_jitted`` and
+    siblings).  Returns the gradient w.r.t. the PSCBulkArray's local DOFs as a
+    flat ``float64`` array.
+    """
+    prev = os.environ.get("SIMSOPT_PSC_PAIR_FAR_KAPPA")
+    try:
+        if kappa_env_value is None:
+            os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        else:
+            os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = kappa_env_value
+        psc = _make_symmetry_validation_array(nfp=1, stellsym=False, n_base=3)
+        psc.unfix("q0_0")
+        psc.recompute_currents()
+        pts = np.asarray(psc.eval_points, dtype=float)
+        v_B = np.ones_like(np.asarray(psc.B_at_points(pts)))
+        deriv = psc._vjp_puck_geometry(v_B, pts)
+        return np.asarray(deriv(psc), dtype=np.float64).reshape(-1)
+    finally:
+        if prev is None:
+            os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        else:
+            os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = prev
+
+
+def _time_forward_loops(psc: Any, n_iter: int = 5) -> float:
+    """Time ``B_at_points`` over ``n_iter`` repetitions after one warm-up.
+
+    JIT compile of the reduced free-DoF dispatch happens on the first
+    call; ``time.perf_counter`` over the remainder reflects steady-state
+    cost.  Returned value is the median per-call wall time in seconds.
+    """
+    pts = np.asarray(psc.eval_points, dtype=float)
+    _ = np.asarray(psc.B_at_points(pts))  # warm-up
+    samples: list[float] = []
+    for _ in range(int(n_iter)):
+        t0 = time.perf_counter()
+        _ = np.asarray(psc.B_at_points(pts))
+        samples.append(time.perf_counter() - t0)
+    samples.sort()
+    return float(samples[len(samples) // 2])
+
+
+@pytest.mark.skipif(
+    os.environ.get("SIMSOPT_PSC_FAR_PERF_GATE", "0") != "1",
+    reason="opt-in perf gate; export SIMSOPT_PSC_FAR_PERF_GATE=1 to run",
+)
+def test_far_pair_dipole_speedup_debug() -> None:
+    """Steady-state forward regression gate for the dipole-only far branch.
+
+    Acceptance: median per-call wall time of the partitioned scan with a
+    ``kappa`` value chosen so every non-self pair lands in the *far* branch
+    must not be slower than the legacy ``vmap`` path by more than 5 %.
+    Threshold is intentionally loose because at the test fixture's
+    light basis the dense pair kernel is *not* the dominant cost; the
+    eigenfloor solve and Biot-Savart eval contribute too.  At reactor
+    scale (``nq ~ 312``, ``n_base ~ 14`` × ``G = 4`` replication)
+    pair-inductance work dominates and the dipole kernel reaches the
+    target speedup tracked in
+    [`docs/passive_bulk_far_pair_plan.md`](../../../stellcoilbench_dipoles/docs/passive_bulk_far_pair_plan.md)
+    Phase 0 baseline.
+
+    Test is opt-in (``SIMSOPT_PSC_FAR_PERF_GATE=1``) so it never adds CI
+    flake; the full reactor-scale speedup gate lives behind
+    ``scripts/passive_bulk_opt_timing.py``.
+    """
+    n_base = int(os.environ.get("SIMSOPT_PSC_FAR_PERF_GATE_N", "8"))
+    light_basis: dict[str, int] = {
+        "m_fourier": 2,
+        "l_zernike": 3,
+        "k_chebyshev": 1,
+        "n_rho": 4,
+        "n_phi": 6,
+        "n_z": 2,
+    }
+
+    prev = os.environ.get("SIMSOPT_PSC_PAIR_FAR_KAPPA")
+    try:
+        os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        psc_legacy = _make_rotated_puck_array_large(
+            n_base=n_base, nfp=1, stellsym=False, **light_basis
+        )
+        psc_legacy.unfix("q0_0")
+        psc_legacy.recompute_currents()
+        t_legacy = _time_forward_loops(psc_legacy)
+
+        os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = "1.0e-6"  # everything → far
+        psc_far = _make_rotated_puck_array_large(
+            n_base=n_base, nfp=1, stellsym=False, **light_basis
+        )
+        psc_far.unfix("q0_0")
+        psc_far.recompute_currents()
+        t_far = _time_forward_loops(psc_far)
+    finally:
+        if prev is None:
+            os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+        else:
+            os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = prev
+
+    speedup = t_legacy / max(t_far, 1.0e-12)
+    print(
+        f"[far-pair perf] n_base={n_base} t_legacy={t_legacy:.4f}s "
+        f"t_far={t_far:.4f}s speedup={speedup:.2f}x"
+    )
+    assert speedup >= 0.95, (
+        f"Far-pair dipole branch regressed beyond the 5 % budget: "
+        f"t_legacy={t_legacy:.4f}s, t_far={t_far:.4f}s, speedup={speedup:.2f}x"
+    )
+
+
+def test_far_pair_vjp_matches_legacy_when_all_near() -> None:
+    """Reduced free-DoF VJP gradient is invariant to partition reorder at all-near.
+
+    Confirms that wiring ``near_pair_indices`` / ``far_pair_indices`` into
+    ``_vjp_reduced_free_dof_jitted`` (and siblings) does not perturb the
+    backward sweep when no pair lands in the far branch.
+    """
+    g_legacy = _run_reduced_free_dof_vjp(kappa_env_value=None)
+    g_partition = _run_reduced_free_dof_vjp(kappa_env_value="1e9")
+    assert g_legacy.shape == g_partition.shape
+    denom = max(float(np.max(np.abs(g_legacy))), 1.0e-30)
+    rel = float(np.max(np.abs(g_legacy - g_partition))) / denom
+    assert rel <= 1.0e-9, (
+        f"partitioned VJP disagrees with legacy: rel_max={rel:.3e}, "
+        f"|grad_legacy|_max={denom:.3e}"
+    )
+
+
+def _build_R_or_t_vjp_fixture(*, dof_name: str):
+    """Build a small free-DoF fixture with ``dof_name`` (R0/t0) unfixed.
+
+    Also unfixes ``q0_0`` so the reduced free-DoF JAX path engages
+    (the FD R/t branch in :meth:`PSCBulkArray._vjp_puck_geometry`
+    only runs alongside the JAX VJP, never on its own).
+    """
+    psc = _make_symmetry_validation_array(nfp=1, stellsym=False, n_base=3)
+    psc.unfix("q0_0")
+    psc.unfix(dof_name)
+    psc.recompute_currents()
+    return psc
+
+
+def _Rt_fd_reference(psc, dof_name: str, *, eps: float = 1.0e-5) -> float:
+    """Independent central-difference reference for ``d<v_B,B(pts)>/d(dof)``.
+
+    Uses ``v_B = ones_like(B)`` so the scalar functional is
+    ``J = sum(B(pts))``, matching the seed used by
+    :func:`_run_reduced_free_dof_vjp` and the analytic test driver.
+    """
+    pts = np.asarray(psc.eval_points, dtype=float)
+    B0 = np.asarray(psc.B_at_points(pts))
+    v_B = np.ones_like(B0)
+    v0 = float(psc.get(dof_name))
+    psc.set(dof_name, v0 + eps)
+    psc.recompute_currents()
+    Bp = np.asarray(psc.B_at_points(pts))
+    psc.set(dof_name, v0 - eps)
+    psc.recompute_currents()
+    Bm = np.asarray(psc.B_at_points(pts))
+    psc.set(dof_name, v0)
+    psc.recompute_currents()
+    return float(np.sum(v_B * (Bp - Bm))) / (2.0 * eps)
+
+
+def _Rt_vjp_grad_for_dof(psc, dof_name: str) -> float:
+    """Run the production VJP and return the gradient component on ``dof_name``.
+
+    Uses :attr:`Derivative.data` keyed on ``psc`` (rather than
+    :meth:`Derivative.__call__`) so we get the *full* per-DOF gradient
+    array of shape ``(n_base * 9,)`` and can index by name without
+    interleaving with TF-coil free-DoF entries pulled in by
+    ``deriv(psc)``.
+    """
+    pts = np.asarray(psc.eval_points, dtype=float)
+    B0 = np.asarray(psc.B_at_points(pts))
+    v_B = np.ones_like(B0)
+    deriv = psc._vjp_puck_geometry(v_B, pts)
+    grad_full = np.asarray(deriv.data[psc], dtype=np.float64).reshape(-1)
+    full_names = list(psc.local_full_dof_names)
+    return float(grad_full[full_names.index(dof_name)])
+
+
+def test_R_vjp_matches_finite_difference() -> None:
+    """``dJ/dR0`` from the production VJP matches an independent central-FD probe.
+
+    The production path uses one-sided forward FD (O(eps) bias) while
+    the reference here uses central FD (O(eps^2)).  Tolerance is
+    loosened to 5e-3 to accommodate the bias.
+    """
+    psc = _build_R_or_t_vjp_fixture(dof_name="R0")
+    fd_ref = _Rt_fd_reference(psc, "R0")
+    g_vjp = _Rt_vjp_grad_for_dof(psc, "R0")
+    denom = max(abs(fd_ref), 1.0e-12)
+    rel = abs(g_vjp - fd_ref) / denom
+    assert rel <= 5.0e-3, (
+        f"R0 VJP/FD disagree: vjp={g_vjp:.6e}, fd={fd_ref:.6e}, rel={rel:.3e}"
+    )
+
+
+def test_t_vjp_matches_finite_difference() -> None:
+    """``dJ/dt0`` from the production VJP matches an independent central-FD probe."""
+    psc = _build_R_or_t_vjp_fixture(dof_name="t0")
+    fd_ref = _Rt_fd_reference(psc, "t0")
+    g_vjp = _Rt_vjp_grad_for_dof(psc, "t0")
+    denom = max(abs(fd_ref), 1.0e-12)
+    rel = abs(g_vjp - fd_ref) / denom
+    assert rel <= 5.0e-3, (
+        f"t0 VJP/FD disagree: vjp={g_vjp:.6e}, fd={fd_ref:.6e}, rel={rel:.3e}"
+    )
+
+
+def test_unfix_radius_emits_no_warning() -> None:
+    """``unfix("R0")`` / ``unfix("t0")`` no longer warn about a zero VJP.
+
+    Phase D flipped :meth:`PSCBulkArray._is_zero_vjp_dof` to ``False``
+    for every name once the FD R/t branch landed, so the warning
+    machinery in :meth:`unfix` must stay silent for those DOFs.
+    """
+    import warnings as _warnings
+
+    psc = _make_symmetry_validation_array(nfp=1, stellsym=False, n_base=3)
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        psc.unfix("R0")
+        psc.unfix("t0")
+    psc_warnings = [
+        w
+        for w in caught
+        if "PSCBulkArray" in str(w.message) and "zero VJP" in str(w.message)
+    ]
+    assert not psc_warnings, (
+        f"expected no zero-VJP warnings for R/t, got {[str(w.message) for w in psc_warnings]}"
+    )
+
+
+def test_B_at_points_tf_only_matches_full_when_fixed() -> None:
+    """``_B_at_points_tf_only`` matches ``B_at_points`` when no puck DOFs are free."""
+    psc = _make_symmetry_validation_array(nfp=1, stellsym=False, n_base=3)
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    B_full = np.asarray(psc.B_at_points(pts), dtype=np.float64)
+    B_tf = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+    np.testing.assert_allclose(B_tf, B_full, rtol=1e-12, atol=0)
+
+
+def test_B_at_points_tf_only_matches_full_when_R_free() -> None:
+    """``_B_at_points_tf_only`` is value-equivalent to ``B_at_points`` with R0 free.
+
+    When ``_has_free_puck_dofs()`` is True, ``B_at_points`` uses the
+    expensive free-DOF JAX runner which traces the full L assembly in JAX.
+    ``_B_at_points_tf_only`` uses the pre-built host-side ``Lr_chol`` / ``Q``.
+    The two paths agree to ~1e-6 relative (different numerical route to the
+    same Cholesky factor; JAX jitter vs host jitter).
+    """
+    psc = _build_R_or_t_vjp_fixture(dof_name="R0")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    B_full = np.asarray(psc.B_at_points(pts), dtype=np.float64)
+    B_tf = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+    np.testing.assert_allclose(B_tf, B_full, rtol=1e-5, atol=0)
+
+
+def test_Rt_fd_gradient_uses_tf_only_path() -> None:
+    """The FD branch must dispatch through ``_B_at_points_tf_only``, not the full runner.
+
+    With ``SIMSOPT_PSCBULK_TIMING=1``, we verify that:
+    - Zero ``B_at_points_free_reduced_jax`` rows appear inside the FD window.
+    - ``B_at_points_tf_only_total`` row count equals ``n_free_shape + 1``
+      (one B0 capture + one per DOF probe).
+    """
+    import os
+    os.environ["SIMSOPT_PSCBULK_TIMING"] = "1"
+    try:
+        psc = _build_R_or_t_vjp_fixture(dof_name="R0")
+        psc.recompute_currents()
+        pts = np.asarray(psc.eval_points, dtype=float)
+        B0 = np.asarray(psc.B_at_points(pts))
+        v_B = np.ones_like(B0)
+
+        psc.reset_timing_history()
+        _deriv = psc._vjp_puck_geometry(v_B, pts)
+        rows = psc.get_timing_history()
+
+        free_reduced_in_fd = [
+            r for r in rows
+            if r.get("phase", "").startswith("B_at_points_free_reduced_jax")
+        ]
+        tf_only_in_fd = [
+            r for r in rows
+            if r.get("phase", "").startswith("B_at_points_tf_only_total")
+        ]
+        n_free_shape = sum(
+            1 for name, free in zip(psc.local_full_dof_names, psc.local_dofs_free_status)
+            if free and str(name).startswith(("R", "t"))
+        )
+        assert len(free_reduced_in_fd) == 0, (
+            f"expected 0 B_at_points_free_reduced_jax rows in FD, got {len(free_reduced_in_fd)}"
+        )
+        assert len(tf_only_in_fd) == n_free_shape + 1, (
+            f"expected {n_free_shape + 1} B_at_points_tf_only_total rows, got {len(tf_only_in_fd)}"
+        )
+    finally:
+        os.environ.pop("SIMSOPT_PSCBULK_TIMING", None)
+
+
+def test_Rt_fd_gradient_recompute_count_one_sided() -> None:
+    """One-sided FD uses 2 rebuilds per free shape DOF (perturb + restore).
+
+    Central FD used 3 (perturb+, perturb-, restore).  Verify the
+    reduction by counting ``rebuild_total`` rows in the timing history.
+    """
+    import os
+    os.environ["SIMSOPT_PSCBULK_TIMING"] = "1"
+    try:
+        psc = _build_R_or_t_vjp_fixture(dof_name="R0")
+        psc.recompute_currents()
+        pts = np.asarray(psc.eval_points, dtype=float)
+        B0 = np.asarray(psc.B_at_points(pts))
+        v_B = np.ones_like(B0)
+
+        psc.reset_timing_history()
+        _deriv = psc._vjp_puck_geometry(v_B, pts)
+        rows = psc.get_timing_history()
+
+        rebuild_rows = [
+            r for r in rows if r.get("phase", "").startswith("rebuild_total")
+        ]
+        n_free_shape = sum(
+            1 for name, free in zip(psc.local_full_dof_names, psc.local_dofs_free_status)
+            if free and str(name).startswith(("R", "t"))
+        )
+        assert len(rebuild_rows) == 2 * n_free_shape, (
+            f"expected {2 * n_free_shape} rebuild_total rows (one-sided FD), "
+            f"got {len(rebuild_rows)}"
+        )
+    finally:
+        os.environ.pop("SIMSOPT_PSCBULK_TIMING", None)
+
+
+def _build_shape_only_vjp_fixture(*, dof_name: str):
+    """Build a fixture with only ``dof_name`` (R0/t0) unfixed; centers/quats fixed.
+
+    Distinct from :func:`_build_R_or_t_vjp_fixture` (which deliberately
+    unfixes ``q0_0`` to keep the JAX free-DOF VJP path engaged).  This
+    fixture exercises the **shape-only** dispatch in
+    :meth:`PSCBulkArray._vjp_puck_geometry` -- no centers/quats free
+    so the JAX free-DOF runner must be bypassed entirely.
+    """
+    psc = _make_symmetry_validation_array(nfp=1, stellsym=False, n_base=3)
+    psc.unfix(dof_name)
+    psc.recompute_currents()
+    return psc
+
+
+def test_B_at_points_skips_free_dof_jax_when_only_Rt_free() -> None:
+    """``B_at_points`` must route through ``_B_at_points_tf_only`` when only R/t are free.
+
+    With the shape-only fast path, ``_has_free_center_or_quat_dofs()``
+    is False, so the dispatch falls through to the cheap TF-only path.
+    Verify that no ``B_at_points_free_reduced_jax`` rows are emitted.
+    """
+    os.environ["SIMSOPT_PSCBULK_TIMING"] = "1"
+    try:
+        psc = _build_shape_only_vjp_fixture(dof_name="R0")
+        pts = np.asarray(psc.eval_points, dtype=float)
+        psc.reset_timing_history()
+        _ = psc.B_at_points(pts)
+        rows = psc.get_timing_history()
+
+        free_jax_rows = [
+            r for r in rows
+            if r.get("phase", "").startswith("B_at_points_free_reduced_jax")
+        ]
+        tf_only_rows = [
+            r for r in rows
+            if r.get("phase", "").startswith("B_at_points_tf_only_total")
+        ]
+        assert len(free_jax_rows) == 0, (
+            f"expected 0 B_at_points_free_reduced_jax rows for shape-only fixture, "
+            f"got {len(free_jax_rows)}"
+        )
+        assert len(tf_only_rows) >= 1, (
+            f"expected at least 1 B_at_points_tf_only_total row, got {len(tf_only_rows)}"
+        )
+    finally:
+        os.environ.pop("SIMSOPT_PSCBULK_TIMING", None)
+
+
+def test_vjp_puck_geometry_skips_jax_runner_when_only_Rt_free() -> None:
+    """``_vjp_puck_geometry`` must skip the JAX free-DOF VJP when only R/t are free.
+
+    Verify by counting ``vjp_free_reduced_jax`` rows (should be zero)
+    and ``vjp_shape_only_total`` rows (should be exactly one).
+    """
+    os.environ["SIMSOPT_PSCBULK_TIMING"] = "1"
+    try:
+        psc = _build_shape_only_vjp_fixture(dof_name="R0")
+        pts = np.asarray(psc.eval_points, dtype=float)
+        B0 = np.asarray(psc.B_at_points(pts))
+        v_B = np.ones_like(B0)
+
+        psc.reset_timing_history()
+        _deriv = psc._vjp_puck_geometry(v_B, pts)
+        rows = psc.get_timing_history()
+
+        free_jax_vjp_rows = [
+            r for r in rows
+            if r.get("phase", "").startswith("vjp_free_reduced_jax")
+        ]
+        shape_only_rows = [
+            r for r in rows
+            if r.get("phase", "").startswith("vjp_shape_only_total")
+        ]
+        assert len(free_jax_vjp_rows) == 0, (
+            f"expected 0 vjp_free_reduced_jax rows on shape-only fixture, "
+            f"got {len(free_jax_vjp_rows)}"
+        )
+        assert len(shape_only_rows) == 1, (
+            f"expected exactly 1 vjp_shape_only_total row, got {len(shape_only_rows)}"
+        )
+    finally:
+        os.environ.pop("SIMSOPT_PSCBULK_TIMING", None)
+
+
+def test_R_vjp_shape_only_matches_central_fd() -> None:
+    """Shape-only VJP for R0 still matches an independent central-FD reference.
+
+    Even though we skip the JAX free-DOF VJP runner, the FD branch
+    inside :meth:`PSCBulkArray._Rt_fd_gradient` (one-sided forward FD)
+    still produces a usable R0 gradient.  Verify it agrees with a
+    central-FD probe to ``rtol = 5e-3`` (one-sided FD has O(eps) bias).
+    """
+    psc = _build_shape_only_vjp_fixture(dof_name="R0")
+    fd_ref = _Rt_fd_reference(psc, "R0")
+    g_vjp = _Rt_vjp_grad_for_dof(psc, "R0")
+    denom = max(abs(fd_ref), 1.0e-12)
+    rel = abs(g_vjp - fd_ref) / denom
+    assert rel <= 5.0e-3, (
+        f"R0 shape-only VJP/FD disagree: vjp={g_vjp:.6e}, fd={fd_ref:.6e}, "
+        f"rel={rel:.3e}"
+    )
+
+
+def test_far_pair_partition_matches_legacy_when_all_near_with_R_free() -> None:
+    """Far-pair partition stays bit-exact with ``R0`` unfixed (FD path engaged).
+
+    Because the FD branch in :meth:`PSCBulkArray._vjp_puck_geometry`
+    runs *outside* the JAX kernel, switching the partition between the
+    legacy ``vmap`` path and the partitioned ``lax.scan`` path must not
+    perturb the FD R/t component (it depends only on
+    :meth:`recompute_currents` + :meth:`B_at_points`, both of which are
+    partition-agnostic) nor the centre / quat slots that come from the
+    JAX kernel.
+    """
+    prev = os.environ.get("SIMSOPT_PSC_PAIR_FAR_KAPPA")
+
+    def _run(kappa_env_value: str | None) -> np.ndarray:
+        try:
+            if kappa_env_value is None:
+                os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+            else:
+                os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = kappa_env_value
+            psc = _make_symmetry_validation_array(
+                nfp=1, stellsym=False, n_base=3
+            )
+            psc.unfix("q0_0")
+            psc.unfix("R0")
+            psc.recompute_currents()
+            pts = np.asarray(psc.eval_points, dtype=float)
+            v_B = np.ones_like(np.asarray(psc.B_at_points(pts)))
+            deriv = psc._vjp_puck_geometry(v_B, pts)
+            return np.asarray(deriv(psc), dtype=np.float64).reshape(-1)
+        finally:
+            if prev is None:
+                os.environ.pop("SIMSOPT_PSC_PAIR_FAR_KAPPA", None)
+            else:
+                os.environ["SIMSOPT_PSC_PAIR_FAR_KAPPA"] = prev
+
+    g_legacy = _run(None)
+    g_partition = _run("1e9")
+    assert g_legacy.shape == g_partition.shape
+    denom = max(float(np.max(np.abs(g_legacy))), 1.0e-30)
+    rel = float(np.max(np.abs(g_legacy - g_partition))) / denom
+    assert rel <= 1.0e-3, (
+        f"partitioned VJP under R-free disagrees with legacy: "
+        f"rel_max={rel:.3e}, |grad_legacy|_max={denom:.3e}"
+    )
 
 
 def _numpy_symmetric_reduced_reference(
@@ -739,7 +1338,8 @@ def test_large_rotated_puck_far_pair_speedup_opt_in() -> None:
     """
     if os.environ.get("RUN_PSC_LARGE_FAR_BENCH", "") != "1":
         pytest.skip(
-            "set RUN_PSC_LARGE_FAR_BENCH=1 to run large n_base=32 far-pair timing"
+            "set RUN_PSC_LARGE_FAR_BENCH=1 to run large n_base=32 far-pair timing "
+            "(nightly perf candidate gate)"
         )
     _env: dict[str, str | None] = {}
     for k in (

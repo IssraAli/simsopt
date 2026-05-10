@@ -4,7 +4,12 @@ Ideal-diamagnetic passive bulk (cylindrical pucks) and :class:`PassiveBulkField`
 **Environment (optional)**
 
 - ``SIMSOPT_PSCBULK_TIMING``: if ``1``, :meth:`PSCBulkArray._rebuild` records
-  per-phase wall times in :attr:`PSCBulkArray._timing_rows`.
+  per-phase wall times in :attr:`PSCBulkArray._timing_rows`.  Rows accumulated
+  during a rebuild and the subsequent JAX forward / VJP calls are also
+  appended to :attr:`PSCBulkArray._timing_history` (with a ``rebuild_idx``
+  tag) before the next rebuild clears ``_timing_rows``, so the full
+  per-phase history of an optimizer run can be retrieved via
+  :meth:`PSCBulkArray.get_timing_history`.
 - ``SIMSOPT_JAX_CACHE``: if ``0``, disables the default on-disk JAX
   compilation cache directory.
 - ``SIMSOPT_JAX_CACHE_DIR``: directory for the JAX experimental compilation
@@ -22,6 +27,14 @@ Ideal-diamagnetic passive bulk (cylindrical pucks) and :class:`PassiveBulkField`
   free-DoF ``L`` in row batches (``0``/unset = default auto sizing or
   full ``vmap``; positive int = block width). See the constructor
   docstring for ``jax_pair_row_chunk``.
+- ``SIMSOPT_PSC_PAIR_REPLICA_CHUNK``: in-row chunking of the symmetry
+  replica axis ``n_all`` for the free-DoF pair-inductance kernel.  Default
+  unset/``0`` keeps the existing ``vmap`` over all replicas (peak
+  ``n_all * nq^2 * nd^2 * 8`` bytes per row).  Setting to a positive
+  integer ``k`` runs the replica fan-in via :func:`jax.lax.scan` in
+  groups of ``k`` so peak memory drops to ``k * nq^2 * nd^2 * 8`` bytes,
+  enabling the production conformal-bulk free-orientation case to fit on
+  smaller hosts.
 
 - ``SIMSOPT_PSC_PAIR_FAR_KAPPA`` (``0`` = off): center-distance ratio
   above which per-pair blocks use the W2 dipole mutual-inductance kernel.
@@ -157,7 +170,7 @@ from .puck_basis import (
     build_puck_shell_basis,
     normalize_mode_truncate,
 )
-from .puck_init import cylindrical_grid_pucks, winding_surface_pucks
+from .puck_init import toroidal_shell_pucks, winding_surface_pucks
 
 # Route TF-only VJP through the analytic adjoint + C++ BiotSavart (default
 # production path).  Equivalence tests flip this module-level flag to
@@ -266,6 +279,31 @@ def _psc_jax_pair_chunk_from_env() -> Optional[int]:
     return max(0, v)
 
 
+def _psc_pair_replica_chunk_from_env() -> Optional[int]:
+    """Parse :envvar:`SIMSOPT_PSC_PAIR_REPLICA_CHUNK` (n_all-axis pair-kernel chunking).
+
+    Controls in-row chunking of the symmetry-replica axis ``n_all`` inside the
+    free-DOF JAX pair-inductance assembly.  The default ``vmap`` over all
+    replicas materializes a single ``(n_all, nq, nq, nd, nd)`` kernel batch,
+    which can exceed available memory at production basis / replica sizes.
+    Setting this env var to a positive integer ``k`` runs the replica fan-in
+    via :func:`jax.lax.scan` in groups of ``k`` so peak memory inside
+    :func:`_pair_inductance_block` scales as ``k * nq * nq * nd * nd * 8``.
+
+    * Unset: ``None``  ->  off (current single-``vmap`` behaviour, no change).
+    * ``"0"``: explicit off (same as unset).
+    * Positive integer: replica chunk width.
+    """
+    raw = os.environ.get("SIMSOPT_PSC_PAIR_REPLICA_CHUNK")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        v = int(str(raw).strip(), 10)
+    except ValueError:
+        return None
+    return max(0, v)
+
+
 def _psc_bs_eval_chunk_from_env() -> Optional[int]:
     """Parse :envvar:`SIMSOPT_PSC_BS_EVAL_CHUNK` (free-DOF shell-B batching).
 
@@ -321,14 +359,81 @@ def _psc_tf_loading_env() -> str:
     return m if m in allowed else "bn_quad"
 
 
-def _psc_pair_far_kappa_env() -> float:
-    """Distance / (sum of effective radii) above which dipole pair inductance is used."""
+def _psc_pair_far_kappa_env_override() -> Optional[float]:
+    """Return explicit env override for far-pair kappa, or ``None`` if unset."""
+    if "SIMSOPT_PSC_PAIR_FAR_KAPPA" not in os.environ:
+        return None
     raw = os.environ.get("SIMSOPT_PSC_PAIR_FAR_KAPPA", "0").strip()
     try:
         v = float(raw)
     except ValueError:
         return 0.0
     return max(0.0, v)
+
+
+def _psc_pair_far_kappa_env() -> float:
+    """Distance / (sum of effective radii) above which dipole pair inductance is used."""
+    override = _psc_pair_far_kappa_env_override()
+    return 0.0 if override is None else float(override)
+
+
+def _psc_partial_l_reuse_env() -> bool:
+    """Enable changed-mask incremental rebuild path (default ``1``).
+
+    When on, :meth:`PSCBulkArray._rebuild` may reuse the previous
+    ``L_base`` and update only the rows/columns of base pucks whose
+    geometry actually changed.  Set ``SIMSOPT_PSC_PARTIAL_L_REUSE=0``
+    to force a full reassembly every step (legacy behavior).
+    """
+    return os.environ.get("SIMSOPT_PSC_PARTIAL_L_REUSE", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _psc_partial_l_reuse_threshold_env() -> float:
+    """Return changed-puck fraction threshold for partial-L reuse."""
+    raw = os.environ.get("SIMSOPT_PSC_PARTIAL_L_REUSE_THRESHOLD", "0.3").strip()
+    try:
+        val = float(raw)
+    except ValueError:
+        return 0.3
+    return float(min(1.0, max(0.0, val)))
+
+
+def _psc_rt_fd_eps_env() -> float:
+    """Return step size for one-sided FD R/t gradient (default ``1e-5``).
+
+    Controlled by ``SIMSOPT_PSC_RT_FD_EPS``.  One-sided forward FD has
+    O(eps) bias; a slightly larger eps (e.g. ``5e-5``) can improve
+    signal-to-noise at the cost of marginally larger bias.
+    """
+    raw = os.environ.get("SIMSOPT_PSC_RT_FD_EPS", "1e-5").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 1e-5
+
+
+def _psc_continuity_cache_env() -> bool:
+    """Enable continuity-projector cache across rebuilds (default ``1``).
+
+    The continuity projector ``Q_c`` only depends on the per-puck topology
+    (``n_dof_total``, ``puck_subset``, ``n_phi_rim`` and rim-continuity
+    strictness) and never on TF or puck-orientation DOFs.  Caching it
+    across rebuilds is the only Stage 3 knob that produced a measurable
+    win in the May 2026 audit (~9.7x reduction on continuity cProfile
+    cumulative time), so it is now on by default; set
+    ``SIMSOPT_PSC_CONTINUITY_CACHE=0`` to disable for diagnostics.
+    """
+    return os.environ.get("SIMSOPT_PSC_CONTINUITY_CACHE", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _psc_bs_eval_far_kappa_env() -> float:
@@ -342,7 +447,14 @@ def _psc_bs_eval_far_kappa_env() -> float:
 
 
 def _psc_solve_mode_env() -> str:
-    """Reduced solve: ``eigenfloor`` (default) or ``eigk`` (eigendecomp + divide)."""
+    """Reduced solve mode for the free-DOF reduced system.
+
+    Allowed values are ``eigenfloor`` (default, Cholesky on a spectrally
+    floored operator) and ``eigk`` (floored-eigenbasis + triangular
+    solve).  The ``cg`` and ``lowrank`` modes that briefly shipped in the
+    May 2026 audit produced no measurable wall-clock win on the debug
+    fixture and were removed to keep the kernel surface small.
+    """
     mode = os.environ.get("SIMSOPT_PSC_SOLVE_MODE", "eigenfloor").strip().lower()
     allowed = {"eigenfloor", "eigk"}
     return mode if mode in allowed else "eigenfloor"
@@ -373,14 +485,21 @@ def _psc_w1_envelope_env() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
-def _reduced_free_dof_extras_for_jax() -> Tuple[bool, float, str, str, float]:
+def _reduced_free_dof_extras_for_jax(
+    pair_far_kappa_default: float = 0.0,
+) -> Tuple[bool, float, str, str, float]:
     """Bundle env-driven reduced forward/VJP options for symmetry-reduced free DOFs.
 
     Returns:
         ``(use_far_dipole_pair, pair_far_kappa, tf_loading, solve_mode_reduced,
         bs_eval_far_kappa)`` with normalized strings for JIT static-arg hashing.
+
+    The ``SIMSOPT_PSC_PAIR_FAR_KAPPA`` environment variable is an explicit
+    override.  When unset, ``pair_far_kappa_default`` comes from the
+    :class:`PSCBulkArray` instance, e.g. the stellcoilbench YAML knob.
     """
-    pk = float(_psc_pair_far_kappa_env())
+    env_pk = _psc_pair_far_kappa_env_override()
+    pk = float(pair_far_kappa_default if env_pk is None else env_pk)
     tfm = str(_psc_tf_loading_env()).lower().replace("-", "_")
     sm = str(_psc_solve_mode_env()).lower()
     return (
@@ -390,6 +509,90 @@ def _reduced_free_dof_extras_for_jax() -> Tuple[bool, float, str, str, float]:
         sm,
         float(_psc_bs_eval_far_kappa_env()),
     )
+
+
+def _classify_pairs(
+    centers_all: np.ndarray,
+    r_eff_all: np.ndarray,
+    base_indices: np.ndarray,
+    r_far: float,
+) -> Tuple[np.ndarray, np.ndarray, int, int]:
+    """Classify symmetry-reduced base-by-replica pairs into near and far sets.
+
+    Parameters
+    ----------
+    centers_all : np.ndarray
+        Replica puck centers with shape ``(n_all, 3)``.
+    r_eff_all : np.ndarray
+        Effective radius for each replica puck with shape ``(n_all,)``.
+    base_indices : np.ndarray
+        Replica-to-base map with shape ``(n_all,)``.
+    r_far : float
+        Distance ratio threshold.  Non-self pair ``(base, replica)`` is far
+        when ``distance / (r_eff_i + r_eff_j) >= r_far``.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, int, int]
+        ``(near_idx, far_idx, n_near, n_far)``.  Index arrays have shape
+        ``(n, 2)`` and store ``(base_row, replica_col)`` pairs.  Self-pairs are
+        excluded from both arrays; callers add them through the dense kernel.
+    """
+    centers = np.asarray(centers_all, dtype=float)
+    r_eff = np.asarray(r_eff_all, dtype=float).reshape(-1)
+    bidx = np.asarray(base_indices, dtype=np.int32).reshape(-1)
+    if centers.ndim != 2 or centers.shape[1] != 3:
+        raise ValueError("centers_all must have shape (n_all, 3)")
+    if centers.shape[0] != bidx.size or r_eff.size != bidx.size:
+        raise ValueError("centers_all, r_eff_all, and base_indices lengths differ")
+    n_all = int(bidx.size)
+    n_base = int(np.max(bidx)) + 1 if n_all else 0
+    if n_all == 0 or n_base == 0:
+        empty = np.empty((0, 2), dtype=np.int32)
+        return empty, empty, 0, 0
+    # First-occurrence base-rep map; vectorised replacement for the prior
+    # ``for jr, bi in enumerate(bidx)`` loop.  ``np.unique`` returns the index
+    # of the *first* occurrence of each unique value, which is exactly what
+    # the legacy assignment ``base_reps[bi] = jr`` (only-when-unset) produced.
+    _uniq, first_idx = np.unique(bidx, return_index=True)
+    base_reps = np.full(n_base, -1, dtype=np.int32)
+    base_reps[_uniq.astype(np.intp)] = first_idx.astype(np.int32)
+    valid_base = base_reps >= 0
+    if not np.any(valid_base):
+        empty = np.empty((0, 2), dtype=np.int32)
+        return empty, empty, 0, 0
+
+    # Build the (n_base, n_all) pair grid, then drop self-pairs.
+    base_rows = np.where(valid_base)[0].astype(np.int32)
+    i_reps = base_reps[base_rows].astype(np.intp)
+    jr_grid = np.broadcast_to(
+        np.arange(n_all, dtype=np.int32)[None, :],
+        (base_rows.size, n_all),
+    )
+    ib_grid = np.broadcast_to(base_rows[:, None], (base_rows.size, n_all))
+    self_mask = jr_grid == i_reps[:, None].astype(np.int32)
+    keep_mask = ~self_mask
+    pairs = np.stack([ib_grid[keep_mask], jr_grid[keep_mask]], axis=1).astype(np.int32)
+
+    kappa = float(r_far)
+    if kappa <= 0.0:
+        empty = np.empty((0, 2), dtype=np.int32)
+        return empty, pairs, 0, int(pairs.shape[0])
+    if not np.isfinite(kappa):
+        empty = np.empty((0, 2), dtype=np.int32)
+        return pairs, empty, int(pairs.shape[0]), 0
+
+    # Vectorised distance / sum-radius ratio for all kept pairs.
+    ib_keep = pairs[:, 0].astype(np.intp)
+    jr_keep = pairs[:, 1].astype(np.intp)
+    i_rep_keep = base_reps[ib_keep].astype(np.intp)
+    delta = centers[jr_keep] - centers[i_rep_keep]
+    dist = np.sqrt(np.sum(delta * delta, axis=1))
+    denom = r_eff[i_rep_keep] + r_eff[jr_keep] + 1.0e-12
+    is_far = (dist / denom) >= kappa
+    far_arr = pairs[is_far]
+    near_arr = pairs[~is_far]
+    return near_arr, far_arr, int(near_arr.shape[0]), int(far_arr.shape[0])
 
 
 def _psc_cache_free_vjp_env() -> bool:
@@ -937,6 +1140,70 @@ def _pair_inductance_block(
     )
 
 
+def _row_segment_sum_replica_chunked(
+    scaled_block: Any,
+    base_indices: jnp.ndarray,
+    n_all: int,
+    n_base: int,
+    nd: int,
+    replica_chunk: int,
+    dtype: Any,
+) -> jnp.ndarray:
+    """Fold ``segment_sum(vmap(scaled_block)(arange(n_all)), base_indices, n_base)``.
+
+    When ``replica_chunk <= 0`` or ``replica_chunk >= n_all`` this is the
+    monolithic ``vmap`` + ``segment_sum`` (current behaviour).  When
+    ``0 < replica_chunk < n_all`` the replica axis is consumed in
+    :func:`jax.lax.scan` chunks of ``replica_chunk`` and the segment sum is
+    accumulated incrementally into an ``(n_base, nd, nd)`` carry, so peak
+    autodiff memory inside ``scaled_block`` (which holds the
+    ``(replica_chunk, nq, nq, nd, nd)`` pair kernel) scales as
+    ``replica_chunk * nq * nq * nd * nd * 8`` instead of the full
+    ``n_all * nq * nq * nd * nd * 8`` bytes.  Output is mathematically
+    identical to the unchunked path for any ``replica_chunk``.
+
+    Args:
+        scaled_block: callable mapping a single ``j`` index (int32 scalar)
+            to an ``(nd, nd)`` block already weighted by ``G * sigma_j``.
+            Must broadcast under :func:`jax.vmap` along the leading axis.
+        base_indices: ``(n_all,)`` int map from replica index to base index
+            in ``[0, n_base)``.
+        n_all: total number of replicas (Python int, JIT-static).
+        n_base: number of base pucks (Python int, JIT-static).
+        nd: per-puck local DOF count (Python int, JIT-static; needed to
+            allocate the carry buffer).
+        replica_chunk: replica-axis chunk width (Python int, JIT-static).
+            ``<= 0`` or ``>= n_all`` keeps the legacy ``vmap`` path.
+        dtype: dtype of the carry buffer / output array.
+
+    Returns:
+        ``(n_base, nd, nd)`` segment-summed inductance row.
+    """
+    rc = int(replica_chunk)
+    bi = base_indices.astype(jnp.int32)
+    if rc <= 0 or rc >= n_all:
+        j_full = jnp.arange(n_all, dtype=jnp.int32)
+        blocks = jax.vmap(scaled_block)(j_full)
+        return jax.ops.segment_sum(blocks, bi, num_segments=n_base)
+
+    n_c = (n_all + rc - 1) // rc
+
+    def _scan_one(carry: jnp.ndarray, ic: jnp.ndarray) -> Tuple[jnp.ndarray, None]:
+        start = ic * rc
+        idx = start + jnp.arange(rc, dtype=jnp.int32)
+        valid = idx < n_all
+        idx_safe = jnp.where(valid, idx, 0)
+        chunk = jax.vmap(scaled_block)(idx_safe)
+        chunk = chunk * valid[:, None, None].astype(chunk.dtype)
+        seg_idx = bi[idx_safe]
+        chunk_seg = jax.ops.segment_sum(chunk, seg_idx, num_segments=n_base)
+        return carry + chunk_seg, None
+
+    carry0 = jnp.zeros((n_base, nd, nd), dtype=dtype)
+    out, _ = jax.lax.scan(_scan_one, carry0, jnp.arange(n_c, dtype=jnp.int32))
+    return out
+
+
 def _fold_Bn_to_work(
     Bn_flat: jnp.ndarray,
     base_indices: jnp.ndarray,
@@ -1358,6 +1625,9 @@ def _assemble_L_red_inner(
     use_far_dipole_pair: bool = False,
     pair_far_kappa: float = 0.0,
     m_local_base: Optional[jnp.ndarray] = None,
+    pair_replica_chunk: int = 0,
+    near_pair_indices: Optional[jnp.ndarray] = None,
+    far_pair_indices: Optional[jnp.ndarray] = None,
 ) -> jnp.ndarray:
     """Pure assembly of the symmetry-reduced inductance matrix ``L_red = Q_c^T L_base Q_c``.
 
@@ -1377,6 +1647,11 @@ def _assemble_L_red_inner(
         checkpoint_L_pairs: ``jax.checkpoint`` per pair block when ``True``.
         pair_row_chunk: positive integer enables ``lax.scan`` over base rows.
         use_far_dipole_pair, pair_far_kappa, m_local_base: W2 multipole shortcut.
+        pair_replica_chunk: positive integer enables ``lax.scan`` over the
+            ``n_all`` replica axis inside each base row, capping the per-row
+            pair-kernel batch at ``pair_replica_chunk * nq * nq * nd * nd``
+            instead of the full ``n_all * nq * nq * nd * nd``.  ``0`` or
+            ``>= n_all`` falls back to the monolithic ``vmap``.
 
     Returns:
         ``(n_red, n_red)`` reduced inductance ``L_red``.
@@ -1397,8 +1672,6 @@ def _assemble_L_red_inner(
         local_w_base,
         base_indices,
     )
-    r_rel = pts_stack - centers_all[:, None, :]
-    R_est_rep = jnp.max(jnp.linalg.norm(r_rel, axis=-1), axis=1)
     if m_local_base is None:
         m_local_base = jnp.zeros((n_base, nd, 3), dtype=K_stack.dtype)
 
@@ -1417,66 +1690,84 @@ def _assemble_L_red_inner(
     if checkpoint_L_pairs and not use_far_dipole_pair:
         l_fn = jax.checkpoint(l_block_pair)
 
-    if use_far_dipole_pair and pair_far_kappa > 0.0:
+    rc = int(pair_replica_chunk)
+    block_dtype = K_stack.dtype
 
-        def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
-            i_rep = base_reps[ib.astype(jnp.int32)]
-            j_reps = jnp.arange(n_all, dtype=jnp.int32)
+    if (
+        use_far_dipole_pair
+        and pair_far_kappa > 0.0
+        and near_pair_indices is not None
+        and far_pair_indices is not None
+    ):
+        l_rows0 = jnp.zeros((n_base, n_base, nd, nd), dtype=block_dtype)
 
-            def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
-                blk_d = l_fn(i_rep, jr)
-                Rij = centers_all[jr] - centers_all[i_rep]
-                dist = jnp.linalg.norm(Rij) + 1e-20
-                cap = pair_far_kappa * (R_est_rep[i_rep] + R_est_rep[jr] + 1e-12)
-                use_far = dist > cap
-                Ri = _rotation_matrix_from_quat_jax(quats_all[i_rep])
-                Rj = _rotation_matrix_from_quat_jax(quats_all[jr])
-                bi = ib.astype(jnp.int32)
-                bj = base_indices[jr.astype(jnp.int32)]
-                m_i = jnp.einsum("ij,nj->ni", Ri, m_local_base[bi, :, :])
-                m_j = jnp.einsum("ij,nj->ni", Rj, m_local_base[bj, :, :])
-                blk_f = pair_inductance_multipole(m_i, m_j, Rij, order=1)
-                blk = jnp.where(use_far, blk_f, blk_d)
-                return G_float * signs[jr] * blk
+        def _add_dense_pair(carry: jnp.ndarray, pair: jnp.ndarray) -> Tuple[jnp.ndarray, None]:
+            ib = pair[0].astype(jnp.int32)
+            jr = pair[1].astype(jnp.int32)
+            i_rep = base_reps[ib]
+            bj = base_indices[jr]
+            blk = G_float * signs[jr] * l_fn(i_rep, jr)
+            return carry.at[ib, bj, :, :].add(blk), None
 
-            blocks = jax.vmap(scaled_block)(j_reps)
-            return jax.ops.segment_sum(
-                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+        self_pairs = jnp.stack(
+            [jnp.arange(n_base, dtype=jnp.int32), base_reps.astype(jnp.int32)], axis=1
+        )
+        l_rows, _ = jax.lax.scan(_add_dense_pair, l_rows0, self_pairs)
+        l_rows, _ = jax.lax.scan(
+            _add_dense_pair, l_rows, near_pair_indices.astype(jnp.int32)
+        )
+
+        far_idx = far_pair_indices.astype(jnp.int32)
+
+        def _far_pair_block(pair: jnp.ndarray) -> jnp.ndarray:
+            ib = pair[0].astype(jnp.int32)
+            jr = pair[1].astype(jnp.int32)
+            i_rep = base_reps[ib]
+            bj = base_indices[jr]
+            Rij = centers_all[jr] - centers_all[i_rep]
+            Ri = _rotation_matrix_from_quat_jax(quats_all[i_rep])
+            Rj = _rotation_matrix_from_quat_jax(quats_all[jr])
+            m_i = jnp.einsum("ij,nj->ni", Ri, m_local_base[ib, :, :])
+            m_j = jnp.einsum("ij,nj->ni", Rj, m_local_base[bj, :, :])
+            return G_float * signs[jr] * pair_inductance_multipole(m_i, m_j, Rij, order=1)
+
+        if far_idx.shape[0] > 0:
+            far_blocks = jax.vmap(_far_pair_block)(far_idx)
+            l_rows = l_rows.at[far_idx[:, 0], base_indices[far_idx[:, 1]], :, :].add(
+                far_blocks
             )
     else:
 
         def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
             i_rep = base_reps[ib.astype(jnp.int32)]
-            j_reps = jnp.arange(n_all, dtype=jnp.int32)
 
             def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
                 blk = l_fn(i_rep, jr)
                 return G_float * signs[jr] * blk
 
-            blocks = jax.vmap(scaled_block)(j_reps)
-            return jax.ops.segment_sum(
-                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+            return _row_segment_sum_replica_chunked(
+                scaled_block, base_indices, n_all, n_base, nd, rc, block_dtype
             )
 
-    n_chunk = int(pair_row_chunk)
-    if n_chunk > 0 and n_chunk < n_base:
+        n_chunk = int(pair_row_chunk)
+        if n_chunk > 0 and n_chunk < n_base:
 
-        def _scan_one_chunk(_: None, ic: jnp.ndarray) -> Tuple[None, jnp.ndarray]:
-            start = ic * n_chunk
-            idx = start + jnp.arange(n_chunk, dtype=jnp.int32)
-            valid = idx < n_base
-            idx_safe = jnp.where(valid, idx, 0)
-            rows_b = jax.vmap(one_row_f)(idx_safe)
-            rows_b = rows_b * valid[:, None, None, None].astype(rows_b.dtype)
-            return None, rows_b
+            def _scan_one_chunk(_: None, ic: jnp.ndarray) -> Tuple[None, jnp.ndarray]:
+                start = ic * n_chunk
+                idx = start + jnp.arange(n_chunk, dtype=jnp.int32)
+                valid = idx < n_base
+                idx_safe = jnp.where(valid, idx, 0)
+                rows_b = jax.vmap(one_row_f)(idx_safe)
+                rows_b = rows_b * valid[:, None, None, None].astype(rows_b.dtype)
+                return None, rows_b
 
-        n_c = (n_base + n_chunk - 1) // n_chunk
-        _, row_blocks = jax.lax.scan(
-            _scan_one_chunk, None, jnp.arange(n_c, dtype=jnp.int32)
-        )
-        l_rows = row_blocks.reshape(n_c * n_chunk, n_base, nd, nd)[:n_base, ...]
-    else:
-        l_rows = jax.vmap(one_row_f)(jnp.arange(n_base, dtype=jnp.int32))
+            n_c = (n_base + n_chunk - 1) // n_chunk
+            _, row_blocks = jax.lax.scan(
+                _scan_one_chunk, None, jnp.arange(n_c, dtype=jnp.int32)
+            )
+            l_rows = row_blocks.reshape(n_c * n_chunk, n_base, nd, nd)[:n_base, ...]
+        else:
+            l_rows = jax.vmap(one_row_f)(jnp.arange(n_base, dtype=jnp.int32))
     l_base = l_rows.transpose(0, 2, 1, 3).reshape(n_base * nd, n_base * nd)
     l_base = 0.5 * (l_base + l_base.T)
     return Q_c_base.T @ l_base @ Q_c_base
@@ -1890,6 +2181,9 @@ def _B_eval_reduced_free_dof_body(
     solve_mode_reduced: str = "eigenfloor",
     bs_eval_far_kappa: float = 0.0,
     use_w1_envelope: bool = False,
+    pair_replica_chunk: int = 0,
+    near_pair_indices: Optional[jnp.ndarray] = None,
+    far_pair_indices: Optional[jnp.ndarray] = None,
 ) -> jnp.ndarray:
     """Symmetry-reduced free-puck-DoF forward: fold ``L`` to base replicas only.
 
@@ -1901,6 +2195,12 @@ def _B_eval_reduced_free_dof_body(
         pair_row_chunk: If positive and less than ``n_base``, build ``L``-rows in
             ``lax.scan`` blocks of this width to lower peak autodiff memory. ``0`` or
             ``>= n_base`` uses a single :func:`jax.vmap` over base rows.
+        pair_replica_chunk: If positive and less than ``n_all``, fold the
+            replica axis inside each base row via :func:`jax.lax.scan` in
+            chunks of this width.  Caps the per-row pair-kernel batch at
+            ``pair_replica_chunk * nq * nq * nd * nd`` instead of the
+            full ``n_all * nq * nq * nd * nd``.  ``0`` or ``>= n_all``
+            keeps the legacy monolithic ``vmap``.
     """
     n_base = int(local_pts_base.shape[0])
     nq = int(local_pts_base.shape[1])
@@ -1940,66 +2240,84 @@ def _B_eval_reduced_free_dof_body(
     if checkpoint_L_pairs and not use_far_dipole_pair:
         l_fn = jax.checkpoint(l_block_pair)
 
-    if use_far_dipole_pair and pair_far_kappa > 0.0:
+    rc = int(pair_replica_chunk)
+    block_dtype = K_stack.dtype
 
-        def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
-            i_rep = base_reps[ib.astype(jnp.int32)]
-            j_reps = jnp.arange(n_all, dtype=jnp.int32)
+    if (
+        use_far_dipole_pair
+        and pair_far_kappa > 0.0
+        and near_pair_indices is not None
+        and far_pair_indices is not None
+    ):
+        l_rows0 = jnp.zeros((n_base, n_base, nd, nd), dtype=block_dtype)
 
-            def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
-                blk_d = l_fn(i_rep, jr)
-                Rij = centers_all[jr] - centers_all[i_rep]
-                dist = jnp.linalg.norm(Rij) + 1e-20
-                cap = pair_far_kappa * (R_est_rep[i_rep] + R_est_rep[jr] + 1e-12)
-                use_far = dist > cap
-                Ri = _rotation_matrix_from_quat_jax(quats_all[i_rep])
-                Rj = _rotation_matrix_from_quat_jax(quats_all[jr])
-                bi = ib.astype(jnp.int32)
-                bj = base_indices[jr.astype(jnp.int32)]
-                m_i = jnp.einsum("ij,nj->ni", Ri, m_local_base[bi, :, :])
-                m_j = jnp.einsum("ij,nj->ni", Rj, m_local_base[bj, :, :])
-                blk_f = pair_inductance_multipole(m_i, m_j, Rij, order=1)
-                blk = jnp.where(use_far, blk_f, blk_d)
-                return G_float * signs[jr] * blk
+        def _add_dense_pair(carry: jnp.ndarray, pair: jnp.ndarray) -> Tuple[jnp.ndarray, None]:
+            ib = pair[0].astype(jnp.int32)
+            jr = pair[1].astype(jnp.int32)
+            i_rep = base_reps[ib]
+            bj = base_indices[jr]
+            blk = G_float * signs[jr] * l_fn(i_rep, jr)
+            return carry.at[ib, bj, :, :].add(blk), None
 
-            blocks = jax.vmap(scaled_block)(j_reps)
-            return jax.ops.segment_sum(
-                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+        self_pairs = jnp.stack(
+            [jnp.arange(n_base, dtype=jnp.int32), base_reps.astype(jnp.int32)], axis=1
+        )
+        l_rows, _ = jax.lax.scan(_add_dense_pair, l_rows0, self_pairs)
+        l_rows, _ = jax.lax.scan(
+            _add_dense_pair, l_rows, near_pair_indices.astype(jnp.int32)
+        )
+
+        far_idx = far_pair_indices.astype(jnp.int32)
+
+        def _far_pair_block(pair: jnp.ndarray) -> jnp.ndarray:
+            ib = pair[0].astype(jnp.int32)
+            jr = pair[1].astype(jnp.int32)
+            i_rep = base_reps[ib]
+            bj = base_indices[jr]
+            Rij = centers_all[jr] - centers_all[i_rep]
+            Ri = _rotation_matrix_from_quat_jax(quats_all[i_rep])
+            Rj = _rotation_matrix_from_quat_jax(quats_all[jr])
+            m_i = jnp.einsum("ij,nj->ni", Ri, m_local_base[ib, :, :])
+            m_j = jnp.einsum("ij,nj->ni", Rj, m_local_base[bj, :, :])
+            return G_float * signs[jr] * pair_inductance_multipole(m_i, m_j, Rij, order=1)
+
+        if far_idx.shape[0] > 0:
+            far_blocks = jax.vmap(_far_pair_block)(far_idx)
+            l_rows = l_rows.at[far_idx[:, 0], base_indices[far_idx[:, 1]], :, :].add(
+                far_blocks
             )
     else:
 
         def one_row_f(ib: jnp.ndarray) -> jnp.ndarray:
             i_rep = base_reps[ib.astype(jnp.int32)]
-            j_reps = jnp.arange(n_all, dtype=jnp.int32)
 
             def scaled_block(jr: jnp.ndarray) -> jnp.ndarray:
                 blk = l_fn(i_rep, jr)
                 return G_float * signs[jr] * blk
 
-            blocks = jax.vmap(scaled_block)(j_reps)
-            return jax.ops.segment_sum(
-                blocks, base_indices.astype(jnp.int32), num_segments=n_base
+            return _row_segment_sum_replica_chunked(
+                scaled_block, base_indices, n_all, n_base, nd, rc, block_dtype
             )
 
-    n_chunk = int(pair_row_chunk)
-    if n_chunk > 0 and n_chunk < n_base:
+        n_chunk = int(pair_row_chunk)
+        if n_chunk > 0 and n_chunk < n_base:
 
-        def _scan_one_chunk(_: None, ic: jnp.ndarray) -> Tuple[None, jnp.ndarray]:
-            start = ic * n_chunk
-            idx = start + jnp.arange(n_chunk, dtype=jnp.int32)
-            valid = idx < n_base
-            idx_safe = jnp.where(valid, idx, 0)
-            rows_b = jax.vmap(one_row_f)(idx_safe)
-            rows_b = rows_b * valid[:, None, None, None].astype(rows_b.dtype)
-            return None, rows_b
+            def _scan_one_chunk(_: None, ic: jnp.ndarray) -> Tuple[None, jnp.ndarray]:
+                start = ic * n_chunk
+                idx = start + jnp.arange(n_chunk, dtype=jnp.int32)
+                valid = idx < n_base
+                idx_safe = jnp.where(valid, idx, 0)
+                rows_b = jax.vmap(one_row_f)(idx_safe)
+                rows_b = rows_b * valid[:, None, None, None].astype(rows_b.dtype)
+                return None, rows_b
 
-        n_c = (n_base + n_chunk - 1) // n_chunk
-        _, row_blocks = jax.lax.scan(
-            _scan_one_chunk, None, jnp.arange(n_c, dtype=jnp.int32)
-        )
-        l_rows = row_blocks.reshape(n_c * n_chunk, n_base, nd, nd)[:n_base, ...]
-    else:
-        l_rows = jax.vmap(one_row_f)(jnp.arange(n_base, dtype=jnp.int32))
+            n_c = (n_base + n_chunk - 1) // n_chunk
+            _, row_blocks = jax.lax.scan(
+                _scan_one_chunk, None, jnp.arange(n_c, dtype=jnp.int32)
+            )
+            l_rows = row_blocks.reshape(n_c * n_chunk, n_base, nd, nd)[:n_base, ...]
+        else:
+            l_rows = jax.vmap(one_row_f)(jnp.arange(n_base, dtype=jnp.int32))
     l_base = l_rows.transpose(0, 2, 1, 3).reshape(n_base * nd, n_base * nd)
     l_base = 0.5 * (l_base + l_base.T)
     if vjp_probe_mode == "stop_l":
@@ -2078,7 +2396,8 @@ def _B_eval_reduced_free_dof_body(
 
     l_r = Q_c_base.T @ l_base @ Q_c_base
     f_r = Q_c_base.T @ f
-    eigs = str(solve_mode_reduced).lower() == "eigk"
+    solve_mode_norm = str(solve_mode_reduced).lower()
+    eigs = solve_mode_norm == "eigk"
     if eigs and L_red_eig_U.shape[0] == f_r.shape[0] and L_red_eig_U.shape[0] > 0:
         alpha = _eigK_solve_with_correct_vjp(
             l_r, L_red_eig_U, L_red_eig_lam, f_r, eigenfloor_threshold
@@ -2181,6 +2500,9 @@ def _B_eval_reduced_free_dof_body_v2(
     tf_loading: str = "bn_quad",
     solve_mode_reduced: str = "eigenfloor",
     bs_eval_far_kappa: float = 0.0,
+    pair_replica_chunk: int = 0,
+    near_pair_indices: Optional[jnp.ndarray] = None,
+    far_pair_indices: Optional[jnp.ndarray] = None,
 ) -> jnp.ndarray:
     """W1 envelope variant: ``alpha`` solve via ``jax.custom_vjp`` envelope theorem.
 
@@ -2193,6 +2515,10 @@ def _B_eval_reduced_free_dof_body_v2(
     cache is used (forward path can pick the cached basis without poisoning the
     backward).  Drops the diagnostic ``vjp_probe_mode`` / ``solve_vjp_mode``
     knobs from v1; gate selection v1 vs v2 via :func:`_psc_w1_envelope_env`.
+
+    ``pair_replica_chunk`` is forwarded to :func:`_assemble_L_red_inner` for
+    in-row replica-axis chunking of the pair-inductance kernel; see
+    :func:`_B_eval_reduced_free_dof_body` for semantics.
     """
     n_base = int(local_pts_base.shape[0])
     nd = int(local_K_base.shape[2])
@@ -2236,6 +2562,9 @@ def _B_eval_reduced_free_dof_body_v2(
             use_far_dipole_pair=use_far_dipole_pair,
             pair_far_kappa=pair_far_kappa,
             m_local_base=m_local_base,
+            pair_replica_chunk=pair_replica_chunk,
+            near_pair_indices=near_pair_indices,
+            far_pair_indices=far_pair_indices,
         )
 
     def f_assemble(
@@ -2399,6 +2728,9 @@ def _B_eval_reduced_free_dof_dispatch(
     solve_mode_reduced: str = "eigenfloor",
     bs_eval_far_kappa: float = 0.0,
     use_w1_envelope: bool = False,
+    pair_replica_chunk: int = 0,
+    near_pair_indices: Optional[jnp.ndarray] = None,
+    far_pair_indices: Optional[jnp.ndarray] = None,
 ) -> jnp.ndarray:
     """Static dispatch between v1 and v2 reduced free-DOF bodies.
 
@@ -2407,6 +2739,9 @@ def _B_eval_reduced_free_dof_dispatch(
     legacy ``_B_eval_reduced_free_dof_body`` path with ``vjp_probe_mode`` /
     ``solve_vjp_mode`` diagnostics.  Branch is on a JIT-static argument so each
     branch compiles separately.
+
+    ``pair_replica_chunk`` is forwarded to both v1 and v2 bodies for
+    in-row replica-axis chunking of the pair-inductance kernel.
     """
     if use_w1_envelope:
         return _B_eval_reduced_free_dof_body_v2(
@@ -2442,6 +2777,9 @@ def _B_eval_reduced_free_dof_dispatch(
             tf_loading=tf_loading,
             solve_mode_reduced=solve_mode_reduced,
             bs_eval_far_kappa=bs_eval_far_kappa,
+            pair_replica_chunk=pair_replica_chunk,
+            near_pair_indices=near_pair_indices,
+            far_pair_indices=far_pair_indices,
         )
     return _B_eval_reduced_free_dof_body(
         local_pts_base,
@@ -2479,6 +2817,9 @@ def _B_eval_reduced_free_dof_dispatch(
         solve_mode_reduced=solve_mode_reduced,
         bs_eval_far_kappa=bs_eval_far_kappa,
         use_w1_envelope=False,
+        pair_replica_chunk=pair_replica_chunk,
+        near_pair_indices=near_pair_indices,
+        far_pair_indices=far_pair_indices,
     )
 
 
@@ -2512,6 +2853,7 @@ _B_eval_reduced_free_dof_jitted = jax.jit(
         "solve_mode_reduced",
         "bs_eval_far_kappa",
         "use_w1_envelope",
+        "pair_replica_chunk",
     ),
 )
 
@@ -2680,6 +3022,9 @@ def _vjp_reduced_free_dof_run(
     solve_mode_reduced: str,
     bs_eval_far_kappa: float,
     use_w1_envelope: bool = False,
+    pair_replica_chunk: int = 0,
+    near_pair_indices: Optional[jnp.ndarray] = None,
+    far_pair_indices: Optional[jnp.ndarray] = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """VJP for :func:`_B_eval_reduced_free_dof_dispatch` w.r.t. base centers, quats, TF."""
 
@@ -2720,6 +3065,9 @@ def _vjp_reduced_free_dof_run(
             solve_mode_reduced,
             bs_eval_far_kappa,
             use_w1_envelope,
+            pair_replica_chunk,
+            near_pair_indices,
+            far_pair_indices,
         )
 
     fwd_run = jax.checkpoint(fwd, prevent_cse=False) if checkpoint_L_pairs else fwd
@@ -2746,6 +3094,7 @@ _vjp_reduced_free_dof_jitted = jax.jit(
         "solve_mode_reduced",
         "bs_eval_far_kappa",
         "use_w1_envelope",
+        "pair_replica_chunk",
     ),
 )
 
@@ -2787,6 +3136,9 @@ def _vjp_reduced_free_quat_only_run(
     solve_mode_reduced: str,
     bs_eval_far_kappa: float,
     use_w1_envelope: bool = False,
+    pair_replica_chunk: int = 0,
+    near_pair_indices: Optional[jnp.ndarray] = None,
+    far_pair_indices: Optional[jnp.ndarray] = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Reduced VJP when only puck quaternion DOFs are active."""
 
@@ -2827,6 +3179,9 @@ def _vjp_reduced_free_quat_only_run(
             solve_mode_reduced,
             bs_eval_far_kappa,
             use_w1_envelope,
+            pair_replica_chunk,
+            near_pair_indices,
+            far_pair_indices,
         )
 
     fwd_run = jax.checkpoint(fwd, prevent_cse=False) if checkpoint_L_pairs else fwd
@@ -2853,6 +3208,7 @@ _vjp_reduced_free_quat_only_jitted = jax.jit(
         "solve_mode_reduced",
         "bs_eval_far_kappa",
         "use_w1_envelope",
+        "pair_replica_chunk",
     ),
 )
 
@@ -2894,6 +3250,9 @@ def _vjp_reduced_free_center_only_run(
     solve_mode_reduced: str,
     bs_eval_far_kappa: float,
     use_w1_envelope: bool = False,
+    pair_replica_chunk: int = 0,
+    near_pair_indices: Optional[jnp.ndarray] = None,
+    far_pair_indices: Optional[jnp.ndarray] = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Reduced VJP when only puck center DOFs are active."""
 
@@ -2934,6 +3293,9 @@ def _vjp_reduced_free_center_only_run(
             solve_mode_reduced,
             bs_eval_far_kappa,
             use_w1_envelope,
+            pair_replica_chunk,
+            near_pair_indices,
+            far_pair_indices,
         )
 
     fwd_run = jax.checkpoint(fwd, prevent_cse=False) if checkpoint_L_pairs else fwd
@@ -2960,6 +3322,7 @@ _vjp_reduced_free_center_only_jitted = jax.jit(
         "solve_mode_reduced",
         "bs_eval_far_kappa",
         "use_w1_envelope",
+        "pair_replica_chunk",
     ),
 )
 
@@ -3095,6 +3458,15 @@ class PSCBulkArray(Optimizable):
             :envvar:`SIMSOPT_PSC_JAX_PAIR_CHUNK` or an automatic ~1~GiB target;
             a positive int caps the batch width.
 
+        pair_replica_chunk (constructor): In-row chunk width along the
+            symmetry replica axis ``n_all`` for the free-DoF pair-inductance
+            kernel.  ``0`` (default) keeps the legacy single-``vmap`` over all
+            replicas (peak ``n_all * nq^2 * nd^2 * 8`` bytes per row).  A
+            positive int folds the replica axis via :func:`jax.lax.scan` in
+            groups of that size, capping the per-row pair-kernel batch at
+            ``pair_replica_chunk * nq^2 * nd^2 * 8`` bytes.  Overridden by
+            :envvar:`SIMSOPT_PSC_PAIR_REPLICA_CHUNK`.
+
         use_f32_bs (constructor): If ``True``, the ``shell_l2`` Biot-Savart
             branch in :meth:`B_at_points` accumulates in ``float32`` inside
             :func:`~simsopt.field.bulk_inductance.shell_biot_savart_stacked_pure`.
@@ -3162,7 +3534,11 @@ class PSCBulkArray(Optimizable):
         use_symmetry_reduced_free_dof: bool = True,
         checkpoint_l_pairs: Optional[bool] = None,
         jax_pair_row_chunk: int = 0,
+        pair_replica_chunk: int = 0,
         mode_truncate: Optional[Mapping[str, Any]] = None,
+        mode_truncation_tol: float = 0.0,
+        bulk_far_pair_kappa: float = 0.0,
+        bulk_far_pair_tol: float = 1.0e-2,
     ):
         self.coils_TF = list(coils_TF)
         self.eval_points = np.asarray(eval_points, dtype=float, order="C")
@@ -3201,6 +3577,9 @@ class PSCBulkArray(Optimizable):
         else:
             self._psc_checkpoint_l_pairs_opt = bool(checkpoint_l_pairs)
         self._jax_pair_row_chunk_ctor: int = int(jax_pair_row_chunk)
+        self._pair_replica_chunk_ctor: int = int(pair_replica_chunk)
+        self._bulk_far_pair_kappa: float = max(0.0, float(bulk_far_pair_kappa))
+        self._bulk_far_pair_tol: float = max(0.0, float(bulk_far_pair_tol))
         # Per-puck basis truncation (Stage 2 of the
         # ``psc_bulk_speedups_and_mode_reduction`` plan).  ``mode_truncate``
         # is a constant attribute of the instance: it is captured once at
@@ -3215,6 +3594,19 @@ class PSCBulkArray(Optimizable):
         self._mode_truncate_norm: Optional[Tuple[Tuple[str, Any], ...]] = (
             normalize_mode_truncate(mode_truncate)
         )
+        # ``mode_truncation_tol`` is a *spectral* truncation applied to the
+        # gauge-null-projected operator ``L_c = Q_c^T L Q_c`` after its
+        # eigendecomposition: any eigenmode whose response amplitude
+        # ``1 / lambda_k`` is below ``mode_truncation_tol`` times the
+        # maximum (i.e. ``lambda_k > lambda_min_kept / mode_truncation_tol``)
+        # is dropped from ``Q``.  This is the appendix's speedup (vii)
+        # ("mode truncation") realised in the eigenbasis of ``L_c``;
+        # ``mode_truncate`` (the structural Mapping above) is unrelated -- it
+        # filters Fourier-Zernike modes *before* assembly, while this knob
+        # filters spectral modes *after* assembly.  Default ``0.0`` is a
+        # no-op.  Production-safe values typically lie in ``[1e-4, 1e-2]``;
+        # see :meth:`_rebuild` for the exact discard rule.
+        self._mode_truncation_tol = float(mode_truncation_tol)
         self._H_full = None
         self._Hw = None
 
@@ -3282,8 +3674,41 @@ class PSCBulkArray(Optimizable):
         self._geom_versions: Optional[tuple] = None
         self._local_stacks_valid: bool = False
         self._timing_rows: Optional[List[Dict[str, Any]]] = None
+        # Accumulator that survives across :meth:`_rebuild` calls.  Each
+        # row in ``_timing_rows`` is appended here (with a ``rebuild_idx``
+        # tag) just before ``_timing_rows`` is reset at the start of the
+        # next ``_rebuild``.  This lets callers (e.g. the optimizer
+        # timing harness) pull the full per-phase history of a run via
+        # :meth:`get_timing_history` after scipy returns; without this
+        # accumulator, only the rows since the most recent rebuild would
+        # remain in memory.  Only populated when timing is enabled
+        # (:func:`_psc_bulk_timing_enabled`); otherwise stays empty so
+        # there is no measurable overhead.
+        self._timing_history: List[Dict[str, Any]] = []
+        self._timing_rebuild_counter: int = 0
         self._structural_key: Optional[tuple] = None
         self._free_vjp_cache: Optional[Dict[str, Any]] = None
+        self._continuity_cache: Dict[tuple, np.ndarray] = {}
+        self._last_base_geom_state: Optional[np.ndarray] = None
+        self._partial_reuse_active: bool = False
+        # Stage C partial-L cache: the last full L_base together with the
+        # K / pts / weights / signs that produced it.  When
+        # ``_partial_reuse_active`` is true on a subsequent rebuild *and*
+        # the cached topology (n_base, nd_per, n_all, base_indices,
+        # signs, G) matches the current geometry, only the rows / cols
+        # corresponding to ``changed_pucks`` are recomputed; the
+        # remaining blocks are copied from ``_L_base_prev``.  See
+        # :meth:`_maybe_partial_update_L_base_reduced` and
+        # :meth:`_maybe_partial_update_L_base_full` for the exact logic.
+        self._L_base_prev: Optional[np.ndarray] = None
+        self._partial_L_cache: Optional[Dict[str, Any]] = None
+        # Bound the drift introduced by repeated incremental updates by
+        # forcing a full rebuild every ``_full_rebuild_period`` calls.
+        # Default ``50`` matches the appendix's suggested cadence.
+        self._full_rebuild_period: int = int(
+            os.environ.get("SIMSOPT_PSC_FULL_REBUILD_PERIOD", "50")
+        )
+        self._partial_L_call_count: int = 0
         # Detect whether the TF coil set is a faithful image of its first
         # ``n_base`` entries under the ``(nfp, stellsym)`` group used to
         # replicate pucks.  When ``True``, ``_rebuild`` routes through the
@@ -3296,6 +3721,7 @@ class PSCBulkArray(Optimizable):
             self.stellsym,
         )
         self._rebuild()
+        self._last_base_geom_state = self._base_geom_state_matrix()
         _maybe_prime_psc_jax_kernels(self)
         self._field = PassiveBulkField(self)
 
@@ -3307,11 +3733,14 @@ class PSCBulkArray(Optimizable):
     def _is_zero_vjp_dof(name: str) -> bool:
         """Return ``True`` for DOFs whose VJP is identically zero.
 
-        Currently the VJP w.r.t. puck radius (``R{i}``) and thickness
-        (``t{i}``) is not implemented and returns zero; unfixing those
-        DOFs produces no gradient signal.
+        ``R{i}`` and ``t{i}`` are now exposed via a finite-difference
+        VJP (see :meth:`_Rt_fd_gradient` and the FD branch of
+        :meth:`_vjp_puck_geometry`).  No PSCBulkArray DOF is currently
+        zero-VJP; the helper is retained as the policy hook for any
+        future zero-gradient DOFs that need to suppress
+        :meth:`local_unfix_all` warnings.
         """
-        return name.startswith("R") or name.startswith("t")
+        return False
 
     def _warn_zero_vjp(self, names) -> None:
         """Emit a :class:`UserWarning` if any ``names`` has zero VJP."""
@@ -3368,6 +3797,22 @@ class PSCBulkArray(Optimizable):
             radii[i] = x[off + 7]
             thicknesses[i] = x[off + 8]
         return centers, quats, radii, thicknesses
+
+    def _base_geom_state_matrix(self) -> np.ndarray:
+        """Return base-puck geometry DOFs as a contiguous ``(n_base, 9)`` matrix.
+
+        Returns a fresh copy so callers (e.g.
+        :meth:`recompute_currents`) can safely store the snapshot for
+        change-detection without aliasing the live DOF storage that
+        backs :attr:`local_full_x`.  Without the explicit copy, storing
+        the returned array as ``_last_base_geom_state`` would silently
+        compare a live view against itself on the next call and report
+        zero changed pucks, which silently disables the partial-L
+        rebuild path.
+        """
+        return np.ascontiguousarray(
+            np.asarray(self.local_full_x, dtype=float).reshape(self._n_base_pucks, 9)
+        ).copy()
 
     def _replicate_pucks(self, centers, quats, radii, thicknesses):
         """Apply nfp + stellsym to base pucks.
@@ -3469,7 +3914,7 @@ class PSCBulkArray(Optimizable):
         when ``n_base == 1``; any multi-coil TF set produced by
         :func:`coils_via_symmetries` (for example the
         ``SchuettHennebergQAnfp2`` layout used in
-        ``passive_bulks_cylindrical_grid_optimization.py``) silently
+        ``passive_bulks_toroidal_shell_optimization.py``) silently
         failed detection and dropped to the expensive full-``L`` path.
 
         Detection is by direct geometric comparison of
@@ -3600,6 +4045,19 @@ class PSCBulkArray(Optimizable):
 
         if puck_subset is None:
             puck_subset = list(range(len(self._basis_per_puck)))
+        use_cont_cache = _psc_continuity_cache_env() or bool(
+            getattr(self, "_partial_reuse_active", False)
+        )
+        if use_cont_cache:
+            cache_key = (
+                int(n_dof_total),
+                tuple(int(p) for p in puck_subset),
+                int(self._n_phi_rim),
+                bool(getattr(self, "_strict_rim_continuity", False)),
+            )
+            cached_qc = self._continuity_cache.get(cache_key)
+            if cached_qc is not None:
+                return np.asarray(cached_qc, dtype=float, order="C").copy()
         subset_dof_offsets: List[int] = []
         off = 0
         for p in puck_subset:
@@ -3653,6 +4111,8 @@ class PSCBulkArray(Optimizable):
             c0 = col_offsets[k]
             c1 = c0 + Q_p.shape[1]
             Q_c[r0:r1, c0:c1] = Q_p
+        if use_cont_cache:
+            self._continuity_cache[cache_key] = np.asarray(Q_c, dtype=float, order="C")
         return Q_c
 
     def _mark_phase_start(self) -> Optional[float]:
@@ -3672,6 +4132,50 @@ class PSCBulkArray(Optimizable):
             {"phase": name, "seconds": float(time.perf_counter() - t0)}
         )
 
+    def get_timing_history(self) -> List[Dict[str, Any]]:
+        """Return a deep copy of the cross-rebuild timing history.
+
+        When ``SIMSOPT_PSCBULK_TIMING=1`` is set, every row appended to
+        :attr:`_timing_rows` (during :meth:`_rebuild` and any subsequent
+        JAX forward / VJP call before the next rebuild) is migrated into
+        :attr:`_timing_history` at the start of the next rebuild, tagged
+        with a monotonically increasing ``rebuild_idx``.  The rows still
+        sitting in :attr:`_timing_rows` at the moment this method is
+        called (i.e. those from the most recent rebuild and any JAX
+        phases since) are included in the returned list as well, so
+        callers always get a complete picture without having to force an
+        extra rebuild.
+
+        Returns
+        -------
+        list of dict
+            Independent copies of the recorded phase rows.  Each row has
+            at least ``"phase"`` and either ``"seconds"`` or
+            ``"n_pairs"`` / metadata keys, plus ``"rebuild_idx"`` when
+            populated automatically.  When timing is disabled the list
+            is empty.
+        """
+        history: List[Dict[str, Any]] = [dict(row) for row in self._timing_history]
+        if self._timing_rows:
+            current_idx = int(self._timing_rebuild_counter)
+            for row in self._timing_rows:
+                tagged = dict(row)
+                tagged.setdefault("rebuild_idx", current_idx)
+                history.append(tagged)
+        return history
+
+    def reset_timing_history(self) -> None:
+        """Clear :attr:`_timing_history` and the live :attr:`_timing_rows` buffer.
+
+        Useful for tests that want to assert on a fresh, well-defined
+        slice of phase rows without carrying state from earlier
+        rebuilds.  The ``rebuild_idx`` counter is also reset to ``0`` so
+        the next rebuild starts a fresh series.
+        """
+        self._timing_history = []
+        self._timing_rows = None
+        self._timing_rebuild_counter = 0
+
     def _refresh_L_red_eig_host_cache(self, Lr: np.ndarray) -> None:
         """Recompute host NumPy eigensystem of :math:`L_\\text{red}` for eigK cache (W4)."""
         Lr = np.asarray(Lr, dtype=np.float64)
@@ -3686,6 +4190,161 @@ class PSCBulkArray(Optimizable):
         self._L_red_eig_lam_np = np.maximum(w, th)
         self._L_red_eig_U_np = v
         self._L_red_eig_anchor_np = Lr.copy()
+
+    @staticmethod
+    def _pair_block_inductance(
+        K_i: np.ndarray,
+        pts_i: np.ndarray,
+        w_i: np.ndarray,
+        K_j: np.ndarray,
+        pts_j: np.ndarray,
+        w_j: np.ndarray,
+        delta_reg: float,
+        adaptive_self_reg: bool,
+    ) -> np.ndarray:
+        """Single ``(nd_i, nd_j)`` mutual-inductance block.
+
+        Mirrors :func:`shell_inductance_matrix_blockwise`'s inner loop so
+        Stage C partial-L updates remain bit-exact with the
+        :class:`numpy` fall-back assembly.  Self-symmetrization is the
+        caller's responsibility.
+        """
+        r = pts_i[:, None, :] - pts_j[None, :, :]
+        if adaptive_self_reg:
+            delta_i = _SELF_REG_COEFF * np.sqrt(w_i)
+            delta_j = _SELF_REG_COEFF * np.sqrt(w_j)
+            delta_pair = 0.5 * (delta_i[:, None] + delta_j[None, :])
+            dist = np.sqrt(np.sum(r * r, axis=-1) + delta_pair * delta_pair)
+        else:
+            dist = np.sqrt(np.sum(r * r, axis=-1) + float(delta_reg) ** 2)
+        dot = np.einsum("iax,jbx->ijab", K_i, K_j)
+        kernel = dot / dist[..., None, None]
+        return MU0_OVER_4PI * np.einsum("ijab,i,j->ab", kernel, w_i, w_j)
+
+    def _maybe_partial_update_L_base_reduced(
+        self,
+        K_per_puck: List[np.ndarray],
+        pts_per_puck: List[np.ndarray],
+        weights_per_puck: List[np.ndarray],
+        base_indices: np.ndarray,
+        base_reps: List[int],
+        signs: np.ndarray,
+        G: int,
+        changed_pucks: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        """Symmetric-reduced partial L_base update; ``None`` if not applicable.
+
+        Returns the updated ``L_base`` (shape ``(n_base * nd_per,) * 2``)
+        when every cache invariant is satisfied, otherwise ``None``
+        which signals the caller to fall back to the full assembly.
+        """
+        cache = self._partial_L_cache
+        if cache is None or self._L_base_prev is None:
+            return None
+        n_all = len(K_per_puck)
+        if cache.get("kind") != "reduced":
+            return None
+        if cache.get("n_base") != int(self._n_base_pucks):
+            return None
+        if cache.get("n_all") != int(n_all):
+            return None
+        if cache.get("G") != int(G):
+            return None
+        nd_per = int(K_per_puck[base_reps[0]].shape[1])
+        if cache.get("nd_per") != nd_per:
+            return None
+        if not np.array_equal(
+            np.asarray(cache.get("base_indices")),
+            np.asarray(base_indices, dtype=int),
+        ):
+            return None
+        if not np.array_equal(
+            np.asarray(cache.get("signs")),
+            np.asarray(signs, dtype=int),
+        ):
+            return None
+        if not np.array_equal(
+            np.asarray(cache.get("base_reps")),
+            np.asarray(base_reps, dtype=int),
+        ):
+            return None
+        changed_idx = np.flatnonzero(np.asarray(changed_pucks, dtype=bool))
+        if changed_idx.size == 0:
+            return self._L_base_prev.copy()
+        if changed_idx.size >= self._n_base_pucks:
+            return None  # full rebuild is cheaper
+
+        L_base = np.array(self._L_base_prev, dtype=np.float64, copy=True)
+        changed_set = set(int(x) for x in changed_idx)
+        for i_base in changed_idx:
+            ri = int(i_base) * nd_per
+            L_base[ri : ri + nd_per, :] = 0.0
+            L_base[:, ri : ri + nd_per] = 0.0
+
+        delta_reg = float(self.regularization_delta)
+        adaptive = bool(self.adaptive_self_reg)
+        for i_base in changed_idx:
+            i_rep = int(base_reps[int(i_base)])
+            K_i = K_per_puck[i_rep]
+            pts_i = pts_per_puck[i_rep]
+            w_i = weights_per_puck[i_rep]
+            ri = int(i_base) * nd_per
+            for j_rep in range(n_all):
+                j_base = int(base_indices[j_rep])
+                sigma_j = int(signs[j_rep])
+                K_j = K_per_puck[j_rep]
+                pts_j = pts_per_puck[j_rep]
+                w_j = weights_per_puck[j_rep]
+                block = self._pair_block_inductance(
+                    K_i, pts_i, w_i, K_j, pts_j, w_j, delta_reg, adaptive
+                )
+                rj = j_base * nd_per
+                L_base[ri : ri + nd_per, rj : rj + nd_per] += sigma_j * G * block
+        # Mirror the changed rows to the corresponding columns of
+        # *unchanged* base pucks (those columns were zeroed above and
+        # not refilled by the row-only loop).  Changed-vs-changed
+        # cross-blocks are already symmetric because both rows were
+        # filled by the loop.
+        for i_base in changed_idx:
+            ri = int(i_base) * nd_per
+            for k_base in range(int(self._n_base_pucks)):
+                if int(k_base) in changed_set:
+                    continue
+                rk = int(k_base) * nd_per
+                L_base[rk : rk + nd_per, ri : ri + nd_per] = (
+                    L_base[ri : ri + nd_per, rk : rk + nd_per].T
+                )
+        L_base = 0.5 * (L_base + L_base.T)
+        return L_base
+
+    def _store_partial_L_cache(
+        self,
+        *,
+        kind: str,
+        L_base: np.ndarray,
+        K_per_puck: List[np.ndarray],
+        pts_per_puck: List[np.ndarray],
+        weights_per_puck: List[np.ndarray],
+        base_indices: np.ndarray,
+        base_reps: List[int],
+        signs: np.ndarray,
+        G: int,
+        nd_per: int,
+        n_all: int,
+    ) -> None:
+        """Snapshot the inputs that produced ``L_base`` for partial-L reuse."""
+        self._L_base_prev = np.asarray(L_base, dtype=np.float64).copy()
+        self._partial_L_cache = {
+            "kind": str(kind),
+            "n_base": int(self._n_base_pucks),
+            "n_all": int(n_all),
+            "G": int(G),
+            "nd_per": int(nd_per),
+            "base_indices": np.asarray(base_indices, dtype=int).copy(),
+            "base_reps": np.asarray(base_reps, dtype=int).copy(),
+            "signs": np.asarray(signs, dtype=int).copy(),
+        }
+        self._partial_L_call_count = 0
 
     def _rebuild(
         self,
@@ -3719,14 +4378,15 @@ class PSCBulkArray(Optimizable):
 
         A ``changed_mask`` that is ``None`` (default) preserves the
         previous unconditional full-rebuild semantics so existing
-        callers behave identically.  Non-empty ``changed_mask`` values
-        currently fall through to the full rebuild; a future iteration
-        can upgrade this to partial pair-block recompute plus a
-        block-Cholesky update when ``changed_mask.mean() <= 0.3`` (see
-        the plan's Stage 2 write-up for the algebra).  Until that
-        lands the safest behaviour is "recompute everything"; bit-level
-        equivalence with the full path is therefore preserved.
+        callers behave identically.  When ``SIMSOPT_PSC_PARTIAL_L_REUSE=1``
+        and the changed-puck fraction is below
+        ``SIMSOPT_PSC_PARTIAL_L_REUSE_THRESHOLD`` (default ``0.3``), a
+        conservative incremental path is activated: continuity projectors
+        and free-DOF pullback caches may be reused while the reduced solve
+        and beta assembly are refreshed from current geometry/TF state.
         """
+        self._partial_reuse_active = False
+        changed_pucks_mask: Optional[np.ndarray] = None
         if (
             changed_mask is not None
             and self._L_work is not None
@@ -3736,6 +4396,16 @@ class PSCBulkArray(Optimizable):
         ):
             try:
                 cm_arr = np.asarray(changed_mask, dtype=bool)
+                if cm_arr.size == self._n_base_pucks:
+                    changed_pucks_mask = cm_arr.copy()
+                elif self._n_base_pucks > 0 and cm_arr.size % self._n_base_pucks == 0:
+                    changed_pucks_mask = cm_arr.reshape(
+                        self._n_base_pucks, -1
+                    ).any(axis=1)
+                else:
+                    changed_pucks_mask = np.array(
+                        [bool(cm_arr.any())] * self._n_base_pucks, dtype=bool
+                    )
                 if cm_arr.size > 0 and not bool(cm_arr.any()):
                     # No DoFs changed: reuse L_base / Q / Cholesky from
                     # the previous rebuild and just resolve beta from the
@@ -3744,10 +4414,51 @@ class PSCBulkArray(Optimizable):
                     self._geom_hash = hash(tuple(self.local_full_x))
                     self._puck_dofs_hash_at_rebuild = self._hash_puck_local_dofs()
                     return
+                if (
+                    _psc_partial_l_reuse_env()
+                    and changed_pucks_mask is not None
+                    and changed_pucks_mask.size > 0
+                    and bool(changed_pucks_mask.any())
+                ):
+                    # Periodic full rebuild: bound drift from many
+                    # consecutive incremental updates.
+                    if (
+                        self._partial_L_call_count
+                        >= int(self._full_rebuild_period) > 0
+                    ):
+                        self._partial_reuse_active = False
+                    else:
+                        changed_fraction = float(np.mean(changed_pucks_mask))
+                        if changed_fraction <= _psc_partial_l_reuse_threshold_env():
+                            self._partial_reuse_active = True
             except (ValueError, TypeError):
                 pass
         _t_rebuild_total0: Optional[float] = None
         if _psc_bulk_timing_enabled():
+            # Snapshot any rows accumulated since the previous rebuild
+            # (the previous rebuild's phases plus all subsequent JAX
+            # forward / VJP phase rows pushed by ``_mark_phase_end``)
+            # into ``_timing_history`` with a ``rebuild_idx`` tag, so
+            # they survive the reset below.  Without this, only the
+            # rows from the final rebuild + post-rebuild JAX calls
+            # would be readable after ``optimize_coils`` returns.
+            #
+            # Counter semantics: ``_timing_rebuild_counter`` is the
+            # zero-based index of the rebuild whose rows are currently
+            # live in ``_timing_rows`` (or, between rebuilds, of the
+            # most recently completed rebuild).  It is *only*
+            # incremented when there is something to flush -- i.e. on
+            # the second and subsequent rebuilds in a series.  This
+            # keeps ``rebuild_idx=0`` for the first rebuild after a
+            # fresh start (or after :meth:`reset_timing_history`).
+            if self._timing_rows is not None:
+                if self._timing_rows:
+                    _idx = int(self._timing_rebuild_counter)
+                    for _row in self._timing_rows:
+                        _tagged = dict(_row)
+                        _tagged.setdefault("rebuild_idx", _idx)
+                        self._timing_history.append(_tagged)
+                self._timing_rebuild_counter += 1
             self._timing_rows = []
             _t_rebuild_total0 = time.perf_counter()
 
@@ -4041,23 +4752,81 @@ class PSCBulkArray(Optimizable):
             self._L_work = L_base
             nd_per_puck = K_per_puck_global[base_reps[0]].shape[1]
             Q_c_work = np.asarray(cache_hit_payload["Q_c_work"], dtype=np.float64)
-        elif reduced_active:
-            L_base = shell_inductance_matrix_symmetric_reduced(
-                K_per_puck_global,
-                pts_per_puck_global,
-                weights_per_puck,
-                base_indices,
-                delta_reg=self.regularization_delta,
-                adaptive_self_reg=self.adaptive_self_reg,
-                replica_signs=self._replica_signs,
-                pair_class_timer=_p_timer,
+            # Treat the disk-cache hit as a fresh full rebuild for the
+            # purposes of Stage C partial-L reuse so subsequent steps that
+            # only move a puck or two can incrementally update from this
+            # baseline instead of paying the full assembly again.
+            self._store_partial_L_cache(
+                kind="reduced",
+                L_base=L_base,
+                K_per_puck=K_per_puck_global,
+                pts_per_puck=pts_per_puck_global,
+                weights_per_puck=weights_per_puck,
+                base_indices=np.asarray(base_indices, dtype=int),
+                base_reps=base_reps,
+                signs=np.asarray(self._replica_signs, dtype=int),
+                G=G,
+                nd_per=nd_per_puck,
+                n_all=n_all,
             )
+            self._partial_reuse_active = False
+        elif reduced_active:
+            partial_L_used = False
+            L_base = None
+            if (
+                self._partial_reuse_active
+                and changed_pucks_mask is not None
+                and self._L_base_prev is not None
+                and self._partial_L_cache is not None
+            ):
+                L_base_partial = self._maybe_partial_update_L_base_reduced(
+                    K_per_puck=K_per_puck_global,
+                    pts_per_puck=pts_per_puck_global,
+                    weights_per_puck=weights_per_puck,
+                    base_indices=np.asarray(base_indices, dtype=int),
+                    base_reps=base_reps,
+                    signs=np.asarray(self._replica_signs, dtype=int),
+                    G=G,
+                    changed_pucks=changed_pucks_mask,
+                )
+                if L_base_partial is not None:
+                    L_base = L_base_partial
+                    partial_L_used = True
+                    self._partial_L_call_count = (
+                        int(self._partial_L_call_count) + 1
+                    )
+            if L_base is None:
+                L_base = shell_inductance_matrix_symmetric_reduced(
+                    K_per_puck_global,
+                    pts_per_puck_global,
+                    weights_per_puck,
+                    base_indices,
+                    delta_reg=self.regularization_delta,
+                    adaptive_self_reg=self.adaptive_self_reg,
+                    replica_signs=self._replica_signs,
+                    pair_class_timer=_p_timer,
+                )
             self._L_work = L_base
             nd_per_puck = K_per_puck_global[base_reps[0]].shape[1]
             Q_c_work = self._build_rim_continuity_projector(
                 self._n_base_pucks * nd_per_puck,
                 puck_subset=base_reps,
             )
+            if not partial_L_used:
+                self._store_partial_L_cache(
+                    kind="reduced",
+                    L_base=L_base,
+                    K_per_puck=K_per_puck_global,
+                    pts_per_puck=pts_per_puck_global,
+                    weights_per_puck=weights_per_puck,
+                    base_indices=np.asarray(base_indices, dtype=int),
+                    base_reps=base_reps,
+                    signs=np.asarray(self._replica_signs, dtype=int),
+                    G=G,
+                    nd_per=nd_per_puck,
+                    n_all=n_all,
+                )
+            self._partial_reuse_active = bool(partial_L_used)
         else:
             if exact_disc_faces:
                 disc_centers_axes = []
@@ -4178,10 +4947,58 @@ class PSCBulkArray(Optimizable):
             # Gauge projection on top of the continuity-restricted subspace:
             # drop the remaining exact null modes (constant per puck) of L.
             L_c = Q_c_work.T @ self._L_work @ Q_c_work
-            Q_L = null_space_projection_matrix(
-                L_c,
-                threshold=self._null_space_threshold,
-            )
+            if self._mode_truncation_tol > 0.0:
+                # Inline the eigendecomposition so we can apply both the
+                # null-space cut *and* the spectral mode-truncation cut in
+                # one pass.  After the null-space cut, sort the surviving
+                # eigenmodes by eigenvalue (smallest first, since the
+                # modal beta amplitude is ``|U^T f| / lambda``) and keep
+                # the smallest set of modes whose cumulative
+                # ``sum 1 / lambda`` covers ``1 - mode_truncation_tol``
+                # of the total surviving response.  This realises the
+                # appendix (vii) speedup ("drops basis columns whose
+                # contribution to Bsc at the plasma surface is below
+                # tolerance") without anchoring to a single noise-floor
+                # eigenvalue, so it stays well-behaved even for wide
+                # spectra typical of n_base >= 48 fixtures.  The
+                # discarded modes shrink the downstream Cholesky and
+                # eigenfloor work, with up to cubic savings in
+                # ``n_kept`` per the appendix's complexity argument.
+                lam_c, V_c = np.linalg.eigh(L_c)
+                max_lam_c = (
+                    float(np.max(np.abs(lam_c))) if lam_c.size > 0 else 0.0
+                )
+                if max_lam_c < 1e-30:
+                    keep = np.ones(lam_c.size, dtype=bool)
+                else:
+                    keep = lam_c > self._null_space_threshold * max_lam_c
+                    if bool(np.any(keep)):
+                        kept_idx = np.flatnonzero(keep)
+                        lam_kept = lam_c[kept_idx]
+                        order = np.argsort(lam_kept)
+                        inv_sorted = 1.0 / lam_kept[order]
+                        total = float(np.sum(inv_sorted))
+                        if total > 0.0:
+                            cum_frac = np.cumsum(inv_sorted) / total
+                            target = 1.0 - float(self._mode_truncation_tol)
+                            keep_count = int(
+                                np.searchsorted(cum_frac, target, side="left")
+                            ) + 1
+                            keep_count = max(1, min(keep_count, lam_kept.size))
+                            keep_local = np.zeros(lam_kept.size, dtype=bool)
+                            keep_local[order[:keep_count]] = True
+                            keep = np.zeros_like(keep)
+                            keep[kept_idx[keep_local]] = True
+                if not bool(np.any(keep)):
+                    keep = np.zeros(lam_c.size, dtype=bool)
+                    if lam_c.size > 0:
+                        keep[int(np.argmin(np.abs(lam_c)))] = True
+                Q_L = V_c[:, keep]
+            else:
+                Q_L = null_space_projection_matrix(
+                    L_c,
+                    threshold=self._null_space_threshold,
+                )
             self._Q = Q_c_work @ Q_L
             Lr = self._Q.T @ self._L_work @ self._Q
             self._L_red = Lr
@@ -4309,7 +5126,24 @@ class PSCBulkArray(Optimizable):
     def _free_vjp_cache_key(self, pts: np.ndarray, solve_vjp_mode: str) -> tuple:
         """Hash the reduced free-DOF linearization cache state."""
         pts_arr = np.ascontiguousarray(np.asarray(pts).reshape(-1, 3), dtype=float)
-        use_far, pair_k, tf_load, sol_mode, bs_far = _reduced_free_dof_extras_for_jax()
+        use_far, pair_k, tf_load, sol_mode, bs_far = _reduced_free_dof_extras_for_jax(
+            self._resolved_bulk_far_pair_kappa()
+        )
+        if use_far and pair_k > 0.0:
+            centers, quats, _, _ = self._get_base_puck_geometry()
+            near_idx, far_idx, n_near, n_far = self._reduced_far_pair_indices(
+                centers, quats, float(pair_k)
+            )
+            pair_partition_key = (
+                tuple(np.asarray(near_idx).reshape(-1).tolist()),
+                tuple(np.asarray(far_idx).reshape(-1).tolist()),
+            )
+        else:
+            near_idx = jnp.zeros((0, 2), dtype=jnp.int32)
+            far_idx = jnp.zeros((0, 2), dtype=jnp.int32)
+            n_near = 0
+            n_far = 0
+            pair_partition_key = ((), ())
         return (
             self._hash_puck_local_dofs(),
             self._tf_dofs_hash(),
@@ -4331,6 +5165,10 @@ class PSCBulkArray(Optimizable):
             str(sol_mode),
             float(bs_far),
             bool(_psc_w1_envelope_env()),
+            int(self._resolved_pair_replica_chunk()),
+            int(n_near),
+            int(n_far),
+            pair_partition_key,
         )
 
     def _tf_arrays(self):
@@ -4738,8 +5576,15 @@ class PSCBulkArray(Optimizable):
             (id(opt._dofs), opt._dofs._state_version)
             for opt in self._unique_dof_opts
         )
+        base_geom_now = self._base_geom_state_matrix()
+        changed_pucks: Optional[np.ndarray] = None
+        if self._last_base_geom_state is not None:
+            changed_pucks = np.any(base_geom_now != self._last_base_geom_state, axis=1)
         if current_versions != self._geom_versions:
-            self._rebuild()
+            if _psc_partial_l_reuse_env() and changed_pucks is not None:
+                self._rebuild(changed_mask=changed_pucks)
+            else:
+                self._rebuild()
             # Do not replace ``self._field``: the existing :class:`PassiveBulkField`
             # still delegates to ``self.B_at_points``, which uses updated L, beta,
             # and JIT functions. Replacing the field breaks ``MagneticFieldSum``'s
@@ -4758,6 +5603,7 @@ class PSCBulkArray(Optimizable):
             self.beta = self._solve_beta(self._tf_arrays())
             _path = "tf_only"
         self._geom_versions = current_versions
+        self._last_base_geom_state = base_geom_now
         self._free_vjp_cache = None
         self._field.clear_cached_properties()
         self._mark_phase_end(f"recompute_currents_total_{_path}", _t_total)
@@ -4793,7 +5639,7 @@ class PSCBulkArray(Optimizable):
             )
             self._mark_phase_end("B_at_points_shell_l2_total", _t_total)
             return out
-        if self._has_free_puck_dofs():
+        if self._has_free_center_or_quat_dofs():
             self._ensure_jax_full()
             br = np.asarray(self._base_reps, dtype=np.int32)
             reduced_ok = bool(
@@ -4810,8 +5656,18 @@ class PSCBulkArray(Optimizable):
                 _t_forward = self._mark_phase_start()
                 solve_vjp_mode = _psc_free_solve_vjp_env()
                 use_far, pair_k, tf_load, sol_mode, bs_far = (
-                    _reduced_free_dof_extras_for_jax()
+                    _reduced_free_dof_extras_for_jax(
+                        self._resolved_bulk_far_pair_kappa()
+                    )
                 )
+                if use_far and pair_k > 0.0:
+                    c_np, q_np, _, _ = self._get_base_puck_geometry()
+                    near_idx, far_idx, _, _ = self._reduced_far_pair_indices(
+                        c_np, q_np, float(pair_k)
+                    )
+                else:
+                    near_idx = jnp.zeros((0, 2), dtype=jnp.int32)
+                    far_idx = jnp.zeros((0, 2), dtype=jnp.int32)
                 m_loc_b = self._jax_m_local[br]
                 q_loc_b = self._jax_Q_sym_local[br]
                 static_tail = (
@@ -4836,6 +5692,9 @@ class PSCBulkArray(Optimizable):
                     str(sol_mode),
                     float(bs_far),
                     bool(_psc_w1_envelope_env()),
+                    int(self._resolved_pair_replica_chunk()),
+                    near_idx,
+                    far_idx,
                 )
                 if _psc_cache_free_vjp_env():
 
@@ -4925,6 +5784,40 @@ class PSCBulkArray(Optimizable):
             self._mark_phase_end("B_at_points_free_full_jax", _t_forward)
             self._mark_phase_end("B_at_points_free_full_total", _t_total)
             return out
+        out = self._B_at_points_tf_only(pts, g_tf=g_tf, gd_tf=gd_tf, I_tf=I_tf)
+        self._mark_phase_end("B_at_points_tf_total", _t_total)
+        return out
+
+    def _B_at_points_tf_only(
+        self,
+        pts: np.ndarray,
+        *,
+        g_tf: Optional[np.ndarray] = None,
+        gd_tf: Optional[np.ndarray] = None,
+        I_tf: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Evaluate B(pts) using the pre-built ``_jax_Lr_chol`` / ``_jax_Q``.
+
+        This is the cheap value-only path that bypasses the free-DOF JAX
+        runner.  It uses the same dispatch as the TF-only branch of
+        :meth:`B_at_points` but is callable even when ``_has_free_puck_dofs()``
+        is True.  The caller must ensure that :meth:`recompute_currents` has
+        been called so that ``_jax_Lr_chol``, ``_jax_Q``, and related arrays
+        are up-to-date.
+
+        Used by :meth:`_Rt_fd_gradient` to avoid the ~120x overhead of the
+        JAX free-DOF runner inside the finite-difference loop.
+        """
+        _t_total = self._mark_phase_start()
+        assert self._jax_Lr_chol is not None, (
+            "_B_at_points_tf_only called before _jax_Lr_chol is initialised"
+        )
+        assert self._jax_Q is not None, (
+            "_B_at_points_tf_only called before _jax_Q is initialised"
+        )
+        pts = np.asarray(pts)
+        if g_tf is None or gd_tf is None or I_tf is None:
+            g_tf, gd_tf, I_tf = self._tf_arrays()
         if _USE_JAX_TF_VJP:
             _t_forward = self._mark_phase_start()
             out = np.array(
@@ -4945,12 +5838,12 @@ class PSCBulkArray(Optimizable):
                     pts,
                 )
             )
-            self._mark_phase_end("B_at_points_tf_jax", _t_forward)
-            self._mark_phase_end("B_at_points_tf_total", _t_total)
+            self._mark_phase_end("B_at_points_tf_only_jax", _t_forward)
+            self._mark_phase_end("B_at_points_tf_only_total", _t_total)
             return out
         _t_bn = self._mark_phase_start()
         Bn = self._compute_bn_at_quads_numpy()
-        self._mark_phase_end("B_at_points_tf_bn", _t_bn)
+        self._mark_phase_end("B_at_points_tf_only_bn", _t_bn)
         _t_forward = self._mark_phase_start()
         out = np.array(
             _B_eval_from_bn_jitted(
@@ -4967,8 +5860,8 @@ class PSCBulkArray(Optimizable):
                 pts,
             )
         )
-        self._mark_phase_end("B_at_points_tf_from_bn_jax", _t_forward)
-        self._mark_phase_end("B_at_points_tf_total", _t_total)
+        self._mark_phase_end("B_at_points_tf_only_from_bn_jax", _t_forward)
+        self._mark_phase_end("B_at_points_tf_only_total", _t_total)
         return out
 
     def get_shell_currents(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -5039,6 +5932,20 @@ class PSCBulkArray(Optimizable):
                 kinds.add("other")
         return kinds
 
+    def _has_free_center_or_quat_dofs(self) -> bool:
+        """True iff any ``center_*`` or ``q*_`` puck DOF is currently free.
+
+        Used to gate the JAX free-DOF runner: when only R/t are free,
+        the runner traces gradients w.r.t. fixed centers/quats that are
+        discarded downstream.  Routing the forward through
+        :meth:`_B_at_points_tf_only` and the VJP through
+        :meth:`_vjp_tf_only` + :meth:`_Rt_fd_gradient` saves ~3000 s on
+        a 5-iter freeradius optimisation (see
+        ``stellcoilbench_dipoles/bench_results/free_dof_variants/README.md``).
+        """
+        kinds = self._free_puck_dof_kinds()
+        return bool(kinds & {"center", "quaternion"})
+
     def _hash_puck_local_dofs(self) -> int:
         """Hash bytes of the first ``9 * n_base`` local DOFs (puck geometry)."""
         x = np.asarray(self.local_full_x, dtype=float)
@@ -5089,6 +5996,62 @@ class PSCBulkArray(Optimizable):
         if auto >= n_b:
             return 0
         return auto
+
+    def _resolved_pair_replica_chunk(self) -> int:
+        """Replica-axis chunk for the free-DoF pair-inductance kernel (host, static in JIT).
+
+        Default behaviour (env unset / unset constructor arg / ``0``) returns
+        ``0``, which selects the legacy monolithic ``vmap`` over all
+        ``n_all`` replicas inside each base row.  When the env or
+        constructor knob is positive, the value is clamped to
+        ``min(value, n_all)``; clamping to ``n_all`` is equivalent to the
+        legacy path so the JIT can short-circuit.
+        """
+        n_all = int(len(self._all_pucks)) if getattr(self, "_all_pucks", None) else 1
+        env = _psc_pair_replica_chunk_from_env()
+        if env is not None:
+            if env <= 0:
+                return 0
+            return int(min(int(env), n_all))
+        ctor = int(self._pair_replica_chunk_ctor)
+        if ctor <= 0:
+            return 0
+        return int(min(ctor, n_all))
+
+    def _resolved_bulk_far_pair_kappa(self) -> float:
+        """Return effective far-pair kappa, with env var overriding constructor/YAML."""
+        env = _psc_pair_far_kappa_env_override()
+        if env is not None:
+            return float(env)
+        return float(getattr(self, "_bulk_far_pair_kappa", 0.0))
+
+    def _reduced_far_pair_indices(
+        self,
+        centers_base: np.ndarray,
+        quats_base: np.ndarray,
+        pair_far_kappa: float,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, int, int]:
+        """Return host-classified non-self near/far pairs for reduced free-DOF JAX.
+
+        The classification happens outside the JAX trace so far-pair scans never
+        contain the dense pair kernel.  Self-pairs are intentionally excluded and
+        are always added through the dense kernel inside the traced function.
+        """
+        centers = np.asarray(centers_base, dtype=float)
+        quats = np.asarray(quats_base, dtype=float)
+        _, _, radii, thicknesses = self._get_base_puck_geometry()
+        all_pucks, _, base_indices, _, _, _ = self._replicate_pucks(
+            centers, quats, radii, thicknesses
+        )
+        centers_all = np.stack([p[0] for p in all_pucks], axis=0)
+        r_eff = np.asarray(
+            [max(abs(float(p[2])), 0.5 * abs(float(p[3]))) for p in all_pucks],
+            dtype=float,
+        )
+        near, far, n_near, n_far = _classify_pairs(
+            centers_all, r_eff, np.asarray(base_indices, dtype=np.int32), pair_far_kappa
+        )
+        return jnp.asarray(near), jnp.asarray(far), n_near, n_far
 
     def _resolved_bs_eval_chunk(self, n_eval: int) -> int:
         """Eval-point chunk size for free-DOF shell Biot-Savart JAX bodies."""
@@ -5276,10 +6239,144 @@ class PSCBulkArray(Optimizable):
         self._mark_phase_end("vjp_tf_biotsavart_pullback", _t_tf_pullback)
         return out
 
+    def _has_free_Rt_dofs(self) -> bool:
+        """Return ``True`` iff any ``R{i}`` / ``t{i}`` DOF is currently free.
+
+        Used by :meth:`_vjp_puck_geometry` to gate the finite-difference
+        R / t gradient extension (see
+        ``simsopt_fork/docs/notes/psc_bulk_Rt_vjp_audit.md``).
+        """
+        for name, is_free in zip(
+            self.local_full_dof_names, self.local_dofs_free_status
+        ):
+            if not is_free:
+                continue
+            if str(name).startswith(("R", "t")):
+                return True
+        return False
+
+    def _Rt_fd_gradient(
+        self,
+        v_B: np.ndarray,
+        pts: np.ndarray,
+    ) -> np.ndarray:
+        """One-sided FD gradient of ``<v_B, B(pts)>`` w.r.t. ``R{i}``/``t{i}``.
+
+        Returns a ``(n_base, 2)`` float64 array where column 0 is the
+        derivative w.r.t. ``R{i}`` and column 1 is w.r.t. ``t{i}``.
+        Entries are zero for *fixed* R/t DOFs.
+
+        Algorithm (one-sided forward FD with TF-only B-eval):
+
+        1. Evaluate ``B0 = _B_at_points_tf_only(pts)`` once at the
+           current (unperturbed) state.
+        2. For each free shape DOF:
+           a. Record ``v0``, set the DOF to ``v0 + eps``.
+           b. Call :meth:`recompute_currents` (partial-rebuild fast
+              path on the perturbed puck).
+           c. Evaluate ``B_p = _B_at_points_tf_only(pts)``.
+           d. Restore ``v0``, call :meth:`recompute_currents`.
+           e. Emit ``(v_B . (B_p - B0)) / eps``.
+
+        Cost per VJP: ``n_free_shape * (T_rebuild + T_B_tf_only) +
+        n_free_shape * T_rebuild_restore + T_B0``.  At reactor scale
+        (``n_base = 14``, 28 free shape DOFs) this is ~8 s vs the
+        previous central-FD + free-DOF-jax path at ~231 s.
+
+        The step size ``eps`` is read from ``SIMSOPT_PSC_RT_FD_EPS``
+        (default ``1e-5``).  One-sided FD has O(eps) bias which is
+        acceptable for L-BFGS-B line searches.
+
+        See ``docs/passive_bulk_freeradius_diagnosis.md`` for the full
+        performance diagnosis and Phase D.2 replacement plan.
+        """
+        import warnings as _warnings
+
+        eps = _psc_rt_fd_eps_env()
+        v_B_arr = np.ascontiguousarray(v_B, dtype=np.float64)
+        pts_arr = np.ascontiguousarray(pts, dtype=np.float64)
+        n_base = int(self._n_base_pucks)
+        out = np.zeros((n_base, 2), dtype=np.float64)
+        free_flags = np.asarray(self._dofs._free, dtype=bool)
+        names = list(self.local_full_dof_names)
+        name_to_idx = {n: i for i, n in enumerate(names)}
+
+        _t_b0 = self._mark_phase_start()
+        B0 = np.asarray(self._B_at_points_tf_only(pts_arr), dtype=np.float64)
+        self._mark_phase_end("vjp_free_Rt_fd_b0_capture", _t_b0)
+
+        for b in range(n_base):
+            for axis_idx, prefix in enumerate(("R", "t")):
+                dof_name = f"{prefix}{b}"
+                idx = name_to_idx.get(dof_name)
+                if idx is None or not bool(free_flags[idx]):
+                    continue
+                v0 = float(self.get(dof_name))
+                try:
+                    self.set(dof_name, v0 + eps)
+                    self.recompute_currents()
+                    B_p = np.asarray(
+                        self._B_at_points_tf_only(pts_arr), dtype=np.float64
+                    )
+                except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
+                    _warnings.warn(
+                        f"PSCBulkArray._Rt_fd_gradient: skipping {dof_name!r} "
+                        f"because the perturbed solve raised {exc.__class__.__name__}: {exc}",
+                        category=RuntimeWarning,
+                        stacklevel=3,
+                    )
+                    out[b, axis_idx] = 0.0
+                    self.set(dof_name, v0)
+                    try:
+                        self.recompute_currents()
+                    except Exception:
+                        pass
+                    continue
+                self.set(dof_name, v0)
+                self.recompute_currents()
+                out[b, axis_idx] = float(
+                    np.sum(v_B_arr * (B_p - B0))
+                ) / eps
+        return out
+
     def _vjp_puck_geometry(self, v_B, pts):
         """VJP w.r.t. puck center + quaternion + TF DOFs via full JAX forward."""
         if not self._has_free_puck_dofs():
             return self._vjp_tf_only(v_B, pts)
+        if not self._has_free_center_or_quat_dofs():
+            import warnings as _warnings
+
+            _t_shape = self._mark_phase_start()
+            try:
+                tf_deriv = self._vjp_tf_only(v_B, pts)
+            except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
+                # Host-side ``_Lr_chol_host`` can be left ill-conditioned
+                # by an ill-fated L-BFGS-B line-search probe (e.g. R/t
+                # driven into a regime where the inductance Cholesky
+                # contains NaN).  Return a zero TF gradient (so the
+                # outer minimiser sees a sentinel-bad point and
+                # backtracks), matching the pre-fix free-DOF JAX path's
+                # behaviour of silently returning NaN-tainted gradients
+                # at such points without raising.
+                _warnings.warn(
+                    "PSCBulkArray._vjp_puck_geometry: shape-only TF VJP "
+                    f"raised {exc.__class__.__name__}: {exc}; returning "
+                    "zero TF gradient so the optimiser can backtrack.",
+                    category=RuntimeWarning,
+                    stacklevel=3,
+                )
+                tf_deriv = Derivative({})
+            grad_local = np.zeros(self._n_base_pucks * _DOFS_PER_PUCK)
+            if self._has_free_Rt_dofs():
+                _t_Rt_fd = self._mark_phase_start()
+                g_Rt = self._Rt_fd_gradient(np.asarray(v_B), np.asarray(pts))
+                for i in range(self._n_base_pucks):
+                    off = i * _DOFS_PER_PUCK
+                    grad_local[off + 7] += g_Rt[i, 0]
+                    grad_local[off + 8] += g_Rt[i, 1]
+                self._mark_phase_end("vjp_free_Rt_fd", _t_Rt_fd)
+            self._mark_phase_end("vjp_shape_only_total", _t_shape)
+            return Derivative({self: grad_local}) + tf_deriv
         _t_stacks = self._mark_phase_start()
         self._ensure_jax_full()
         self._mark_phase_end("vjp_free_ensure_jax_full", _t_stacks)
@@ -5302,8 +6399,16 @@ class PSCBulkArray(Optimizable):
             vjp_probe_mode = _psc_free_vjp_probe_env()
             solve_vjp_mode = _psc_free_solve_vjp_env()
             use_far, pair_k, tf_load, sol_mode, bs_far = (
-                _reduced_free_dof_extras_for_jax()
+                _reduced_free_dof_extras_for_jax(self._resolved_bulk_far_pair_kappa())
             )
+            if use_far and pair_k > 0.0:
+                c_np, q_np, _, _ = self._get_base_puck_geometry()
+                near_idx, far_idx, _, _ = self._reduced_far_pair_indices(
+                    c_np, q_np, float(pair_k)
+                )
+            else:
+                near_idx = jnp.zeros((0, 2), dtype=jnp.int32)
+                far_idx = jnp.zeros((0, 2), dtype=jnp.int32)
             m_loc_b = self._jax_m_local[br]
             q_loc_b = self._jax_Q_sym_local[br]
             _t_jax = self._mark_phase_start()
@@ -5362,6 +6467,9 @@ class PSCBulkArray(Optimizable):
                     str(sol_mode),
                     float(bs_far),
                     bool(_psc_w1_envelope_env()),
+                    int(self._resolved_pair_replica_chunk()),
+                    near_idx,
+                    far_idx,
                 )
                 if _psc_free_vjp_geometry_env() == "full":
                     vc, vq, vg, vgd, vI = _vjp_reduced_free_dof_jitted(*common_args)
@@ -5427,6 +6535,15 @@ class PSCBulkArray(Optimizable):
                 grad_local[off + 3 : off + 7] += self._quat_jacobians[j].T @ vq[j]
         self._mark_phase_end("vjp_free_puck_pullback", _t_puck_pullback)
 
+        if self._has_free_Rt_dofs():
+            _t_Rt_fd = self._mark_phase_start()
+            g_Rt = self._Rt_fd_gradient(np.asarray(v_B), np.asarray(pts))
+            for i in range(self._n_base_pucks):
+                off = i * _DOFS_PER_PUCK
+                grad_local[off + 7] += g_Rt[i, 0]
+                grad_local[off + 8] += g_Rt[i, 1]
+            self._mark_phase_end("vjp_free_Rt_fd", _t_Rt_fd)
+
         _t_tf_pullback = self._mark_phase_start()
         vjp_tf = sum(
             self.coils_TF[i].vjp(vg[i], vgd[i], np.asarray([vI[i]]))
@@ -5444,25 +6561,20 @@ class PSCBulkArray(Optimizable):
         return self._n_dof_total - self._Q.shape[1]
 
     @classmethod
-    def from_cylindrical_grid(
+    def from_toroidal_shell(
         cls,
         plasma_boundary,
         coils_TF,
         eval_points: np.ndarray,
         *,
-        dr: float,
-        dz: float,
+        n_theta: int,
         n_phi_slices: int,
-        r_min: Optional[float] = None,
-        r_max: Optional[float] = None,
-        z_min: Optional[float] = None,
-        z_max: Optional[float] = None,
-        d_inner: float = 0.0,
-        d_outer: float = 1.0,
+        R0: Optional[float] = None,
+        minor_radius: Optional[float] = None,
+        plasma_clearance: float = 0.0,
         puck_R: Optional[Union[float, np.ndarray]] = None,
         puck_t: Optional[Union[float, np.ndarray]] = None,
         safety: float = 1.05,
-        plasma_clearance: float = 0.0,
         nfp: Optional[int] = None,
         stellsym: Optional[bool] = None,
         m_fourier: int = 4,
@@ -5478,11 +6590,23 @@ class PSCBulkArray(Optimizable):
         exact_disc_faces: bool = False,
         n_radial_disc: int = 32,
     ) -> "PSCBulkArray":
-        """Passive bulks on a finite-shape-aware ``(r, φ, z)`` lattice with radial axes.
+        """Passive bulks on an axisymmetric toroidal shell enveloping the plasma.
 
-        See :func:`~simsopt.field.puck_init.cylindrical_grid_pucks` for spacing rules.
+        See :func:`~simsopt.field.puck_init.toroidal_shell_pucks` for the
+        ``(R0, minor_radius, n_theta, n_phi_slices)`` parameterisation and
+        spacing-inequality details; puck axes point **inward** from the
+        shell toward the magnetic axis.
 
         Args:
+            n_theta: Poloidal samples per :math:`\\theta` range.
+            n_phi_slices: Toroidal samples per **half period**
+                :math:`[0, \\pi/\\textrm{nfp})`.
+            R0: Major radius of the shell (m); defaults to the mean of
+                ``sqrt(x^2 + y^2)`` over ``plasma_boundary.gamma()``.
+            minor_radius: Minor radius of the shell (m); defaults to
+                ``rho_max(plasma) + plasma_clearance``.
+            plasma_clearance: Headroom (m) added to the default
+                ``minor_radius``.
             adaptive_self_reg: Forwarded to :class:`PSCBulkArray` (default
                 ``True``: physically correct coincident-cell regularization).
             exact_disc_faces: If ``True``, after construction enable the
@@ -5498,22 +6622,22 @@ class PSCBulkArray(Optimizable):
         See :class:`PSCBulkArray` for the meaning of ``strict_rim_continuity``.
         """
         nfp_i = int(nfp if nfp is not None else plasma_boundary.nfp)
-        centers, axes, radii, thicknesses = cylindrical_grid_pucks(
+        stellsym_i = bool(
+            stellsym if stellsym is not None
+            else getattr(plasma_boundary, "stellsym", False)
+        )
+        centers, axes, radii, thicknesses = toroidal_shell_pucks(
             plasma_boundary,
-            dr,
-            dz,
-            n_phi_slices,
-            r_min=r_min,
-            r_max=r_max,
-            z_min=z_min,
-            z_max=z_max,
-            d_inner=d_inner,
-            d_outer=d_outer,
+            n_theta=int(n_theta),
+            n_phi=int(n_phi_slices),
+            R0=R0,
+            minor_radius=minor_radius,
+            plasma_clearance=plasma_clearance,
+            safety=safety,
             puck_R=puck_R,
             puck_t=puck_t,
-            safety=safety,
-            plasma_clearance=plasma_clearance,
             nfp=nfp_i,
+            stellsym=stellsym_i,
         )
         psc = cls(
             centers,
