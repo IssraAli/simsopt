@@ -69,7 +69,7 @@ examples/**/*_optimization_out/
 /passive_bulks_out/
 /passive_bulks_optimization_out/
 /passive_bulks_winding_surface_optimization_out/
-/passive_bulks_cylindrical_grid_optimization_out/
+/passive_bulks_toroidal_shell_optimization_out/
 /test_output/
 
 # Taylor-test / timing plots produced by examples

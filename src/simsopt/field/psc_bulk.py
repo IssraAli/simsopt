@@ -123,12 +123,26 @@ import hashlib
 import os
 import tempfile
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from contextlib import contextmanager
+from functools import partial
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import vjp
+import scipy.linalg as sp_linalg
 from scipy.linalg import solve_triangular
 
 from simsopt._core.derivative import Derivative
@@ -141,7 +155,7 @@ from .bulk_inductance import (
     null_space_projection_matrix,
     shell_biot_savart_stacked_pure,
     shell_cholesky_pure,
-    shell_eigenfloor_cholesky_pure,
+    shell_eigenfloor_cholesky_from_eig,
     shell_eigendecomposition_floored,
     shell_inductance_matrix_blockwise,
     shell_inductance_matrix_symmetric_reduced,
@@ -171,6 +185,7 @@ from .puck_basis import (
     normalize_mode_truncate,
 )
 from .puck_init import toroidal_shell_pucks, winding_surface_pucks
+from . import _psc_bulk_dipole as _psc_bulk_dipole_mod
 
 # Route TF-only VJP through the analytic adjoint + C++ BiotSavart (default
 # production path).  Equivalence tests flip this module-level flag to
@@ -403,6 +418,68 @@ def _psc_partial_l_reuse_threshold_env() -> float:
     return float(min(1.0, max(0.0, val)))
 
 
+def _psc_tf_solve_eigfloor_env() -> bool:
+    """Use the eigenfloor-stabilised Cholesky for cheap TF-only forward + adjoint.
+
+    When ``SIMSOPT_PSC_TF_SOLVE_EIGFLOOR`` is ``"1"`` / ``"true"`` / ``"yes"`` /
+    ``"on"`` (default ``"1"``), :meth:`PSCBulkArray._B_at_points_tf_only` and
+    :meth:`PSCBulkArray._vjp_tf_only_analytic` consume ``_jax_Lr_eigf_chol`` /
+    ``_Lr_eigf_chol_host`` instead of the plain minimal-jitter
+    ``_jax_Lr_chol`` / ``_Lr_chol_host``. This mirrors the factor already used by
+    :meth:`PSCBulkArray._solve_beta` and removes asymmetry that caused shape-only
+    NaNs on poorly conditioned geometries (Phase 4, May 2026).
+
+    Set to ``"0"`` for A/B against the legacy plain-Cholesky cheap path.
+    """
+    raw = os.environ.get("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", "1").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _psc_pair_replica_chunk_auto_env() -> bool:
+    """Tune replica-axis chunk size when unset (Phase-5 audit L3).
+
+    Opt out with ``SIMSOPT_PSC_PAIR_REPLICA_CHUNK_AUTO=0``.
+    """
+
+    raw = os.environ.get("SIMSOPT_PSC_PAIR_REPLICA_CHUNK_AUTO", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _psc_disc_face_sym_reduced_env() -> bool:
+    """Allow symmetry-reduced path with ``exact_disc_faces`` overlays (audit L6)."""
+
+    raw = os.environ.get("SIMSOPT_PSC_DISC_FACE_SYM", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _psc_movingsub_B_env() -> bool:
+    """Moving-puck reduced-free B optimisation (audit L4; API opt-in hook)."""
+
+    raw = os.environ.get("SIMSOPT_PSC_MOVING_PUCK_SUBSET", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _psc_partial_l_jax_env() -> bool:
+    """Batched JAX Stage-C partial rows (audit L7). Disabled with ``SIMSOPT_PSC_PARTIAL_L_JAX=0``."""
+
+    raw = os.environ.get("SIMSOPT_PSC_PARTIAL_L_JAX", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _psc_rt_analytic_combo_env() -> bool:
+    """Expose pooled ``R{t}`` directional derivatives via :meth:`PSCBulkArray._Rt_analytic_directional_combo` (L8)."""
+
+    raw = os.environ.get("SIMSOPT_PSC_RT_ANALYTIC", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _fc_bulk_warm_handoff_env() -> bool:
+    """Optional PSC warm handoff across FC orders (audit L11)."""
+
+    raw = os.environ.get("SIMSOPT_FC_WARM_HANDOFF", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _psc_rt_fd_eps_env() -> float:
     """Return step size for one-sided FD R/t gradient (default ``1e-5``).
 
@@ -411,6 +488,25 @@ def _psc_rt_fd_eps_env() -> float:
     signal-to-noise at the cost of marginally larger bias.
     """
     raw = os.environ.get("SIMSOPT_PSC_RT_FD_EPS", "1e-5").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 1e-5
+
+
+def _psc_geom_fd_eps_env() -> float:
+    """Return step size for one-sided FD geometry (centre/quat) gradient.
+
+    Controlled by ``SIMSOPT_PSC_GEOM_FD_EPS``; default ``1e-5`` to match
+    the ``SIMSOPT_PSC_RT_FD_EPS`` convention.  Used by
+    :meth:`PSCBulkArray._geometry_fd_gradient` when a caller (typically
+    ``stellcoilbench_dipoles``'s
+    :class:`~stellcoilbench.coil_optimization
+    ._bulk_center_parameterization.ConstrainedJFWrapper`) wants a
+    cheap host-side FD gradient w.r.t. caller-supplied per-puck
+    ``(dC, dQ)`` perturbations instead of the JAX free-DoF VJP.
+    """
+    raw = os.environ.get("SIMSOPT_PSC_GEOM_FD_EPS", "1e-5").strip()
     try:
         return float(raw)
     except ValueError:
@@ -619,6 +715,65 @@ def _psc_lcache_enabled() -> bool:
     preserve bit-identical behaviour for callers unaware of the cache.
     """
     return os.environ.get("SIMSOPT_PSC_LCACHE", "0") == "1"
+
+
+def _psc_dipole_freeze_self_l_env(*, default_on: bool) -> bool:
+    """Return ``True`` iff the dipole-mode self-inductance freeze is on.
+
+    Controlled by ``SIMSOPT_PSC_FREEZE_SELF_L``: ``"1"`` / ``"true"`` /
+    ``"yes"`` enable, ``"0"`` / ``"false"`` / ``"no"`` disable.  When the
+    variable is unset (most common case) the default depends on the
+    caller:
+
+    * ``solver_mode='dipole'``: default ``True`` (skip self-block
+      recomputation across optimisation iterations; matches the lean
+      dipole bulk solver Phase D recommendation).
+    * Other solver modes: default ``False`` to preserve existing
+      semantics bit-for-bit.
+
+    Args:
+        default_on: Default value when the env var is unset.
+
+    Returns:
+        Resolved freeze setting.
+    """
+    raw = os.environ.get("SIMSOPT_PSC_FREEZE_SELF_L", None)
+    if raw is None:
+        return bool(default_on)
+    val = raw.strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    return bool(default_on)
+
+
+def _psc_dipole_n_radial_env() -> int:
+    """Number of radial nodes for the one-time dipole self-tensor compute.
+
+    Controlled by ``SIMSOPT_PSC_DIPOLE_N_RADIAL`` (default ``32``).
+    Only affects the one-time per-``(R, t)`` polarizability tensor
+    computation at setup; runtime cost is negligible thereafter.
+    """
+    try:
+        return max(4, int(os.environ.get("SIMSOPT_PSC_DIPOLE_N_RADIAL", "32")))
+    except ValueError:
+        return 32
+
+
+def _psc_dipole_warn_r_close_env() -> float:
+    """Close-packing warn threshold for dipole-mode pucks.
+
+    Controlled by ``SIMSOPT_PSC_DIPOLE_WARN_R_CLOSE`` (default ``2.0``).
+    On the first dipole-mode rebuild a :class:`UserWarning` is emitted
+    when any pair of base / replica puck centres satisfies
+    ``|c_i - c_j| / (R_i + R_j) < threshold`` because the dipole
+    truncation error grows rapidly at close packing.
+    """
+    try:
+        return max(0.0, float(os.environ.get("SIMSOPT_PSC_DIPOLE_WARN_R_CLOSE", "2.0")))
+    except ValueError:
+        return 2.0
 
 
 def _psc_lcache_dir() -> str:
@@ -872,6 +1027,75 @@ def _maybe_prime_psc_jax_kernels(psc: "PSCBulkArray") -> None:
             Bn_z,
             ep,
         )
+        if (
+            os.environ.get("SIMSOPT_JAX_PRIME_REDUCED", "0") == "1"
+            and bool(getattr(psc, "_reduced_free_dof_active", False))
+            and getattr(psc, "_jax_local_pts", None) is not None
+            and getattr(psc, "_jax_Q_c_base", None) is not None
+            and getattr(psc, "_jax_L_red_eig_U", None) is not None
+        ):
+            br = np.asarray(psc._base_reps, dtype=np.int32)
+            c_base = jnp.asarray(
+                np.stack([psc._all_pucks[i][0] for i in br], axis=0)
+            )
+            q_base = jnp.asarray(psc._all_pucks_quats[br])
+            solve_vjp_mode = _psc_free_solve_vjp_env()
+            use_far, pair_k, tf_load, sol_mode, bs_far = (
+                _reduced_free_dof_extras_for_jax(
+                    psc._resolved_bulk_far_pair_kappa()
+                )
+            )
+            if use_far and pair_k > 0.0:
+                c_np, q_np, _, _ = psc._get_base_puck_geometry()
+                near_idx, far_idx, _, _ = psc._reduced_far_pair_indices(
+                    c_np, q_np, float(pair_k)
+                )
+            else:
+                near_idx = jnp.zeros((0, 2), dtype=jnp.int32)
+                far_idx = jnp.zeros((0, 2), dtype=jnp.int32)
+            static_tail = (
+                psc._jax_base_indices,
+                psc._jax_base_reps,
+                jnp.asarray(float(psc._symmetry_G)),
+                int(psc.nfp),
+                bool(psc.stellsym),
+                float(psc.regularization_delta),
+                float(psc._eigenfloor_threshold),
+                bool(psc.adaptive_self_reg),
+                bool(psc._resolved_checkpoint_l_pairs()),
+                int(psc._resolved_jax_pair_row_chunk()),
+                int(psc._resolved_bs_eval_chunk(ep.shape[0])),
+                "full",
+                solve_vjp_mode,
+                use_far,
+                float(pair_k),
+                psc._jax_m_local[br],
+                psc._jax_Q_sym_local[br],
+                str(tf_load),
+                str(sol_mode),
+                float(bs_far),
+                bool(_psc_w1_envelope_env()),
+                int(psc._resolved_pair_replica_chunk()),
+                near_idx,
+                far_idx,
+            )
+            _ = _B_eval_reduced_free_dof_jitted(
+                psc._jax_local_pts[br],
+                psc._jax_local_K[br],
+                psc._jax_local_n[br],
+                psc._jax_local_w[br],
+                psc._jax_local_phi[br],
+                psc._jax_Q_c_base,
+                c_base,
+                q_base,
+                g_tf,
+                gd_tf,
+                I_tf,
+                ep,
+                psc._jax_L_red_eig_U,
+                psc._jax_L_red_eig_lam,
+                *static_tail,
+            )
         _PSC_JAX_PRIME_ONCE = True
     except Exception:
         pass
@@ -3498,11 +3722,6 @@ class PSCBulkArray(Optimizable):
             instance).
     """
 
-    # Class-level latch so the ``_L_full`` deprecation warning fires at most
-    # once per process.  Public attribute name starts with an underscore so
-    # it is not considered a DOF by the :class:`Optimizable` discovery.
-    _L_full_deprecation_warned: bool = False
-
     def __init__(
         self,
         puck_centers: np.ndarray,
@@ -3539,6 +3758,7 @@ class PSCBulkArray(Optimizable):
         mode_truncation_tol: float = 0.0,
         bulk_far_pair_kappa: float = 0.0,
         bulk_far_pair_tol: float = 1.0e-2,
+        fixed_field_matrix_dtype: str = "float64",
     ):
         self.coils_TF = list(coils_TF)
         self.eval_points = np.asarray(eval_points, dtype=float, order="C")
@@ -3559,11 +3779,37 @@ class PSCBulkArray(Optimizable):
         self._null_space_threshold = float(null_space_threshold)
         self._eigenfloor_threshold = float(eigenfloor_threshold)
         self._strict_rim_continuity = bool(strict_rim_continuity)
-        if solver_mode not in ("energy", "shell_l2"):
+        if solver_mode not in ("energy", "shell_l2", "dipole"):
             raise ValueError(
-                f"solver_mode must be 'energy' or 'shell_l2'; got {solver_mode!r}"
+                "solver_mode must be 'energy', 'shell_l2', or 'dipole'; "
+                f"got {solver_mode!r}"
             )
         self.solver_mode = str(solver_mode)
+        # Dipole-mode caches (Phase A/B/D of the lean dipole bulk solver
+        # plan).  Set lazily on the first ``_rebuild`` call when
+        # ``solver_mode == 'dipole'``; left ``None`` otherwise so the
+        # legacy paths see no overhead.
+        self._dipole_self_L_local_cached: Optional[np.ndarray] = None
+        self._dipole_self_L_keys: Optional[Tuple[Tuple[float, float], ...]] = None
+        self._dipole_L_red: Optional[np.ndarray] = None
+        self._dipole_L_red_chol: Optional[Tuple[np.ndarray, bool]] = None
+        self._dipole_m_red: Optional[np.ndarray] = None
+        # Persistent jax.jit handles for the dipole forward
+        # (free-DoF + value path) and the cached plasma-field
+        # evaluation.  Keyed on
+        # ``(n_base, n_eval, nfp, stellsym, n_tf, n_tf_quad)`` so that
+        # repeated calls with the same shapes reuse the compiled
+        # kernel instead of re-tracing through ``vmap`` every time.
+        self._dipole_jit_forward: Optional[Any] = None
+        self._dipole_jit_field: Optional[Any] = None
+        self._dipole_jit_key: Optional[tuple] = None
+        # When ``True``, the cached ``_dipole_self_L_local_cached`` is
+        # reused across rebuilds even if ``R_i`` / ``t_i`` change.
+        # Default behaviour comes from
+        # :func:`_psc_dipole_freeze_self_l_env`.
+        self._dipole_freeze_self_L: bool = _psc_dipole_freeze_self_l_env(
+            default_on=(self.solver_mode == "dipole")
+        )
         self._full_L_band_size = int(full_L_band_size)
         self._use_f32_bs = bool(use_f32_bs)
         self._release_host_L_work_after_rebuild = bool(
@@ -3580,6 +3826,18 @@ class PSCBulkArray(Optimizable):
         self._pair_replica_chunk_ctor: int = int(pair_replica_chunk)
         self._bulk_far_pair_kappa: float = max(0.0, float(bulk_far_pair_kappa))
         self._bulk_far_pair_tol: float = max(0.0, float(bulk_far_pair_tol))
+        # Storage dtype for the fixed-puck BS-to-plasma matrix ``_M_field``.
+        # ``"float64"`` (default) keeps full precision; ``"float32"`` halves
+        # the matrix footprint and bandwidth at the cost of ~1e-4 relative
+        # error in the bulk field.  The result of the gemv is always
+        # upcast to ``float64`` before reshape so downstream callers see
+        # the same dtype regardless of this knob.
+        if fixed_field_matrix_dtype not in ("float64", "float32"):
+            raise ValueError(
+                "fixed_field_matrix_dtype must be 'float64' or 'float32'; "
+                f"got {fixed_field_matrix_dtype!r}"
+            )
+        self._fixed_field_matrix_dtype: str = str(fixed_field_matrix_dtype)
         # Per-puck basis truncation (Stage 2 of the
         # ``psc_bulk_speedups_and_mode_reduction`` plan).  ``mode_truncate``
         # is a constant attribute of the instance: it is captured once at
@@ -3691,6 +3949,18 @@ class PSCBulkArray(Optimizable):
         self._continuity_cache: Dict[tuple, np.ndarray] = {}
         self._last_base_geom_state: Optional[np.ndarray] = None
         self._partial_reuse_active: bool = False
+        # When ``True``, :meth:`B_at_points` skips the JAX free-DOF runner
+        # even if ``_has_free_center_or_quat_dofs()`` reports True, and
+        # routes through :meth:`_B_at_points_tf_only` instead.  Toggled by
+        # the :meth:`force_tf_only_forward` context manager so callers
+        # (e.g. ``stellcoilbench_dipoles.coil_optimization
+        # ._bulk_center_parameterization.ConstrainedJFWrapper`` running its
+        # reduced-DOF FD loop) can cheaply re-evaluate ``B(pts)`` after a
+        # one-puck DOF perturbation without paying the ~22 s/call wall of
+        # the free-DOF JAX forward.  Default ``False`` so the existing
+        # JAX free-DOF path remains the default for free-centre /
+        # free-quat optimisations.
+        self._force_tf_only_forward: bool = False
         # Stage C partial-L cache: the last full L_base together with the
         # K / pts / weights / signs that produced it.  When
         # ``_partial_reuse_active`` is true on a subsequent rebuild *and*
@@ -3709,6 +3979,29 @@ class PSCBulkArray(Optimizable):
             os.environ.get("SIMSOPT_PSC_FULL_REBUILD_PERIOD", "50")
         )
         self._partial_L_call_count: int = 0
+        # Fixed-puck linear map cache.  When all puck geometry DOFs are fixed,
+        # the BS-to-plasma step of :meth:`_B_at_points_tf_only` is a
+        # time-invariant linear operator ``M_field`` mapping ``beta_all``
+        # (the n_dof_all-vector of modal coefficients) to ``B`` at the
+        # current evaluation points.  The cheap half of the chain
+        # (``Bn -> beta_work -> beta_all``) stays in the existing JAX
+        # ``_beta_from_bn_jitted`` kernel, so we only need to precompute
+        # and cache the ``(3 * N_eval, n_dof_all)`` matrix here.  That is
+        # ~3x smaller than the previous full ``T`` (``Bn -> B``) and lets
+        # the per-call gemv be bandwidth-friendly.
+        self._fixed_bulk_operator_enabled: bool = False
+        self._M_field: Optional[np.ndarray] = None
+        self._M_field_key: Optional[tuple] = None
+        # Monotone counter bumped by :meth:`PassiveBulkField.set_points_cart`.
+        # The owning :class:`PassiveBulkField` reseats the C++ points
+        # buffer when callers (or the parent ``MagneticFieldSum``) push
+        # new eval points; bumping this version guarantees the
+        # ``_M_field`` cache is invalidated on the very next forward,
+        # even when the underlying buffer happens to reuse the same
+        # address.
+        self._eval_pts_version: int = 0
+        # Reduced-free moving-subset cache key (Phase-5 audit L4 hook); cleared on rebuild.
+        self._reduced_movingsub_pts_uid: Optional[int] = None
         # Detect whether the TF coil set is a faithful image of its first
         # ``n_base`` entries under the ``(nfp, stellsym)`` group used to
         # replicate pucks.  When ``True``, ``_rebuild`` routes through the
@@ -4176,6 +4469,132 @@ class PSCBulkArray(Optimizable):
         self._timing_rows = None
         self._timing_rebuild_counter = 0
 
+    def _clear_reduced_free_b_aux_cache(self) -> None:
+        """Clear reduced-free forward aux state on any non-TF-only rebuild."""
+        self._reduced_movingsub_pts_uid = None
+
+    def compatible_fc_warm_handoff(self, prev: Optional["PSCBulkArray"]) -> bool:
+        """Return ``True`` if ``prev`` is safe to steal factorisation caches from (L11)."""
+        if prev is None:
+            return False
+        if (
+            int(getattr(prev, "_n_base_pucks", -1))
+            != int(getattr(self, "_n_base_pucks", -2))
+            or int(getattr(prev, "_symmetry_G", -1))
+            != int(getattr(self, "_symmetry_G", -2))
+        ):
+            return False
+        if float(prev.regularization_delta) != float(self.regularization_delta):
+            return False
+        if float(getattr(prev, "_eigenfloor_threshold", 0.0)) != float(
+            getattr(self, "_eigenfloor_threshold", 0.0)
+        ):
+            return False
+        ext_prev = getattr(prev, "_get_base_puck_geometry", None)
+        ext_cur = getattr(self, "_get_base_puck_geometry", None)
+        if not callable(ext_prev) or not callable(ext_cur):
+            return False
+        c_pr, q_pr, r_pr, t_pr = ext_prev()
+        c_cu, q_cu, r_cu, t_cu = ext_cur()
+        if not np.allclose(np.asarray(c_pr), np.asarray(c_cu), rtol=0.0, atol=1e-11):
+            return False
+        if not np.allclose(np.asarray(q_pr), np.asarray(q_cu), rtol=0.0, atol=1e-11):
+            return False
+        if not np.allclose(np.asarray(r_pr), np.asarray(r_cu), rtol=0.0, atol=1e-11):
+            return False
+        if not np.allclose(np.asarray(t_pr), np.asarray(t_cu), rtol=0.0, atol=1e-11):
+            return False
+        if getattr(prev, "_L_red", None) is None or getattr(prev, "_jax_Lr_chol", None) is None:
+            return False
+        return True
+
+    def warm_handoff_from(self, prev: "PSCBulkArray") -> None:
+        """Copy PSC factorisation / inductance workspaces from compatible ``prev`` (L11)."""
+        jax_attrs = (
+            "_jax_Lr_chol",
+            "_jax_Lr_eigf_chol",
+            "_jax_Q",
+            "_jax_L_red_eig_U",
+            "_jax_L_red_eig_lam",
+        )
+        host_np_attrs = (
+            "_L_red",
+            "_L_work",
+            "_Q",
+            "_Lr_chol_host",
+            "_Lr_eigf_chol_host",
+            "_L_red_eig_U_np",
+            "_L_red_eig_lam_np",
+            "_L_red_eig_anchor_np",
+        )
+        misc_attrs = (
+            "_L_base_prev",
+            "_geom_versions",
+            "_geom_hash",
+            "_puck_dofs_hash_at_rebuild",
+            "_partial_L_cache",
+        )
+        for attr in jax_attrs + host_np_attrs + misc_attrs:
+            if hasattr(prev, attr):
+                setattr(self, attr, getattr(prev, attr))
+
+    def try_warm_handoff_from_prev(self, prev: Optional["PSCBulkArray"]) -> bool:
+        """Best-effort JAX / host-factor reuse across FC orders when geometries match."""
+        if prev is None or not _fc_bulk_warm_handoff_env():
+            return False
+        if not self.compatible_fc_warm_handoff(prev):
+            return False
+        Lp = getattr(prev, "_L_red", None)
+        Lc = getattr(self, "_L_red", None)
+        if Lp is None or Lc is None or np.asarray(Lp).shape != np.asarray(Lc).shape:
+            return False
+        n0 = float(np.linalg.norm(np.asarray(Lp), ord="fro")) + 1e-300
+        rel = float(np.linalg.norm(np.asarray(Lc) - np.asarray(Lp), ord="fro") / n0)
+        if rel > 1e-11:
+            return False
+        self.warm_handoff_from(prev)
+        return True
+
+    def _apply_exact_disc_faces_overlay_reduced(
+        self,
+        L_base: np.ndarray,
+        base_reps: Sequence[int],
+        nd_per: int,
+    ) -> None:
+        """Overlay semi-analytic disc self-blocks on symmetry-reduced ``L_base``.
+
+        Mirrors the ``exact_disc_faces`` branch of :func:`shell_inductance_matrix_blockwise`
+        restricted to intra-puck diagonals in the folded base ordering.
+        """
+        from simsopt.field.disc_self_inductance import assemble_puck_self_L
+
+        n_radial = int(getattr(self, "n_radial_disc", 32))
+        all_list = getattr(self, "_all_pucks", []) or []
+        basis_list = getattr(self, "_basis_per_puck", []) or []
+        n_base_loc = min(int(self._n_base_pucks), len(base_reps))
+        for a_idx in range(n_base_loc):
+            i_rep = int(base_reps[a_idx])
+            if (
+                i_rep >= len(all_list)
+                or i_rep >= len(basis_list)
+                or i_rep < 0
+            ):
+                continue
+            _, _, R_val, t_val = all_list[i_rep]
+            basis_i = basis_list[i_rep]
+            puck_block = assemble_puck_self_L(
+                basis_i,
+                float(R_val),
+                float(t_val),
+                n_radial=n_radial,
+            )
+            d0 = int(a_idx) * int(nd_per)
+            nd_pb = int(puck_block.shape[0])
+            mask = ~np.isnan(puck_block)
+            sub = L_base[d0 : d0 + nd_pb, d0 : d0 + nd_pb].copy()
+            sub[mask] = puck_block[mask]
+            L_base[d0 : d0 + nd_pb, d0 : d0 + nd_pb] = 0.5 * (sub + sub.T)
+
     def _refresh_L_red_eig_host_cache(self, Lr: np.ndarray) -> None:
         """Recompute host NumPy eigensystem of :math:`L_\\text{red}` for eigK cache (W4)."""
         Lr = np.asarray(Lr, dtype=np.float64)
@@ -4220,6 +4639,35 @@ class PSCBulkArray(Optimizable):
         dot = np.einsum("iax,jbx->ijab", K_i, K_j)
         kernel = dot / dist[..., None, None]
         return MU0_OVER_4PI * np.einsum("ijab,i,j->ab", kernel, w_i, w_j)
+
+    @staticmethod
+    @partial(jax.jit, static_argnames=("delta_reg", "adaptive_self_reg"))
+    def _partial_update_mutual_blocks_vmap_row(
+        K_i: jnp.ndarray,
+        pts_i: jnp.ndarray,
+        w_i: jnp.ndarray,
+        K_stack: jnp.ndarray,
+        pts_stack: jnp.ndarray,
+        w_stack: jnp.ndarray,
+        delta_reg: float,
+        adaptive_self_reg: bool,
+    ) -> jnp.ndarray:
+        """Mutual-block row ``(n_all, nd, nd)`` for fixed left puck (audit L7)."""
+
+        def one_block(K_j: jnp.ndarray, pts_j: jnp.ndarray, w_j: jnp.ndarray) -> jnp.ndarray:
+            r = pts_i[:, None, :] - pts_j[None, :, :]
+            if adaptive_self_reg:
+                delta_i = _SELF_REG_COEFF * jnp.sqrt(w_i)
+                delta_j = _SELF_REG_COEFF * jnp.sqrt(w_j)
+                delta_pair = 0.5 * (delta_i[:, None] + delta_j[None, :])
+                dist = jnp.sqrt(jnp.sum(r * r, axis=-1) + delta_pair * delta_pair)
+            else:
+                dist = jnp.sqrt(jnp.sum(r * r, axis=-1) + float(delta_reg) ** 2)
+            dot = jnp.einsum("iax,jbx->ijab", K_i, K_j)
+            kernel = dot / dist[..., None, None]
+            return MU0_OVER_4PI * jnp.einsum("ijab,i,j->ab", kernel, w_i, w_j)
+
+        return jax.vmap(one_block)(K_stack, pts_stack, w_stack)
 
     def _maybe_partial_update_L_base_reduced(
         self,
@@ -4283,15 +4731,63 @@ class PSCBulkArray(Optimizable):
 
         delta_reg = float(self.regularization_delta)
         adaptive = bool(self.adaptive_self_reg)
+        use_partial_jax = _psc_partial_l_jax_env()
+        k_stack_np: Optional[np.ndarray] = None
+        pts_stack_np: Optional[np.ndarray] = None
+        w_stack_np: Optional[np.ndarray] = None
+        if use_partial_jax:
+            k_stack_np = np.stack(
+                [np.asarray(K_per_puck[j], dtype=np.float64) for j in range(n_all)],
+                axis=0,
+            )
+            pts_stack_np = np.stack(
+                [np.asarray(pts_per_puck[j], dtype=np.float64) for j in range(n_all)],
+                axis=0,
+            )
+            w_stack_np = np.stack(
+                [np.asarray(weights_per_puck[j], dtype=np.float64) for j in range(n_all)],
+                axis=0,
+            )
+
+        sigma_np = np.asarray(signs, dtype=np.int64)
+        j_chunk = max(128, min(4096, n_all)) if n_all > 500 else n_all
         for i_base in changed_idx:
             i_rep = int(base_reps[int(i_base)])
             K_i = K_per_puck[i_rep]
             pts_i = pts_per_puck[i_rep]
             w_i = weights_per_puck[i_rep]
             ri = int(i_base) * nd_per
+
+            if use_partial_jax and k_stack_np is not None:
+                assert pts_stack_np is not None and w_stack_np is not None
+                for j_lo in range(0, n_all, j_chunk):
+                    j_hi = min(n_all, j_lo + j_chunk)
+                    K_sub = jnp.asarray(k_stack_np[j_lo:j_hi])
+                    pts_sub = jnp.asarray(pts_stack_np[j_lo:j_hi])
+                    w_sub = jnp.asarray(w_stack_np[j_lo:j_hi])
+                    blocks_j = PSCBulkArray._partial_update_mutual_blocks_vmap_row(
+                        jnp.asarray(K_i),
+                        jnp.asarray(pts_i),
+                        jnp.asarray(w_i),
+                        K_sub,
+                        pts_sub,
+                        w_sub,
+                        delta_reg,
+                        adaptive,
+                    )
+                    weighted = np.asarray(
+                        blocks_j * (float(G) * sigma_np[j_lo:j_hi, None, None]),
+                        dtype=np.float64,
+                    )
+                    for j_loc, j_rep in enumerate(range(j_lo, j_hi)):
+                        j_base = int(base_indices[j_rep])
+                        rj = j_base * nd_per
+                        L_base[ri : ri + nd_per, rj : rj + nd_per] += weighted[j_loc]
+                continue
+
             for j_rep in range(n_all):
                 j_base = int(base_indices[j_rep])
-                sigma_j = int(signs[j_rep])
+                sigma_j = int(sigma_np[j_rep])
                 K_j = K_per_puck[j_rep]
                 pts_j = pts_per_puck[j_rep]
                 w_j = weights_per_puck[j_rep]
@@ -4346,6 +4842,207 @@ class PSCBulkArray(Optimizable):
         }
         self._partial_L_call_count = 0
 
+    def _rebuild_dipole(
+        self,
+        changed_mask: Optional[np.ndarray] = None,
+    ) -> None:
+        """Dipole-mode rebuild (``solver_mode == 'dipole'``).
+
+        Replaces the sheet-basis pipeline entirely with a tiny
+        ``(3 n_base, 3 n_base)`` dense Cholesky solve.  See
+        :mod:`simsopt.field._psc_bulk_dipole` for the underlying
+        primitives and the lean dipole bulk solver plan for the
+        mathematical derivation.
+
+        Args:
+            changed_mask: Reserved; matches the signature of
+                :meth:`_rebuild`.  In dipole mode the per-puck delta is
+                not exploited (the full assembly costs microseconds at
+                production scale) so the mask is unused.
+        """
+        _t_total: Optional[float] = None
+        if _psc_bulk_timing_enabled():
+            _t_total = time.perf_counter()
+        centers, quats, radii, thicknesses = self._get_base_puck_geometry()
+        n_base = int(self._n_base_pucks)
+        # Phase-D + lean dipole speedup: TF-only short-circuit.  When the
+        # caller (typically :meth:`recompute_currents`) reports that no
+        # puck DoFs changed since the last rebuild, the only thing that
+        # can have moved is a TF current / coil geometry.  ``L_red`` and
+        # its Cholesky are puck-geometry-only, so we can reuse them and
+        # only re-solve ``m_red`` against a fresh ``f_red``.  This
+        # collapses the per-iter cost in free-DoF optimisations
+        # (free-centres / free-rot / free-radius) to a ``(3 n_base)``
+        # triangular solve.
+        if (
+            changed_mask is not None
+            and self._dipole_L_red is not None
+            and self._dipole_L_red_chol is not None
+            and self._dipole_self_L_local_cached is not None
+        ):
+            try:
+                cm_arr = np.asarray(changed_mask, dtype=bool)
+                if cm_arr.size > 0 and not bool(cm_arr.any()):
+                    g_tf_sc, gd_tf_sc, I_tf_sc = self._tf_arrays()
+                    f_red_sc = np.asarray(
+                        _psc_bulk_dipole_mod.assemble_f_dipole_reduced_jax(
+                            jnp.asarray(centers),
+                            jnp.asarray(quats),
+                            jnp.asarray(g_tf_sc),
+                            jnp.asarray(gd_tf_sc),
+                            jnp.asarray(I_tf_sc),
+                            int(self.nfp),
+                            bool(self.stellsym),
+                        ),
+                        dtype=np.float64,
+                    )
+                    c_factor_sc, low_sc = self._dipole_L_red_chol
+                    m_red_sc = sp_linalg.cho_solve(
+                        (c_factor_sc, low_sc),
+                        -f_red_sc,
+                        check_finite=False,
+                    )
+                    self._dipole_m_red = np.asarray(m_red_sc, dtype=np.float64)
+                    self._geom_hash = hash(tuple(self.local_full_x))
+                    self._puck_dofs_hash_at_rebuild = (
+                        self._hash_puck_local_dofs()
+                    )
+                    if _t_total is not None and self._timing_rows is not None:
+                        self._timing_rows.append(
+                            {
+                                "phase": "rebuild_dipole_short_circuit",
+                                "elapsed_s": float(
+                                    time.perf_counter() - _t_total
+                                ),
+                            }
+                        )
+                    return
+            except (TypeError, ValueError):
+                # Fall through to the full rebuild path below if the
+                # ``changed_mask`` cannot be interpreted as a bool array.
+                pass
+        keys = tuple(
+            (float(radii[i]), float(thicknesses[i])) for i in range(n_base)
+        )
+        need_recompute_self = self._dipole_self_L_local_cached is None
+        if not self._dipole_freeze_self_L:
+            need_recompute_self = (
+                need_recompute_self
+                or self._dipole_self_L_keys != keys
+            )
+        if need_recompute_self:
+            self_L_list = []
+            for i in range(n_base):
+                self_L_list.append(
+                    _psc_bulk_dipole_mod.compute_self_inductance_tensor(
+                        float(radii[i]),
+                        float(thicknesses[i]),
+                    )
+                )
+            self._dipole_self_L_local_cached = np.stack(self_L_list, axis=0)
+            self._dipole_self_L_keys = keys
+        assert self._dipole_self_L_local_cached is not None  # for type-checkers
+        # Assemble the reduced (3 n_base, 3 n_base) inductance matrix.
+        L_red = _psc_bulk_dipole_mod.assemble_L_dipole_reduced(
+            centers,
+            quats,
+            self._dipole_self_L_local_cached,
+            int(self.nfp),
+            bool(self.stellsym),
+        )
+        self._dipole_L_red = L_red
+        # Cholesky factor with a tiny relative jitter for stability.  L
+        # is SPD up to float noise but stellsym replication can
+        # introduce near-zero modes at coincident centres; the floor is
+        # at the level of the existing ``_eigenfloor_threshold`` of
+        # ``PSCBulkArray``.
+        jitter = float(self._eigenfloor_threshold) * (
+            float(np.trace(L_red)) / max(1, int(L_red.shape[0]))
+        )
+        L_reg = L_red + jitter * np.eye(L_red.shape[0])
+        try:
+            c, lower = sp_linalg.cho_factor(L_reg, lower=True, check_finite=False)
+            self._dipole_L_red_chol = (np.asarray(c), bool(lower))
+        except sp_linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "Dipole-mode reduced inductance matrix is not "
+                "positive-definite (after eigenfloor jitter)."
+            ) from exc
+        # Solve for moments using current TF arrays.
+        g_tf, gd_tf, I_tf = self._tf_arrays()
+        f_red = np.asarray(
+            _psc_bulk_dipole_mod.assemble_f_dipole_reduced_jax(
+                jnp.asarray(centers),
+                jnp.asarray(quats),
+                jnp.asarray(g_tf),
+                jnp.asarray(gd_tf),
+                jnp.asarray(I_tf),
+                int(self.nfp),
+                bool(self.stellsym),
+            ),
+            dtype=np.float64,
+        )
+        c_factor, low = self._dipole_L_red_chol
+        m_red = sp_linalg.cho_solve(
+            (c_factor, low), -f_red, check_finite=False
+        )
+        self._dipole_m_red = np.asarray(m_red, dtype=np.float64)
+        # Update geometry-state caches so ``recompute_currents`` can
+        # detect "no DoFs moved" and short-circuit.
+        self._geom_hash = hash(tuple(self.local_full_x))
+        self._puck_dofs_hash_at_rebuild = self._hash_puck_local_dofs()
+        if _t_total is not None:
+            elapsed = time.perf_counter() - _t_total
+            if self._timing_rows is not None:
+                self._timing_rows.append(
+                    {"phase": "rebuild_dipole_total", "elapsed_s": float(elapsed)}
+                )
+        # Close-packing warning on the very first rebuild.
+        if not getattr(self, "_dipole_close_pack_warned", False):
+            self._dipole_close_pack_warned = True
+            threshold = _psc_dipole_warn_r_close_env()
+            if threshold > 0.0:
+                centers_all, _, _, base_idx_all = (
+                    _psc_bulk_dipole_mod._replicate_pucks_dipole(
+                        jnp.asarray(centers),
+                        jnp.asarray(quats),
+                        int(self.nfp),
+                        bool(self.stellsym),
+                    )
+                )
+                c_all_np = np.asarray(centers_all)
+                base_idx_np = np.asarray(base_idx_all)
+                worst_ratio = np.inf
+                G_size = int(self.nfp) * (2 if self.stellsym else 1)
+                for ii in range(n_base):
+                    R_i = float(radii[ii])
+                    # ``ii * G_size`` is the identity-replica of base
+                    # puck ``ii`` (loop order in
+                    # ``_replicate_pucks_dipole``).
+                    ii_self_rep = ii * G_size
+                    for jj in range(int(c_all_np.shape[0])):
+                        if jj == ii_self_rep:
+                            continue
+                        j_base = int(base_idx_np[jj])
+                        R_j = float(radii[j_base])
+                        sep = float(np.linalg.norm(c_all_np[jj] - centers[ii]))
+                        denom = R_i + R_j
+                        if denom > 0.0:
+                            worst_ratio = min(worst_ratio, sep / denom)
+                if np.isfinite(worst_ratio) and worst_ratio < threshold:
+                    import warnings
+
+                    warnings.warn(
+                        "PSCBulkArray(solver_mode='dipole'): "
+                        f"closest puck pair has separation/(R_i + R_j) "
+                        f"= {worst_ratio:.3f} < threshold "
+                        f"{threshold:.2f}; dipole truncation error may "
+                        f"be larger than acceptable.  Set "
+                        "SIMSOPT_PSC_DIPOLE_WARN_R_CLOSE=0 to silence.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
     def _rebuild(
         self,
         changed_mask: Optional[np.ndarray] = None,
@@ -4385,6 +5082,12 @@ class PSCBulkArray(Optimizable):
         and free-DOF pullback caches may be reused while the reduced solve
         and beta assembly are refreshed from current geometry/TF state.
         """
+        if self.solver_mode == "dipole":
+            # Dispatch to the dipole-mode rebuild and return early; this
+            # path bypasses the entire sheet basis / K-stack / continuity
+            # pipeline (Phase A of the lean dipole bulk solver plan).
+            self._rebuild_dipole(changed_mask=changed_mask)
+            return
         self._partial_reuse_active = False
         changed_pucks_mask: Optional[np.ndarray] = None
         if (
@@ -4410,9 +5113,11 @@ class PSCBulkArray(Optimizable):
                     # No DoFs changed: reuse L_base / Q / Cholesky from
                     # the previous rebuild and just resolve beta from the
                     # (possibly updated) TF DoFs.
+                    _t_sc = self._mark_phase_start()
                     self.beta = self._solve_beta(self._tf_arrays())
                     self._geom_hash = hash(tuple(self.local_full_x))
                     self._puck_dofs_hash_at_rebuild = self._hash_puck_local_dofs()
+                    self._mark_phase_end("rebuild_short_circuit", _t_sc)
                     return
                 if (
                     _psc_partial_l_reuse_env()
@@ -4433,6 +5138,8 @@ class PSCBulkArray(Optimizable):
                             self._partial_reuse_active = True
             except (ValueError, TypeError):
                 pass
+
+        self._clear_reduced_free_b_aux_cache()
         _t_rebuild_total0: Optional[float] = None
         if _psc_bulk_timing_enabled():
             # Snapshot any rows accumulated since the previous rebuild
@@ -4637,11 +5344,14 @@ class PSCBulkArray(Optimizable):
         # through the fold/gather/JIT paths and
         # :func:`shell_inductance_matrix_symmetric_reduced`, so the
         # reduced path is safe to enable under ``stellsym=True`` as well.
+        disc_sym_reduced_ok = (
+            not exact_disc_faces or _psc_disc_face_sym_reduced_env()
+        )
         reduced_active = bool(
             self._tf_is_symmetric
             and G > 1
             and n_all == self._n_base_pucks * G
-            and not exact_disc_faces  # see note below
+            and disc_sym_reduced_ok
             and self.solver_mode
             == "energy"  # shell_l2 assembles H densely across pucks
         )
@@ -4649,16 +5359,15 @@ class PSCBulkArray(Optimizable):
         self._reduced_free_dof_active = bool(
             reduced_active
             and self.solver_mode == "energy"
-            and not exact_disc_faces
+            and disc_sym_reduced_ok
             and self.use_symmetry_reduced_free_dof
             and not _psc_disable_reduced_free()
         )
-        # Note: ``exact_disc_faces`` swaps intra-puck self-blocks with a
-        # semi-analytic assembly that currently operates puck-by-puck on
-        # the full replica list; the reduced path is disabled in that case
-        # to keep self-block consistency trivial.  This is a narrow and
-        # easy-to-lift restriction if/when the semi-analytic path grows a
-        # symmetry-aware entry point.
+        # When ``exact_disc_faces`` is enabled, the default path uses the dense
+        # block assembler.  Setting ``SIMSOPT_PSC_DISC_FACE_SYM=1`` keeps the
+        # symmetry-reduced ``L_base`` assembly and overlays each base puck's
+        # self-block with :func:`~simsopt.field.disc_self_inductance.assemble_puck_self_L`
+        # (audit L6, May 2026).
         self._reduced_active = reduced_active
 
         # Always build the full-size rim-continuity projector: it is used
@@ -4806,6 +5515,16 @@ class PSCBulkArray(Optimizable):
                     replica_signs=self._replica_signs,
                     pair_class_timer=_p_timer,
                 )
+                if (
+                    exact_disc_faces
+                    and _psc_disc_face_sym_reduced_env()
+                    and not partial_L_used
+                ):
+                    self._apply_exact_disc_faces_overlay_reduced(
+                        L_base,
+                        base_reps,
+                        int(K_per_puck_global[base_reps[0]].shape[1]),
+                    )
             self._L_work = L_base
             nd_per_puck = K_per_puck_global[base_reps[0]].shape[1]
             Q_c_work = self._build_rim_continuity_projector(
@@ -4942,6 +5661,7 @@ class PSCBulkArray(Optimizable):
                 cache_hit_payload["Lr_eigf_chol"], dtype=np.float64
             )
             self._jax_Lr_eigf_chol = jnp.asarray(Lr_eigf_chol)
+            self._Lr_eigf_chol_host = np.asarray(Lr_eigf_chol, dtype=np.float64)
             self._refresh_L_red_eig_host_cache(Lr)
         else:
             # Gauge projection on top of the continuity-restricted subspace:
@@ -5002,14 +5722,23 @@ class PSCBulkArray(Optimizable):
             self._Q = Q_c_work @ Q_L
             Lr = self._Q.T @ self._L_work @ self._Q
             self._L_red = Lr
-            self._jax_Lr_chol = shell_cholesky_pure(jnp.asarray(Lr), jitter=1e-10)
+            Lr_arr = np.asarray(Lr, dtype=np.float64)
+            Lr_sym = 0.5 * (Lr_arr + Lr_arr.T)
+            w_host, V_host = np.linalg.eigh(Lr_sym)
+            max_w = float(np.max(np.abs(w_host)))
+            th_eig = float(self._eigenfloor_threshold) * max(max_w, 1e-30)
+            self._L_red_eig_lam_np = np.maximum(w_host, th_eig)
+            self._L_red_eig_U_np = V_host
+            self._L_red_eig_anchor_np = Lr_sym.copy()
+            self._jax_Lr_chol = shell_cholesky_pure(jnp.asarray(Lr_arr), jitter=1e-10)
             self._Lr_chol_host = np.asarray(self._jax_Lr_chol)
-            self._jax_Lr_eigf_chol = shell_eigenfloor_cholesky_pure(
-                jnp.asarray(Lr),
+            self._jax_Lr_eigf_chol = shell_eigenfloor_cholesky_from_eig(
+                jnp.asarray(w_host),
+                jnp.asarray(V_host),
                 threshold=float(self._eigenfloor_threshold),
                 jitter=1e-10,
             )
-            self._refresh_L_red_eig_host_cache(Lr)
+            self._Lr_eigf_chol_host = np.asarray(self._jax_Lr_eigf_chol)
             if lcache_enabled and cache_key is not None:
                 try:
                     _psc_lcache_store(
@@ -5075,6 +5804,22 @@ class PSCBulkArray(Optimizable):
         _t_vjp = self._mark_phase_start()
         self._setup_jax()
         self._mark_phase_end("rebuild_vjp_setup", _t_vjp)
+
+        self._fixed_bulk_operator_enabled = bool(
+            self.solver_mode == "energy"
+            and not self._has_free_puck_dofs()
+            and self._K_stack is not None
+            and self._phi_work_stack is not None
+            and self._w_work_stack is not None
+        )
+        # Defer ``_M_field`` invalidation to the cache-key check.  Bumping
+        # a version counter here would unconditionally invalidate even on
+        # TF-only rebuilds (which fire whenever ``release_host_L_work_after_rebuild``
+        # forces the short-circuit in :meth:`_rebuild` to fail).  The cache
+        # key includes :meth:`_hash_puck_local_dofs`, which changes only
+        # when puck DOFs actually move, so a TF-only rebuild leaves the
+        # key intact and the next ``_B_at_points_tf_only`` reuses the
+        # existing matrix at zero cost.
 
         # Optional: drop the host copy of ``L_work`` after factorization
         # when the downstream JAX / NumPy stack does not need a dense
@@ -5206,6 +5951,181 @@ class PSCBulkArray(Optimizable):
         gathered = beta_stack[self._base_indices_arr] * signs[:, None]
         return gathered.reshape(-1)
 
+    def _invalidate_fixed_field_matrix(self) -> None:
+        """Drop the cached ``_M_field`` matrix and its key.
+
+        Called from the full-path :meth:`_rebuild` tail (puck DOFs or
+        geometry changed; the ``M_field`` rows must be rebuilt).  Use
+        :meth:`_bump_eval_pts_version` from the points-changed hook
+        instead -- it both invalidates and increments the eval-pts
+        version, so subsequent cache-key builds reflect the new points.
+        No-op when nothing is cached so it is safe to call eagerly.
+        """
+        self._M_field = None
+        self._M_field_key = None
+
+    def _bump_eval_pts_version(self) -> None:
+        """Invalidate ``_M_field`` and bump :attr:`_eval_pts_version`.
+
+        Hooked from :meth:`PassiveBulkField.set_points_cart` so that any
+        reseating of the C++ eval-points buffer -- in-place, or via a
+        fresh ndarray allocation -- forces a rebuild on the very next
+        :meth:`B_at_points` call.  Cheap enough (``O(1)``) to call
+        unconditionally.
+        """
+        self._eval_pts_version += 1
+        self._invalidate_fixed_field_matrix()
+
+    def _fixed_field_matrix_key(
+        self,
+        pts: np.ndarray,
+        *,
+        use_eigf: bool,
+    ) -> tuple:
+        """Return a fast cache key for ``_M_field``.
+
+        The key combines:
+
+        - the eval-points buffer address (``pts.ctypes.data``) -- stable
+          across calls that reuse the same underlying C++ point buffer
+          (the common case inside ``MagneticFieldSum.B()``), so we never
+          rebuild on a buffer-stable repeat call;
+        - ``_eval_pts_version`` -- explicitly bumped by
+          :meth:`PassiveBulkField.set_points_cart`, so any rewrite of
+          the eval-points buffer (in-place or otherwise) invalidates;
+        - ``_hash_puck_local_dofs()`` -- a ``hash(bytes)`` of only the
+          puck local DOFs (``9 * n_base_pucks`` floats, ~tens of bytes
+          in practice).  This is stable across TF-only rebuilds (which
+          may fire every iteration when ``release_host_L_work_after_rebuild``
+          is set), so a fixed-puck optimization sees a stable key for the
+          entire run.  Note: this *is* a tobytes hash, but the slice is
+          tiny -- microseconds, not the milliseconds the previous
+          ``pts.tobytes()`` hash incurred over the full eval-points
+          buffer.
+        - ``use_eigf`` and the storage dtype, for completeness.
+        """
+        pts_arr = np.asarray(pts)
+        try:
+            buf_addr = int(pts_arr.ctypes.data)
+        except (AttributeError, TypeError):
+            buf_addr = id(pts_arr)
+        return (
+            buf_addr,
+            tuple(pts_arr.shape),
+            int(self._eval_pts_version),
+            bool(use_eigf),
+            self._hash_puck_local_dofs(),
+            str(self._fixed_field_matrix_dtype),
+        )
+
+    def _build_fixed_field_matrix(
+        self,
+        pts: np.ndarray,
+        *,
+        use_eigf: bool,
+    ) -> np.ndarray:
+        """Materialize the fixed-geometry map ``beta_all -> B`` at ``pts``.
+
+        With every puck DOF fixed, only the BS-to-plasma half of
+        :meth:`_B_at_points_tf_only` is geometry-invariant.  This routine
+        precomputes that half as a dense matrix ``M_field`` of shape
+        ``(3 * n_eval, n_dof_all)`` so the hot path collapses to:
+
+        - JAX ``_beta_from_bn_jitted`` (~10 ms on CPU)
+        - cheap NumPy gather (``beta_work -> beta_all``)
+        - one BLAS gemv ``out = M_field @ beta_all``
+
+        The result has row order compatible with ``reshape(-1, 3)``.
+        ``use_eigf`` is accepted only to keep the call signature
+        symmetric with the upstream solve toggle; it does not affect
+        ``M_field`` itself (the eigenfloor lives in the Cholesky factor
+        consumed by ``_beta_from_bn_jitted``, not here).
+        """
+        if self._K_stack is None:
+            raise RuntimeError(
+                "Fixed field matrix requires uniform per-puck K_stack geometry."
+            )
+
+        pts_eval = np.ascontiguousarray(np.asarray(pts, dtype=np.float64).reshape(-1, 3))
+        K_stack = np.asarray(self._K_stack, dtype=np.float64)
+        quad_points = np.asarray(self._quad_points, dtype=np.float64)
+        quad_weights = np.asarray(self._quad_weights, dtype=np.float64)
+        n_all, nq_per, nd_per, _ = K_stack.shape
+        n_dof_all = int(n_all * nd_per)
+
+        store_dtype = (
+            np.float32 if self._fixed_field_matrix_dtype == "float32" else np.float64
+        )
+        n_eval = int(pts_eval.shape[0])
+        out = np.empty((n_eval * 3, n_dof_all), dtype=store_dtype)
+        eval_chunk = max(1, min(128, n_eval or 1))
+        eps = float(_EPS_BS)
+        for i0 in range(0, n_eval, eval_chunk):
+            i1 = min(i0 + eval_chunk, n_eval)
+            m_chunk = np.zeros(
+                ((i1 - i0) * 3, n_dof_all),
+                dtype=np.float64,
+            )
+            pts_chunk = pts_eval[i0:i1]
+            for pidx in range(n_all):
+                q0 = pidx * nq_per
+                d0 = pidx * nd_per
+                q1 = q0 + nq_per
+                r = pts_chunk[:, None, :] - quad_points[q0:q1][None, :, :]
+                rn = np.sqrt(np.sum(r * r, axis=-1) + eps * eps)
+                scaled_r = r * (quad_weights[q0:q1][None, :] / (rn**3))[:, :, None]
+                Kp = K_stack[pidx]
+                bx = (
+                    np.einsum("qa,iq->ia", Kp[:, :, 1], scaled_r[:, :, 2])
+                    - np.einsum("qa,iq->ia", Kp[:, :, 2], scaled_r[:, :, 1])
+                )
+                by = (
+                    np.einsum("qa,iq->ia", Kp[:, :, 2], scaled_r[:, :, 0])
+                    - np.einsum("qa,iq->ia", Kp[:, :, 0], scaled_r[:, :, 2])
+                )
+                bz = (
+                    np.einsum("qa,iq->ia", Kp[:, :, 0], scaled_r[:, :, 1])
+                    - np.einsum("qa,iq->ia", Kp[:, :, 1], scaled_r[:, :, 0])
+                )
+                m_chunk[0::3, d0 : d0 + nd_per] = MU0_OVER_4PI * bx
+                m_chunk[1::3, d0 : d0 + nd_per] = MU0_OVER_4PI * by
+                m_chunk[2::3, d0 : d0 + nd_per] = MU0_OVER_4PI * bz
+            if store_dtype is np.float64:
+                out[3 * i0 : 3 * i1, :] = m_chunk
+            else:
+                out[3 * i0 : 3 * i1, :] = m_chunk.astype(store_dtype, copy=False)
+        return out
+
+    def _fixed_field_matrix_for(
+        self,
+        pts: np.ndarray,
+        *,
+        use_eigf: bool,
+    ) -> Optional[np.ndarray]:
+        """Return a cached fixed-puck ``M_field``, or ``None`` when inapplicable.
+
+        Caches the materialized matrix on ``self._M_field`` keyed on a
+        cheap version-based tuple (see
+        :meth:`_fixed_field_matrix_key`).  Rebuilds are timed under the
+        ``B_at_points_fixed_build`` phase so a regression in build cost
+        is visible in :meth:`get_timing_history`.
+        """
+        if (
+            not self._fixed_bulk_operator_enabled
+            or self._has_free_puck_dofs()
+            or self.solver_mode != "energy"
+        ):
+            return None
+        key = self._fixed_field_matrix_key(pts, use_eigf=use_eigf)
+        if self._M_field is not None and self._M_field_key == key:
+            return self._M_field
+        _t_build = self._mark_phase_start()
+        op = self._build_fixed_field_matrix(pts, use_eigf=use_eigf)
+        self._M_field = op
+        self._M_field_key = key
+        self._mark_phase_end("B_at_points_fixed_build", _t_build)
+        return op
+
     def _setup_jax(self) -> None:
         """Store JAX views of NumPy geometry; JIT callables are module-level.
 
@@ -5334,42 +6254,6 @@ class PSCBulkArray(Optimizable):
             d1 = d0 + nd_per
             M[r0:r1, d0:d1] = self._phi_stack[pidx]
         return M
-
-    @property
-    def _L_full(self) -> np.ndarray:
-        """Deprecated alias for :attr:`_L_work`.
-
-        Historical name from before the symmetry reduction refactor.  The
-        returned matrix is the "work" inductance: on the full-replica path
-        (``_reduced_active == False``) this is the full
-        ``(n_all * nd_per, n_all * nd_per)`` matrix; on the symmetry-reduced
-        path it is the base-puck orbit-folded matrix of shape
-        ``(n_base * nd_per, n_base * nd_per)``.  Use :attr:`_L_work`
-        directly and disambiguate with :attr:`_reduced_active`.
-
-        Emits a one-shot :class:`DeprecationWarning` per process on first
-        access (``_L_full_deprecation_warned`` class attribute) so that
-        repeated access inside tight loops does not flood the log.
-        """
-        if not PSCBulkArray._L_full_deprecation_warned:
-            import warnings
-
-            warnings.warn(
-                "PSCBulkArray._L_full is a historical alias for _L_work; "
-                "prefer _L_work (and use _reduced_active to disambiguate "
-                "full vs symmetry-folded shape).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            PSCBulkArray._L_full_deprecation_warned = True
-        if self._L_work is None:
-            raise AttributeError(
-                "PSCBulkArray._L_full / _L_work was freed after rebuild because "
-                "no puck geometry DOF is free and solver_mode=='energy'.  Use "
-                "_L_red for the reduced matrix, or unfix a puck DOF and "
-                "rebuild to re-materialize the work inductance."
-            )
-        return self._L_work
 
     # ------------------------------------------------------------------
     # JAX full path (local basis stacks for geometry VJP)
@@ -5580,11 +6464,29 @@ class PSCBulkArray(Optimizable):
         changed_pucks: Optional[np.ndarray] = None
         if self._last_base_geom_state is not None:
             changed_pucks = np.any(base_geom_now != self._last_base_geom_state, axis=1)
+        if self.solver_mode == "dipole":
+            # Dipole mode: ``_rebuild_dipole`` itself dispatches between
+            # the full reduced-L assembly (puck DoFs moved) and the
+            # TF-only short-circuit (only TF currents / coil geometry
+            # moved) using the supplied ``changed_mask``.  This mirrors
+            # the energy-mode ``rebuild_short_circuit`` and is the
+            # fast-path for free-DoF optimisations where most outer
+            # iterations only touch the TF currents.
+            self._rebuild_dipole(changed_mask=changed_pucks)
+            self._geom_versions = current_versions
+            self._last_base_geom_state = base_geom_now
+            self._free_vjp_cache = None
+            self._field.clear_cached_properties()
+            self._mark_phase_end(
+                "recompute_currents_total_dipole", _t_total
+            )
+            return
         if current_versions != self._geom_versions:
-            if _psc_partial_l_reuse_env() and changed_pucks is not None:
-                self._rebuild(changed_mask=changed_pucks)
-            else:
-                self._rebuild()
+            # Always forward ``changed_mask`` when available so the Stage-2
+            # all-false TF-only short-circuit in :meth:`_rebuild` can fire even if
+            # ``SIMSOPT_PSC_PARTIAL_L_REUSE`` is unset (partial-L incremental
+            # logic inside ``_rebuild`` remains gated on that env separately).
+            self._rebuild(changed_mask=changed_pucks)
             # Do not replace ``self._field``: the existing :class:`PassiveBulkField`
             # still delegates to ``self.B_at_points``, which uses updated L, beta,
             # and JIT functions. Replacing the field breaks ``MagneticFieldSum``'s
@@ -5608,7 +6510,83 @@ class PSCBulkArray(Optimizable):
         self._field.clear_cached_properties()
         self._mark_phase_end(f"recompute_currents_total_{_path}", _t_total)
 
-    def B_at_points(self, points: np.ndarray) -> np.ndarray:
+    @contextmanager
+    def force_tf_only_forward(self) -> Iterator[None]:
+        """Context manager: route :meth:`B_at_points` through the cheap path.
+
+        While this context is active, :meth:`B_at_points` short-circuits
+        through :meth:`_B_at_points_tf_only` regardless of whether
+        :meth:`_has_free_center_or_quat_dofs` returns ``True``.  This lets
+        callers that perform their own host-side gradient (for example,
+        ``stellcoilbench_dipoles``'s
+        :class:`~stellcoilbench.coil_optimization
+        ._bulk_center_parameterization.ConstrainedJFWrapper` running its
+        reduced-DOF FD loop) avoid the ~22 s warm cost of the JAX free-DOF
+        forward when only the *value* of ``B(pts)`` is needed.
+
+        The caller is responsible for ensuring :meth:`recompute_currents`
+        has been invoked since the last DOF write, so the host-side
+        ``_jax_Lr_chol`` / ``_jax_Q`` stacks reflect the perturbed state.
+
+        Example
+        -------
+        ::
+
+            with psc_bulk.force_tf_only_forward():
+                # B(pts) returned from the cheap TF-only path that uses
+                # the most recently rebuilt host-side Cholesky.
+                B = psc_bulk.B_at_points(pts)
+
+        Notes
+        -----
+        Nesting is supported: the previous value of
+        ``self._force_tf_only_forward`` is restored on exit, so an outer
+        block that already enabled the flag continues to see the cheap
+        path after an inner block exits.  Exceptions inside the block do
+        not leak the flag; the ``finally`` clause always restores.
+        """
+        if not hasattr(self, "_tf_only_ctx_entries"):
+            self._tf_only_ctx_entries = 0
+        self._tf_only_ctx_entries += 1
+        prev = bool(self._force_tf_only_forward)
+        self._force_tf_only_forward = True
+        try:
+            yield
+        finally:
+            self._force_tf_only_forward = prev
+
+    @contextmanager
+    def force_quat_only_forward(self) -> Iterator[None]:
+        """Context manager: route :meth:`B_at_points` through the cheap path.
+
+        Semantically identical to :meth:`force_tf_only_forward` -- both
+        short-circuit through :meth:`_B_at_points_tf_only`.  The
+        separate name exists to document intent: this path is used when
+        **quaternion** DoFs are the free variables and the caller's FD
+        loop calls :meth:`recompute_currents` between probes so that
+        host-side ``_jax_Lr_chol`` / ``_jax_Q`` stacks reflect the
+        geometry change induced by the quaternion perturbation.
+
+        The caller (``ConstrainedJFWrapper`` in ``mode='rotation'``)
+        must invoke ``recompute_psc_bulk_currents`` after every
+        ``_sync_to_JF`` -- this is wired automatically by the
+        ``recompute_callback`` supplied at wrapper construction time.
+
+        Phase 2 (May-2026 speedup campaign, Phase B2).
+        """
+        if not hasattr(self, "_quat_only_ctx_entries"):
+            self._quat_only_ctx_entries = 0
+        self._quat_only_ctx_entries += 1
+        prev = bool(self._force_tf_only_forward)
+        self._force_tf_only_forward = True
+        try:
+            yield
+        finally:
+            self._force_tf_only_forward = prev
+
+    def B_at_points(
+        self, points: np.ndarray, *, moving_puck_mask: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         """Passive bulk B at Cartesian points ``(N, 3)``.
 
         When ``solver_mode == "shell_l2"`` the free-DOF-VJP and TF-only-
@@ -5616,10 +6594,40 @@ class PSCBulkArray(Optimizable):
         yet): we fall back to a pure-NumPy Biot-Savart of the cached
         :math:`\\beta`, which is recomputed by :meth:`recompute_currents`
         whenever TF currents, TF geometry or puck DOFs change.
+
+        When :attr:`_force_tf_only_forward` is ``True`` (set via the
+        :meth:`force_tf_only_forward` context manager), the gate that
+        selects between the JAX free-DOF runner and the cheap TF-only
+        path is forced into the cheap branch even if
+        :meth:`_has_free_center_or_quat_dofs` reports ``True``.
+
+        Parameters
+        ----------
+        points
+            Observation points shaped ``(N, 3)``.
+        moving_puck_mask
+            Optional boolean mask of shape ``(n_base_pucks,)`` reserved for
+            the symmetry-reduced moving-puck fast path (:envvar:
+            ``SIMSOPT_PSC_MOVING_PUCK_SUBSET``). Full per-base decomposition
+            of :func:`_B_eval_reduced_free_dof_dispatch` plus incremental
+            Biot-Savart updates is gated until parity benchmarks land; until
+            then the argument is validated (when supplied) but does not alter
+            the numerical path.
         """
         _t_total = self._mark_phase_start()
         g_tf, gd_tf, I_tf = self._tf_arrays()
         pts = np.asarray(points)
+        if moving_puck_mask is not None:
+            mk = np.asarray(moving_puck_mask, dtype=bool).reshape(-1)
+            if mk.shape != (int(self._n_base_pucks),):
+                raise ValueError(
+                    "moving_puck_mask must have shape "
+                    f"({self._n_base_pucks},), got {mk.shape}"
+                )
+        if self.solver_mode == "dipole":
+            out = self._B_at_points_dipole(pts, g_tf, gd_tf, I_tf)
+            self._mark_phase_end("B_at_points_dipole_total", _t_total)
+            return out
         if self.solver_mode == "shell_l2":
             if self._has_free_puck_dofs():
                 raise NotImplementedError(
@@ -5639,7 +6647,7 @@ class PSCBulkArray(Optimizable):
             )
             self._mark_phase_end("B_at_points_shell_l2_total", _t_total)
             return out
-        if self._has_free_center_or_quat_dofs():
+        if self._has_free_center_or_quat_dofs() and not self._force_tf_only_forward:
             self._ensure_jax_full()
             br = np.asarray(self._base_reps, dtype=np.int32)
             reduced_ok = bool(
@@ -5788,6 +6796,119 @@ class PSCBulkArray(Optimizable):
         self._mark_phase_end("B_at_points_tf_total", _t_total)
         return out
 
+    def _B_at_points_dipole(
+        self,
+        pts: np.ndarray,
+        g_tf: np.ndarray,
+        gd_tf: np.ndarray,
+        I_tf: np.ndarray,
+    ) -> np.ndarray:
+        """Evaluate ``B(pts)`` for ``solver_mode == 'dipole'``.
+
+        Path:
+
+        1. If any puck DoFs changed since the last rebuild, redo the
+           dipole-mode forward end-to-end via
+           :func:`_psc_bulk_dipole_mod.forward_dipole_pipeline` (small,
+           JIT-friendly).  This route is taken in free-DoF
+           optimisation and ensures gradients propagate through every
+           differentiable input.
+        2. Otherwise, use the cached ``_dipole_m_red`` and only
+           evaluate the closed-form dipole field
+           :func:`_psc_bulk_dipole_mod.B_at_points_dipole`, which is
+           ``O(n_eval * n_all)`` and very cheap.
+
+        Args:
+            pts: ``(n_eval, 3)`` evaluation points.
+            g_tf, gd_tf, I_tf: TF coil arrays from :meth:`_tf_arrays`.
+
+        Returns:
+            ``(n_eval, 3)`` bulk magnetic field.
+        """
+        centers, quats, _radii, _thicknesses = self._get_base_puck_geometry()
+        self._ensure_dipole_jit_cache(pts, g_tf)
+        if (
+            self._has_free_center_or_quat_dofs()
+            and not getattr(self, "_force_tf_only_forward", False)
+        ):
+            self_L_cached = self._dipole_self_L_local_cached
+            assert self_L_cached is not None, (
+                "PSCBulkArray dipole mode: self-inductance cache missing; "
+                "call recompute_currents first."
+            )
+            assert self._dipole_jit_forward is not None
+            out = np.asarray(
+                self._dipole_jit_forward(
+                    jnp.asarray(centers),
+                    jnp.asarray(quats),
+                    jnp.asarray(g_tf),
+                    jnp.asarray(gd_tf),
+                    jnp.asarray(I_tf),
+                    jnp.asarray(pts),
+                    jnp.asarray(self_L_cached),
+                    int(self.nfp),
+                    bool(self.stellsym),
+                ),
+                dtype=np.float64,
+            )
+            return out
+        # Cached fast path.
+        m_red = self._dipole_m_red
+        assert m_red is not None, (
+            "PSCBulkArray dipole mode: moments not solved; call "
+            "recompute_currents first."
+        )
+        n_base = int(self._n_base_pucks)
+        m_global_base = m_red.reshape(n_base, 3)
+        assert self._dipole_jit_field is not None
+        out = np.asarray(
+            self._dipole_jit_field(
+                jnp.asarray(pts),
+                jnp.asarray(centers),
+                jnp.asarray(quats),
+                jnp.asarray(m_global_base),
+                int(self.nfp),
+                bool(self.stellsym),
+            ),
+            dtype=np.float64,
+        )
+        return out
+
+    def _ensure_dipole_jit_cache(
+        self, pts: np.ndarray, g_tf: np.ndarray
+    ) -> None:
+        """Lazily (re)build the persistent dipole-mode jit handles.
+
+        The compiled kernels are keyed on shape-and-static arguments
+        that determine the trace -- ``n_base``, ``n_eval``,
+        ``(nfp, stellsym)``, and the TF coil shape ``(n_tf, n_tf_quad)``.
+        When the key matches the cached entry the existing compiled
+        function is reused; otherwise both jit wrappers are rebuilt.
+        """
+        n_base = int(self._n_base_pucks)
+        n_eval = int(np.asarray(pts).shape[0])
+        n_tf = int(np.asarray(g_tf).shape[0])
+        n_tf_q = int(np.asarray(g_tf).shape[1])
+        key = (n_base, n_eval, int(self.nfp), bool(self.stellsym), n_tf, n_tf_q)
+        if self._dipole_jit_key == key and self._dipole_jit_forward is not None:
+            return
+        # ``forward_dipole_pipeline`` signature:
+        #   (centers_base, quats_base, g_tf, gd_tf, I_tf, pts,
+        #    self_L_local_cached, nfp, stellsym)
+        # Static argnums -> 7 (nfp), 8 (stellsym).
+        self._dipole_jit_forward = jax.jit(
+            _psc_bulk_dipole_mod.forward_dipole_pipeline,
+            static_argnums=(7, 8),
+        )
+        # ``B_at_points_dipole`` signature:
+        #   (pts, centers_base, quats_base, m_global_base, nfp, stellsym)
+        # Static argnums -> 4 (nfp), 5 (stellsym).
+        self._dipole_jit_field = jax.jit(
+            _psc_bulk_dipole_mod.B_at_points_dipole,
+            static_argnums=(4, 5),
+        )
+        self._dipole_jit_key = key
+
     def _B_at_points_tf_only(
         self,
         pts: np.ndarray,
@@ -5796,25 +6917,36 @@ class PSCBulkArray(Optimizable):
         gd_tf: Optional[np.ndarray] = None,
         I_tf: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """Evaluate B(pts) using the pre-built ``_jax_Lr_chol`` / ``_jax_Q``.
+        """Evaluate B(pts) using a pre-built shell Cholesky factor and ``_jax_Q``.
+
+        By default (:envvar:`SIMSOPT_PSC_TF_SOLVE_EIGFLOOR` ``1``, see
+        :func:`_psc_tf_solve_eigfloor_env`) this uses ``_jax_Lr_eigf_chol``, the
+        same eigenfloor-stabilised factor as :meth:`_solve_beta`. Otherwise it
+        uses the plain minimal-jitter ``_jax_Lr_chol`` (legacy Phase-3 baseline).
 
         This is the cheap value-only path that bypasses the free-DOF JAX
         runner.  It uses the same dispatch as the TF-only branch of
         :meth:`B_at_points` but is callable even when ``_has_free_puck_dofs()``
         is True.  The caller must ensure that :meth:`recompute_currents` has
-        been called so that ``_jax_Lr_chol``, ``_jax_Q``, and related arrays
-        are up-to-date.
+        been called so that factors, ``_jax_Q``, and related arrays are
+        up-to-date.
 
         Used by :meth:`_Rt_fd_gradient` to avoid the ~120x overhead of the
         JAX free-DOF runner inside the finite-difference loop.
         """
         _t_total = self._mark_phase_start()
         assert self._jax_Lr_chol is not None, (
-            "_B_at_points_tf_only called before _jax_Lr_chol is initialised"
+            "_B_at_points_tf_only called before Cholesky factors are initialised"
         )
         assert self._jax_Q is not None, (
             "_B_at_points_tf_only called before _jax_Q is initialised"
         )
+        use_eigf = _psc_tf_solve_eigfloor_env()
+        if use_eigf:
+            assert self._jax_Lr_eigf_chol is not None, (
+                "_B_at_points_tf_only: eigenfloor Cholesky missing"
+            )
+        Lr_chol_jax = self._jax_Lr_eigf_chol if use_eigf else self._jax_Lr_chol
         pts = np.asarray(pts)
         if g_tf is None or gd_tf is None or I_tf is None:
             g_tf, gd_tf, I_tf = self._tf_arrays()
@@ -5822,7 +6954,7 @@ class PSCBulkArray(Optimizable):
             _t_forward = self._mark_phase_start()
             out = np.array(
                 _B_eval_jitted(
-                    self._jax_Lr_chol,
+                    Lr_chol_jax,
                     self._jax_Q,
                     self._jax_quad_pts,
                     self._jax_quad_n,
@@ -5843,11 +6975,41 @@ class PSCBulkArray(Optimizable):
             return out
         _t_bn = self._mark_phase_start()
         Bn = self._compute_bn_at_quads_numpy()
-        self._mark_phase_end("B_at_points_tf_only_bn", _t_bn)
+        self._mark_phase_end("B_at_points_fixed_bn", _t_bn)
+        M_field = self._fixed_field_matrix_for(pts, use_eigf=bool(use_eigf))
+        if M_field is not None:
+            _t_solve = self._mark_phase_start()
+            beta_work = np.asarray(
+                _beta_from_bn_jitted(
+                    Lr_chol_jax,
+                    self._jax_Q,
+                    self._jax_phi_work_stack,
+                    self._jax_w_work_stack,
+                    self._jax_base_indices,
+                    self._jax_replica_signs,
+                    jnp.asarray(Bn),
+                ),
+                dtype=np.float64,
+            )
+            self._mark_phase_end("B_at_points_fixed_solve", _t_solve, beta_work)
+            _t_gather = self._mark_phase_start()
+            beta_all = self._gather_beta_work_to_all_numpy(beta_work)
+            self._mark_phase_end("B_at_points_fixed_gather", _t_gather)
+            _t_gemv = self._mark_phase_start()
+            if M_field.dtype == np.float32:
+                out = np.asarray(
+                    M_field @ beta_all.astype(np.float32, copy=False),
+                    dtype=np.float64,
+                ).reshape(-1, 3)
+            else:
+                out = np.asarray(M_field @ beta_all).reshape(-1, 3)
+            self._mark_phase_end("B_at_points_fixed_gemv", _t_gemv)
+            self._mark_phase_end("B_at_points_tf_only_total", _t_total)
+            return out
         _t_forward = self._mark_phase_start()
         out = np.array(
             _B_eval_from_bn_jitted(
-                self._jax_Lr_chol,
+                Lr_chol_jax,
                 self._jax_Q,
                 self._jax_quad_pts,
                 self._jax_phi_work_stack,
@@ -6000,23 +7162,44 @@ class PSCBulkArray(Optimizable):
     def _resolved_pair_replica_chunk(self) -> int:
         """Replica-axis chunk for the free-DoF pair-inductance kernel (host, static in JIT).
 
-        Default behaviour (env unset / unset constructor arg / ``0``) returns
-        ``0``, which selects the legacy monolithic ``vmap`` over all
-        ``n_all`` replicas inside each base row.  When the env or
-        constructor knob is positive, the value is clamped to
-        ``min(value, n_all)``; clamping to ``n_all`` is equivalent to the
-        legacy path so the JIT can short-circuit.
+        Resolution order mirrors :meth:`_resolved_jax_pair_row_chunk`:
+        explicit :envvar:`SIMSOPT_PSC_PAIR_REPLICA_CHUNK`
+        overrides the constructor knob, which overrides the AUTO heuristic
+        (see :envvar:`SIMSOPT_PSC_PAIR_REPLICA_CHUNK_AUTO`).
+
+        * ``SIMSOPT_PSC_PAIR_REPLICA_CHUNK``: unset/absent/zero -> skip to
+          constructor/auto; positive -> ``min(env, n_all)``.
+        * Constructor ``pair_replica_chunk``: positive ->
+          ``min(ctor, n_all)``.
+        * AUTO heuristic: ``k = min(n_all, max(1, 1e9 // (nq**2 * nd**2 *
+          8)))``; ``0`` if ``k >= n_all`` (same as legacy monolithic
+          ``vmap``).
         """
         n_all = int(len(self._all_pucks)) if getattr(self, "_all_pucks", None) else 1
+        if n_all < 1:
+            return 0
         env = _psc_pair_replica_chunk_from_env()
         if env is not None:
             if env <= 0:
                 return 0
             return int(min(int(env), n_all))
         ctor = int(self._pair_replica_chunk_ctor)
-        if ctor <= 0:
+        if ctor > 0:
+            return int(min(ctor, n_all))
+        if not _psc_pair_replica_chunk_auto_env():
             return 0
-        return int(min(ctor, n_all))
+        basis = getattr(self, "_basis_per_puck", None)
+        b0 = basis[0] if basis else None
+        if b0 is None:
+            return 0
+        nq = int(b0.k_basis_local.shape[0])
+        nd = int(b0.k_basis_local.shape[1])
+        per_replica = int(nq) * int(nq) * int(nd) * int(nd) * 8
+        if per_replica <= 0:
+            return 0
+        chunk = max(1, int(1_000_000_000 // per_replica))
+        auto = int(min(n_all, chunk))
+        return 0 if auto >= n_all else auto
 
     def _resolved_bulk_far_pair_kappa(self) -> float:
         """Return effective far-pair kappa, with env var overriding constructor/YAML."""
@@ -6189,9 +7372,13 @@ class PSCBulkArray(Optimizable):
 
         Q = self._Q
         qt_lam = Q.T @ lam_beta_work
-        # Match :func:`~simsopt.field.bulk_inductance.shell_solve_linear_pure`
-        # / prefactored ``self._jax_Lr_chol`` (same jitter as forward).
-        Lr_chol = self._Lr_chol_host
+        # Prefer eigenfloor stabilisation when env default is on -- matches
+        # :meth:`_solve_beta` / cheap forward :meth:`_B_at_points_tf_only`.
+        Lr_chol = (
+            self._Lr_eigf_chol_host
+            if _psc_tf_solve_eigfloor_env()
+            else self._Lr_chol_host
+        )
         _y = solve_triangular(Lr_chol, qt_lam, lower=True, check_finite=True)
         lam_r = solve_triangular(Lr_chol.T, _y, lower=False, check_finite=True)
         lam_f_work = Q @ lam_r  # (n_work * nd_per,)
@@ -6255,6 +7442,20 @@ class PSCBulkArray(Optimizable):
                 return True
         return False
 
+    def _Rt_analytic_directional_combo(
+        self, v_B: np.ndarray, pts: np.ndarray
+    ) -> np.ndarray:
+        """Directional derivative of ``<v_B, B(pts)>`` w.r.t. free ``R{i}`` / ``t{i}``.
+
+        Phase L8 (May-2026 audit): closed-form ``BulkBasis`` Jacobians paired
+        with ``jax.jvp`` are not wired yet.  When :func:`_psc_rt_analytic_combo_env`
+        enables the analytic hook, callers still observe the FD reference
+        from :meth:`_Rt_fd_gradient` until the Jacobian path lands.
+        """
+        return self._Rt_fd_gradient(
+            np.asarray(v_B, dtype=np.float64), np.asarray(pts, dtype=np.float64)
+        )
+
     def _Rt_fd_gradient(
         self,
         v_B: np.ndarray,
@@ -6289,6 +7490,28 @@ class PSCBulkArray(Optimizable):
 
         See ``docs/passive_bulk_freeradius_diagnosis.md`` for the full
         performance diagnosis and Phase D.2 replacement plan.
+
+        Non-finite ``B0``, ``B_p``, or emitted FD entries propagate as an
+        all-NaN ``(n_base, 2)`` return value (Passive-bulk Phase 3, May 2026)
+        so callers can distinguish poisoned probes from legitimate zeros.
+        Audit: ``docs/notes/psc_bulk_Rt_vjp_audit.md``.
+
+        Cache-consistency note (May 2026 audit follow-up): the partial-L-reuse
+        incremental rebuild path (``SIMSOPT_PSC_PARTIAL_L_REUSE=1``, the
+        default) caches per-puck ``L_base`` updates keyed by
+        ``changed_pucks_mask`` and reuses portions of the previous Cholesky
+        factor.  When the FD loop perturbs ``R{i}``/``t{i}`` and immediately
+        restores the value, the resulting cache state depends on the prior
+        invocation history (i.e., which path through ``_vjp_puck_geometry``
+        most recently populated ``_jax_Lr_chol``/``_jax_Q``).  This produces
+        path-dependent ``B0``/``B_p`` snapshots and constant-offset gradient
+        errors observed in repeated TF-fixed evaluations.  To make this
+        routine deterministic w.r.t. the surrounding call sequence, the FD
+        loop temporarily disables partial-L-reuse via
+        :envvar:`SIMSOPT_PSC_PARTIAL_L_REUSE` and restores the previous
+        environment-variable value on exit.  See the regression test
+        ``test_Rt_fd_gradient_deterministic_across_paths`` in
+        ``tests/field/test_passive_bulks.py``.
         """
         import warnings as _warnings
 
@@ -6301,42 +7524,235 @@ class PSCBulkArray(Optimizable):
         names = list(self.local_full_dof_names)
         name_to_idx = {n: i for i, n in enumerate(names)}
 
+        _saved_partial_reuse = os.environ.get("SIMSOPT_PSC_PARTIAL_L_REUSE")
+        os.environ["SIMSOPT_PSC_PARTIAL_L_REUSE"] = "0"
+        try:
+            _t_b0 = self._mark_phase_start()
+            B0 = np.asarray(self._B_at_points_tf_only(pts_arr), dtype=np.float64)
+            self._mark_phase_end("vjp_free_Rt_fd_b0_capture", _t_b0)
+            if not np.all(np.isfinite(B0)):
+                return np.full((n_base, 2), np.nan, dtype=np.float64)
+
+            for b in range(n_base):
+                for axis_idx, prefix in enumerate(("R", "t")):
+                    dof_name = f"{prefix}{b}"
+                    idx = name_to_idx.get(dof_name)
+                    if idx is None or not bool(free_flags[idx]):
+                        continue
+                    v0 = float(self.get(dof_name))
+                    try:
+                        self.set(dof_name, v0 + eps)
+                        self.recompute_currents()
+                        B_p = np.asarray(
+                            self._B_at_points_tf_only(pts_arr), dtype=np.float64
+                        )
+                    except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
+                        _warnings.warn(
+                            f"PSCBulkArray._Rt_fd_gradient: skipping {dof_name!r} "
+                            f"because the perturbed solve raised {exc.__class__.__name__}: {exc}",
+                            category=RuntimeWarning,
+                            stacklevel=3,
+                        )
+                        out[b, axis_idx] = 0.0
+                        self.set(dof_name, v0)
+                        try:
+                            self.recompute_currents()
+                        except Exception:
+                            pass
+                        continue
+                    self.set(dof_name, v0)
+                    self.recompute_currents()
+                    if not np.all(np.isfinite(B_p)):
+                        return np.full((n_base, 2), np.nan, dtype=np.float64)
+                    fd_entry = float(np.sum(v_B_arr * (B_p - B0))) / eps
+                    if not np.isfinite(fd_entry):
+                        return np.full((n_base, 2), np.nan, dtype=np.float64)
+                    out[b, axis_idx] = fd_entry
+            return out
+        finally:
+            if _saved_partial_reuse is None:
+                os.environ.pop("SIMSOPT_PSC_PARTIAL_L_REUSE", None)
+            else:
+                os.environ["SIMSOPT_PSC_PARTIAL_L_REUSE"] = _saved_partial_reuse
+
+    def _geometry_fd_gradient(
+        self,
+        v_B: np.ndarray,
+        pts: np.ndarray,
+        perturbations: Sequence[Tuple[int, np.ndarray, np.ndarray]],
+        eps: Optional[float] = None,
+    ) -> np.ndarray:
+        """One-sided FD gradient of ``<v_B, B(pts)>`` w.r.t. caller-supplied
+        per-puck ``(centre, quaternion)`` perturbations.
+
+        Mirrors :meth:`_Rt_fd_gradient` for callers that have a closed-form
+        map from a small reduced DoF vector (e.g. ``delta_r`` for the
+        toroidal-shell radial parameterisation, or ``(delta_theta,
+        delta_phi)`` for the shell parameterisation) to per-puck
+        ``(centre, quaternion)`` perturbations and want a cheap host-side
+        gradient that bypasses the JAX free-DoF VJP runner.
+
+        Parameters
+        ----------
+        v_B
+            Cotangent on B at eval points; shape ``(n_eval, 3)``.
+        pts
+            Eval points; shape ``(n_eval, 3)``.
+        perturbations
+            Sequence of ``(puck_idx, dC, dQ)`` triples where:
+
+            * ``puck_idx`` is a base puck index in ``[0, n_base_pucks)``.
+            * ``dC`` is a length-3 Cartesian centre displacement direction
+              in *per-unit-reduced-DoF* units (i.e.
+              ``d(center_x{i}, center_y{i}, center_z{i}) /
+              d(reduced_dof_k)`` evaluated at the current state).
+            * ``dQ`` is a length-4 quaternion displacement direction with
+              the same unit semantics; pass ``np.zeros(4)`` for reduced
+              DoFs that do not affect orientation (e.g. radial mode).
+        eps
+            Step size; when ``None``, read from
+            ``SIMSOPT_PSC_GEOM_FD_EPS`` (default ``1e-5``).  One-sided
+            forward FD has O(eps) bias, acceptable for L-BFGS-B line
+            searches.
+
+        Returns
+        -------
+        np.ndarray
+            Float64 array of length ``len(perturbations)`` with each
+            entry equal to ``<v_B, B(c0 + eps*dC, q0 + eps*dQ) - B0> /
+            eps``, where ``B`` is evaluated through the cheap TF-only
+            host path.
+
+        Notes
+        -----
+        Algorithm (one-sided forward FD with TF-only B-eval, mirroring
+        :meth:`_Rt_fd_gradient`):
+
+        1. Capture ``B0 = _B_at_points_tf_only(pts)`` once at the
+           current (unperturbed) state (phase tag
+           ``vjp_geometry_fd_b0_capture``).
+        2. For each perturbation entry ``(puck_idx, dC, dQ)``:
+
+           a. Record the current centre ``c0`` and quaternion ``q0`` of
+              ``puck_idx``.
+           b. Set centre to ``c0 + eps*dC``, quaternion to
+              ``q0 + eps*dQ``.
+           c. Call :meth:`recompute_currents` (partial-rebuild fast
+              path on the perturbed puck, since only one puck moved).
+           d. Evaluate ``B_p = _B_at_points_tf_only(pts)``.
+           e. Restore ``c0``, ``q0``, call :meth:`recompute_currents`
+              again so the array is back in its original state.
+           f. Emit ``np.sum(v_B * (B_p - B0)) / eps``.
+
+        Per-probe cost: ``T_recompute_partial + T_B_tf_only`` — at
+        reactor scale (``n_base = 18``) this is ~0.15 s.  For an
+        18-DoF radial-mode wrapper (1 perturbation per puck) the total
+        VJP wall is roughly ``T_B0 + 18 * 0.15 ≈ 2.9 s``, vs ~25 s
+        for the JAX free-DoF VJP on the same configuration.
+
+        On a perturbed solve raising
+        :class:`numpy.linalg.LinAlgError` /
+        :class:`RuntimeError` / :class:`ValueError` (e.g. an L-BFGS-B
+        line search probed an ill-conditioned puck configuration), the
+        corresponding gradient entry is set to zero and a
+        :class:`RuntimeWarning` is emitted; the underlying DOFs are
+        restored before continuing.  Mirrors the silently-NaN-tainted
+        behaviour of the pre-fix JAX free-DoF path so the optimiser can
+        backtrack rather than crash.
+
+        Phase tag: ``vjp_geometry_fd``.
+        """
+        import warnings as _warnings
+
+        if eps is None:
+            eps = _psc_geom_fd_eps_env()
+        eps = float(eps)
+        v_B_arr = np.ascontiguousarray(v_B, dtype=np.float64)
+        pts_arr = np.ascontiguousarray(pts, dtype=np.float64)
+        n_pert = len(perturbations)
+        out = np.zeros(n_pert, dtype=np.float64)
+        if n_pert == 0:
+            return out
+
+        _t_total = self._mark_phase_start()
         _t_b0 = self._mark_phase_start()
         B0 = np.asarray(self._B_at_points_tf_only(pts_arr), dtype=np.float64)
-        self._mark_phase_end("vjp_free_Rt_fd_b0_capture", _t_b0)
+        self._mark_phase_end("vjp_geometry_fd_b0_capture", _t_b0)
 
-        for b in range(n_base):
-            for axis_idx, prefix in enumerate(("R", "t")):
-                dof_name = f"{prefix}{b}"
-                idx = name_to_idx.get(dof_name)
-                if idx is None or not bool(free_flags[idx]):
-                    continue
-                v0 = float(self.get(dof_name))
-                try:
-                    self.set(dof_name, v0 + eps)
-                    self.recompute_currents()
-                    B_p = np.asarray(
-                        self._B_at_points_tf_only(pts_arr), dtype=np.float64
-                    )
-                except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
-                    _warnings.warn(
-                        f"PSCBulkArray._Rt_fd_gradient: skipping {dof_name!r} "
-                        f"because the perturbed solve raised {exc.__class__.__name__}: {exc}",
-                        category=RuntimeWarning,
-                        stacklevel=3,
-                    )
-                    out[b, axis_idx] = 0.0
-                    self.set(dof_name, v0)
-                    try:
-                        self.recompute_currents()
-                    except Exception:
-                        pass
-                    continue
-                self.set(dof_name, v0)
+        n_base = int(self._n_base_pucks)
+        for k, entry in enumerate(perturbations):
+            if len(entry) != 3:
+                raise ValueError(
+                    f"_geometry_fd_gradient: perturbations[{k}] must be "
+                    f"(puck_idx, dC(3,), dQ(4,)), got {entry!r}"
+                )
+            puck_idx, dC, dQ = entry
+            i = int(puck_idx)
+            if not (0 <= i < n_base):
+                raise IndexError(
+                    f"_geometry_fd_gradient: perturbations[{k}] puck_idx={i} "
+                    f"out of range [0, {n_base})."
+                )
+            dC_arr = np.asarray(dC, dtype=np.float64).reshape(-1)
+            dQ_arr = np.asarray(dQ, dtype=np.float64).reshape(-1)
+            if dC_arr.size != 3:
+                raise ValueError(
+                    f"_geometry_fd_gradient: perturbations[{k}] dC must be "
+                    f"length 3, got size {dC_arr.size}."
+                )
+            if dQ_arr.size != 4:
+                raise ValueError(
+                    f"_geometry_fd_gradient: perturbations[{k}] dQ must be "
+                    f"length 4, got size {dQ_arr.size}."
+                )
+
+            center_names = (f"center_x{i}", f"center_y{i}", f"center_z{i}")
+            quat_names = (f"q0_{i}", f"qi_{i}", f"qj_{i}", f"qk_{i}")
+            c0 = np.array(
+                [float(self.get(n)) for n in center_names], dtype=np.float64
+            )
+            q0 = np.array(
+                [float(self.get(n)) for n in quat_names], dtype=np.float64
+            )
+            c_p = c0 + eps * dC_arr
+            q_p = q0 + eps * dQ_arr
+
+            try:
+                for nm, val in zip(center_names, c_p):
+                    self.set(nm, float(val))
+                for nm, val in zip(quat_names, q_p):
+                    self.set(nm, float(val))
                 self.recompute_currents()
-                out[b, axis_idx] = float(
-                    np.sum(v_B_arr * (B_p - B0))
-                ) / eps
+                B_p = np.asarray(
+                    self._B_at_points_tf_only(pts_arr), dtype=np.float64
+                )
+            except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
+                _warnings.warn(
+                    "PSCBulkArray._geometry_fd_gradient: skipping "
+                    f"perturbation index {k} (puck {i}) because the "
+                    f"perturbed solve raised {exc.__class__.__name__}: {exc}",
+                    category=RuntimeWarning,
+                    stacklevel=3,
+                )
+                out[k] = 0.0
+                for nm, val in zip(center_names, c0):
+                    self.set(nm, float(val))
+                for nm, val in zip(quat_names, q0):
+                    self.set(nm, float(val))
+                try:
+                    self.recompute_currents()
+                except Exception:
+                    pass
+                continue
+
+            for nm, val in zip(center_names, c0):
+                self.set(nm, float(val))
+            for nm, val in zip(quat_names, q0):
+                self.set(nm, float(val))
+            self.recompute_currents()
+            out[k] = float(np.sum(v_B_arr * (B_p - B0))) / eps
+
+        self._mark_phase_end("vjp_geometry_fd", _t_total)
         return out
 
     def _vjp_puck_geometry(self, v_B, pts):
@@ -6347,29 +7763,43 @@ class PSCBulkArray(Optimizable):
             import warnings as _warnings
 
             _t_shape = self._mark_phase_start()
+            _tf_failed = False
             try:
                 tf_deriv = self._vjp_tf_only(v_B, pts)
             except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
-                # Host-side ``_Lr_chol_host`` can be left ill-conditioned
-                # by an ill-fated L-BFGS-B line-search probe (e.g. R/t
-                # driven into a regime where the inductance Cholesky
-                # contains NaN).  Return a zero TF gradient (so the
-                # outer minimiser sees a sentinel-bad point and
-                # backtracks), matching the pre-fix free-DOF JAX path's
-                # behaviour of silently returning NaN-tainted gradients
-                # at such points without raising.
+                # Phase 3 (May-2026): ``_Lr_chol_host`` can be ill-conditioned on
+                # FC-perturbed initial states / bad line searches. Returning a
+                # *zero* TF gradient lets L-BFGS-B treat ``g==0`` as valid and blow
+                # coils to nonsense (see passive-bulk Phase 3 campaign notes /
+                # ``toroidal_dof_scan_phase2_post`` freeradius logs). Propagate
+                # NaN locally so scipy aborts the line search.
                 _warnings.warn(
                     "PSCBulkArray._vjp_puck_geometry: shape-only TF VJP "
                     f"raised {exc.__class__.__name__}: {exc}; returning "
-                    "zero TF gradient so the optimiser can backtrack.",
+                    "NaN-filled gradient so scipy aborts the line search "
+                    "(Phase 3 May-2026: replaces zero-gradient sentinel).",
                     category=RuntimeWarning,
                     stacklevel=3,
                 )
                 tf_deriv = Derivative({})
+                _tf_failed = True
+            if _tf_failed:
+                grad_local = np.full(
+                    self._n_base_pucks * _DOFS_PER_PUCK,
+                    np.nan,
+                    dtype=float,
+                )
+                self._mark_phase_end("vjp_shape_only_total", _t_shape)
+                return Derivative({self: grad_local}) + tf_deriv
             grad_local = np.zeros(self._n_base_pucks * _DOFS_PER_PUCK)
             if self._has_free_Rt_dofs():
                 _t_Rt_fd = self._mark_phase_start()
-                g_Rt = self._Rt_fd_gradient(np.asarray(v_B), np.asarray(pts))
+                rt_fn = (
+                    self._Rt_analytic_directional_combo
+                    if _psc_rt_analytic_combo_env()
+                    else self._Rt_fd_gradient
+                )
+                g_Rt = rt_fn(np.asarray(v_B), np.asarray(pts))
                 for i in range(self._n_base_pucks):
                     off = i * _DOFS_PER_PUCK
                     grad_local[off + 7] += g_Rt[i, 0]
@@ -6537,7 +7967,12 @@ class PSCBulkArray(Optimizable):
 
         if self._has_free_Rt_dofs():
             _t_Rt_fd = self._mark_phase_start()
-            g_Rt = self._Rt_fd_gradient(np.asarray(v_B), np.asarray(pts))
+            rt_fn = (
+                self._Rt_analytic_directional_combo
+                if _psc_rt_analytic_combo_env()
+                else self._Rt_fd_gradient
+            )
+            g_Rt = rt_fn(np.asarray(v_B), np.asarray(pts))
             for i in range(self._n_base_pucks):
                 off = i * _DOFS_PER_PUCK
                 grad_local[off + 7] += g_Rt[i, 0]
@@ -6761,6 +8196,21 @@ class PassiveBulkField(MagneticField):
     def __init__(self, psc_bulk: PSCBulkArray):
         self.psc_bulk = psc_bulk
         MagneticField.__init__(self, depends_on=[psc_bulk])
+
+    def set_points_cart(self, xyz):
+        """Set eval points and invalidate the fixed-puck ``M_field`` cache.
+
+        The cached ``_M_field`` matrix on the owning :class:`PSCBulkArray`
+        is keyed in part on
+        :attr:`PSCBulkArray._eval_pts_version`; bumping that version via
+        :meth:`PSCBulkArray._bump_eval_pts_version` here guarantees the
+        cache is rebuilt on the next forward, regardless of whether the
+        C++ side reuses the prior points buffer in-place or allocates a
+        fresh one.  Called both by direct user code and by the parent
+        :class:`MagneticFieldSum`'s ``_set_points_cb`` dispatch.
+        """
+        self.psc_bulk._bump_eval_pts_version()
+        return super().set_points_cart(xyz)
 
     def _B_impl(self, B):
         pts = self.get_points_cart_ref()

@@ -1811,6 +1811,38 @@ def _psc_big_chol_threshold() -> int:
         return 2000
 
 
+def _psc_null_space_auto_enabled() -> bool:
+    """Opt-in middle-size ``eigsh`` path (audit L10)."""
+    raw = os.environ.get("SIMSOPT_PSC_NULL_SPACE_AUTO", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _psc_null_space_auto_threshold() -> Optional[int]:
+    """Minimum matrix dimension to trigger :func:`_null_space_projection_iterative`."""
+    raw = os.environ.get("SIMSOPT_PSC_NULL_SPACE_AUTO_THRESHOLD", "250").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return None
+    return max(3, n)
+
+
+def _null_space_projection_dense_numpy_eigh(
+    L: np.ndarray,
+    threshold: float,
+) -> np.ndarray:
+    """Dense symmetric eigen-decomposition used as the non-iterative fallback."""
+    L = np.asarray(L)
+    if L.size == 0:
+        return L.reshape(L.shape[0], 0)
+    lam, V = np.linalg.eigh(L)
+    max_lam = float(np.max(np.abs(lam)))
+    if max_lam < 1e-30:
+        return V
+    good = lam > threshold * max_lam
+    return V[:, good]
+
+
 def _null_space_projection_iterative(
     L: np.ndarray,
     threshold: float,
@@ -1845,16 +1877,16 @@ def _null_space_projection_iterative(
     L = np.asarray(L)
     n = int(L.shape[0])
     if n <= 2:
-        return null_space_projection_matrix(L, threshold=threshold)
+        return _null_space_projection_dense_numpy_eigh(L, threshold)
     try:
         from scipy.sparse.linalg import eigsh  # type: ignore
     except Exception:  # noqa: BLE001
-        return null_space_projection_matrix(L, threshold=threshold)
+        return _null_space_projection_dense_numpy_eigh(L, threshold)
     k = max(1, min(n - 1, int(k_frac * n)))
     try:
         lam, V = eigsh(L, k=k, which="LA")
     except Exception:  # noqa: BLE001
-        return null_space_projection_matrix(L, threshold=threshold)
+        return _null_space_projection_dense_numpy_eigh(L, threshold)
     order = np.argsort(-lam)
     lam = lam[order]
     V = V[:, order]
@@ -1901,12 +1933,14 @@ def null_space_projection_matrix(
     L = np.asarray(L)
     if _psc_big_chol_enabled() and L.shape[0] >= _psc_big_chol_threshold():
         return _null_space_projection_iterative(L, threshold=threshold)
-    lam, V = np.linalg.eigh(L)
-    max_lam = np.max(np.abs(lam))
-    if max_lam < 1e-30:
-        return V
-    good = lam > threshold * max_lam
-    return V[:, good]
+    thr_auto = _psc_null_space_auto_threshold()
+    if (
+        _psc_null_space_auto_enabled()
+        and thr_auto is not None
+        and L.shape[0] >= thr_auto
+    ):
+        return _null_space_projection_iterative(L, threshold=threshold)
+    return _null_space_projection_dense_numpy_eigh(L, threshold)
 
 
 def shell_loading_vector_pure(
@@ -1984,6 +2018,24 @@ def shell_solve_linear_pure(
     return jscp.linalg.solve_triangular(C.T, y, lower=False)
 
 
+def shell_eigenfloor_cholesky_from_eig(
+    eig_lam: jnp.ndarray,
+    eig_V: jnp.ndarray,
+    threshold: float = 1e-10,
+    jitter: float = 1e-10,
+) -> jnp.ndarray:
+    """Cholesky of eigenfloor-regularised :math:`L` given a precomputed spectrum."""
+    eig_lam = jnp.asarray(eig_lam)
+    eig_V = jnp.asarray(eig_V)
+    max_abs = jnp.max(jnp.abs(eig_lam))
+    floor = threshold * max_abs
+    lam_floor = jnp.maximum(eig_lam, floor)
+    L_reg = (eig_V * lam_floor[None, :]) @ eig_V.T
+    n = int(eig_V.shape[0])
+    L_reg = L_reg + jitter * jnp.eye(n, dtype=eig_V.dtype)
+    return jnp.linalg.cholesky(L_reg)
+
+
 def shell_eigenfloor_cholesky_pure(
     L: jnp.ndarray,
     threshold: float = 1e-10,
@@ -2001,13 +2053,7 @@ def shell_eigenfloor_cholesky_pure(
     """
     L = jnp.asarray(L)
     lam, V = jnp.linalg.eigh(L)
-    max_abs = jnp.max(jnp.abs(lam))
-    floor = threshold * max_abs
-    lam_floor = jnp.maximum(lam, floor)
-    L_reg = (V * lam_floor[None, :]) @ V.T
-    n = L.shape[0]
-    L_reg = L_reg + jitter * jnp.eye(n, dtype=L.dtype)
-    return jnp.linalg.cholesky(L_reg)
+    return shell_eigenfloor_cholesky_from_eig(lam, V, threshold, jitter)
 
 
 def shell_solve_eigenfloor_pure(

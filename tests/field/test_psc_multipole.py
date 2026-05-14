@@ -23,10 +23,6 @@ from simsopt.field.bulk_multipole import (
     pair_inductance_multipole,
     quadrupole_magnetic_symmetric_stacked,
 )
-from simsopt.field.cylinder_stream_basis import (
-    ClosedCylinderStreamConfig,
-    tikhonov_stream_coefficients_synthetic,
-)
 from simsopt.field.quat_tangent import dR_domega_at_zero, exp_quat_tangent
 
 pytestmark = [pytest.mark.fidelity]
@@ -431,18 +427,6 @@ def test_quat_tangent_roundtrip_r_norm() -> None:
     assert float(abs(np.linalg.norm(q1) - 1.0)) < 1e-6
     j = dR_domega_at_zero(jnp.asarray(q0))
     assert j.shape == (3, 3, 3)
-
-
-@pytest.mark.psc_w5
-def test_cylinder_stream_config_roundtrip() -> None:
-    """W5: config stores shell dimensions (integration placeholder)."""
-    cfg = ClosedCylinderStreamConfig(
-        radius=0.2, height=0.1, n_phi=9, n_z=5, m_phi_max=2, n_z_leg=3
-    )
-    rng = np.random.default_rng(3)
-    c = tikhonov_stream_coefficients_synthetic(rng, cfg)
-    assert c.size == (2 * cfg.m_phi_max + 1) * (cfg.n_z_leg + 1)
-    assert abs(float(np.linalg.norm(c)) - 1.0) < 1e-9
 
 
 @pytest.mark.psc_w7

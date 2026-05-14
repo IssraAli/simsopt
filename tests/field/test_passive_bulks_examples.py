@@ -21,7 +21,7 @@ EXAMPLES_DIR: Path = REPO_ROOT / "examples" / "3_Advanced"
 
 PASSIVE_BULK_EXAMPLES: tuple[Path, ...] = (
     EXAMPLES_DIR / "passive_bulks_winding_surface_optimization.py",
-    EXAMPLES_DIR / "passive_bulks_cylindrical_grid_optimization.py",
+    EXAMPLES_DIR / "passive_bulks_toroidal_shell_optimization.py",
 )
 
 

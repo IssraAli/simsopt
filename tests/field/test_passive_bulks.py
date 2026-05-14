@@ -2,9 +2,12 @@
 Tests for passive bulk (ideal diamagnetic) pucks.
 """
 
+import json
 import os
 import tempfile
-from typing import Any
+import time
+from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 import pytest
@@ -15,6 +18,8 @@ pytest.importorskip("jax.numpy")
 from simsopt.field.bulk_inductance import (
     null_space_projection_matrix,
     _shell_inductance_matrix_symmetric_reduced_jax,
+    shell_eigenfloor_cholesky_from_eig,
+    shell_eigenfloor_cholesky_pure,
     shell_inductance_matrix_blockwise,
     shell_inductance_matrix_pure,
     shell_loading_vector_pure,
@@ -31,6 +36,7 @@ from simsopt.field.psc_bulk import (
     _rotation_matrix_from_quat,
     _rotation_matrix_from_quat_jax,
 )
+from simsopt.field.puck_comsol import save_pucks_comsol_bundle
 from simsopt.field.puck_basis import (
     apply_mode_truncate,
     build_puck_shell_basis,
@@ -1658,6 +1664,273 @@ def test_psc_bulk_array_unfix_all_warns_on_R_t():
     )
 
 
+def test_vjp_puck_geometry_propagates_nan_when_tf_only_raises(monkeypatch):
+    """Shape-only TF VJP failures return NaN for puck-slot gradient (Passive-bulk Phase 3).
+
+    A zero ``Derivative()`` sentinel fooled L-BFGS-B after FC; see Phase 3 campaign
+    notes / ``stellcoilbench_dipoles`` freeradius scan logs May 2026.
+    """
+    tf_coil = _unit_circle_coil()
+    psc = PSCBulkArray(
+        np.array([[0.0, 0.0, 0.15]]),
+        np.array([[0.0, 0.0, 1.0]]),
+        np.array([0.04]),
+        np.array([0.02]),
+        [tf_coil],
+        eval_points=np.array([[0.15, 0.0, 0.25]], dtype=float),
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+    )
+    psc.unfix("R0")
+    psc.unfix("t0")
+
+    def _boom(self, v_B, pts):
+        raise ValueError("array must not contain infs or NaNs")
+
+    monkeypatch.setattr(PSCBulkArray, "_vjp_tf_only", _boom, raising=True)
+    pts = np.array([[0.15, 0.0, 0.25]], dtype=float)
+    v_B = np.ones_like(pts)
+
+    import warnings
+
+    with warnings.catch_warnings(record=True) as wrec:
+        warnings.simplefilter("always")
+        dj = psc._vjp_puck_geometry(v_B, pts)
+
+    assert any(
+        "NaN-filled gradient" in str(rec.message)
+        or "Phase 3" in str(rec.message)
+        for rec in wrec
+    ), list(str(w.message) for w in wrec)
+
+    from simsopt._core import Derivative
+
+    assert isinstance(dj, Derivative)
+    g = dj(psc)
+    assert g is not None and g.ndim == 1 and g.size > 0
+    # Centres/quaternions stay fixed here -> inactive slots are omitted or zero.
+    assert np.any(np.isnan(g)), (
+        "NaN must poison at least one free shape slot (typically R{t}/t{i}) "
+        "so L-BFGS-B rejects the step instead of marching on zeros."
+    )
+    assert not np.any(np.isinf(g))
+
+
+def test_tf_only_forward_uses_eigfloor_when_plain_factor_poisoned(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Phase 4: cheap forward uses eigenfloor Cholesky by default."""
+    monkeypatch.delenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", raising=False)
+    psc = _make_small_psc()
+    psc.recompute_currents()
+    pts = np.array([[0.01, 0.0, 0.18]], dtype=float)
+    psc._jax_Lr_chol = jnp.full_like(psc._jax_Lr_chol, jnp.nan)
+    B_ok = np.asarray(psc._B_at_points_tf_only(pts))
+    assert np.all(np.isfinite(B_ok))
+
+    monkeypatch.setenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", "0")
+    psc.recompute_currents()
+    psc._jax_Lr_chol = jnp.full_like(psc._jax_Lr_chol, jnp.nan)
+    B_bad = np.asarray(psc._B_at_points_tf_only(pts))
+    assert not np.all(np.isfinite(B_bad))
+
+
+def test_tf_only_vjp_analytic_uses_eigfloor_when_plain_factor_poisoned(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Phase 4: analytic TF adjoint uses eigenfloor solve under default env."""
+    monkeypatch.delenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", raising=False)
+    psc = _make_small_psc()
+    psc.recompute_currents()
+    pts = np.array([[0.01, 0.0, 0.18]], dtype=float)
+    v_B = np.ones_like(pts)
+    psc._Lr_chol_host = np.full_like(psc._Lr_chol_host, np.nan)
+    out = psc._vjp_tf_only_analytic(v_B, pts)
+    assert out is not None
+
+    monkeypatch.setenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", "0")
+    psc.recompute_currents()
+    psc._Lr_chol_host = np.full_like(psc._Lr_chol_host, np.nan)
+    with pytest.raises((np.linalg.LinAlgError, ValueError)):
+        psc._vjp_tf_only_analytic(v_B, pts)
+
+
+def test_vjp_puck_geometry_no_nan_sentinel_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Shape-only puck VJP should not trigger the Phase-3 NaN sentinel fixture."""
+    monkeypatch.delenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", raising=False)
+    tf_coil = _unit_circle_coil()
+    psc = PSCBulkArray(
+        np.array([[0.0, 0.0, 0.15]]),
+        np.array([[0.0, 0.0, 1.0]]),
+        np.array([0.04]),
+        np.array([0.02]),
+        [tf_coil],
+        eval_points=np.array([[0.15, 0.0, 0.25]], dtype=float),
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+    )
+    psc.unfix("R0")
+    psc.unfix("t0")
+    pts = np.array([[0.15, 0.0, 0.25]], dtype=float)
+    v_B = np.ones_like(pts)
+    import warnings
+
+    with warnings.catch_warnings(record=True) as wrec:
+        warnings.simplefilter("always")
+        dj = psc._vjp_puck_geometry(v_B, pts)
+    sentinel_msgs = [
+        str(w.message)
+        for w in wrec
+        if "NaN-filled gradient" in str(w.message) or "Phase 3" in str(w.message)
+    ]
+    assert sentinel_msgs == []
+
+    from simsopt._core import Derivative
+
+    assert isinstance(dj, Derivative)
+    assert dj(psc) is not None
+
+
+def test_recompute_partial_L_forwards_changed_mask(monkeypatch: pytest.MonkeyPatch):
+    """``recompute_currents`` forwards per-base changed_mask when reuse is on."""
+    monkeypatch.setenv("SIMSOPT_PSC_PARTIAL_L_REUSE", "1")
+    monkeypatch.delenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", raising=False)
+    tf_coil = _unit_circle_coil()
+    psc = PSCBulkArray(
+        np.array([[0.0, 0.0, 0.12], [0.05, 0.0, 0.12]]),
+        np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]),
+        np.array([0.04, 0.04]),
+        np.array([0.02, 0.02]),
+        [tf_coil],
+        eval_points=np.array([[0.01, 0.0, 0.18]], dtype=float),
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+    )
+    masks: list[Optional[np.ndarray]] = []
+
+    _orig_rb = PSCBulkArray._rebuild
+
+    def _wrapped(self: Any, changed_mask: Optional[np.ndarray] = None) -> Any:
+        masks.append(None if changed_mask is None else np.asarray(changed_mask).copy())
+        return _orig_rb(self, changed_mask=changed_mask)
+
+    monkeypatch.setattr(PSCBulkArray, "_rebuild", _wrapped)
+
+    psc.recompute_currents()
+
+    dof_names = list(psc.local_full_dof_names)
+    x = np.array(psc.local_full_x, dtype=float)
+    i_cx = dof_names.index("center_x1")
+    x[i_cx] += 1e-3
+    psc.unfix("center_x1")
+    psc.local_full_x = x
+    psc.recompute_currents()
+
+    with_mask = [
+        np.asarray(cm, dtype=bool)
+        for cm in masks
+        if cm is not None and bool(np.asarray(cm).any())
+    ]
+    assert with_mask, f"Expected at least one partial mask, got masks={masks}"
+    last_partial = with_mask[-1]
+    assert last_partial.size == int(psc._n_base_pucks)
+    assert last_partial.sum() == 1, last_partial
+
+
+def test_recompute_currents_partial_l_off_calls_full_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIMSOPT_PSC_PARTIAL_L_REUSE", "0")
+    monkeypatch.delenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", raising=False)
+    tf_coil = _unit_circle_coil()
+    psc = PSCBulkArray(
+        np.array([[0.0, 0.0, 0.12], [0.05, 0.0, 0.12]]),
+        np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]),
+        np.array([0.04, 0.04]),
+        np.array([0.02, 0.02]),
+        [tf_coil],
+        eval_points=np.array([[0.01, 0.0, 0.18]], dtype=float),
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+    )
+    masks: list[Optional[np.ndarray]] = []
+
+    _orig_rb = PSCBulkArray._rebuild
+
+    def _wrapped(self: Any, changed_mask: Optional[np.ndarray] = None) -> Any:
+        masks.append(None if changed_mask is None else np.asarray(changed_mask).copy())
+        return _orig_rb(self, changed_mask=changed_mask)
+
+    monkeypatch.setattr(PSCBulkArray, "_rebuild", _wrapped)
+
+    psc.recompute_currents()
+
+    dof_names = list(psc.local_full_dof_names)
+    x = np.array(psc.local_full_x, dtype=float)
+    i_cx = dof_names.index("center_x1")
+    x[i_cx] += 1e-3
+    psc.unfix("center_x1")
+    psc.local_full_x = x
+    psc.recompute_currents()
+
+    assert not bool(psc._partial_reuse_active), (
+        "With SIMSOPT_PSC_PARTIAL_L_REUSE=0, the partial-L reuse fast path "
+        "must NOT activate after a single-puck perturbation; "
+        f"got _partial_reuse_active={psc._partial_reuse_active!r}, "
+        f"masks={masks!r}"
+    )
+
+
+def test_tf_and_quat_only_forward_counters_increment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cheap-forward context managers expose monotonic ingress counters."""
+
+    monkeypatch.delenv("SIMSOPT_PSC_TF_SOLVE_EIGFLOOR", raising=False)
+    tf_coil = _unit_circle_coil()
+    psc = PSCBulkArray(
+        np.array([[0.0, 0.0, 0.12]]),
+        np.array([[0.0, 0.0, 1.0]]),
+        np.array([0.04]),
+        np.array([0.02]),
+        [tf_coil],
+        eval_points=np.array([[0.01, 0.0, 0.18]], dtype=float),
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+    )
+    psc.recompute_currents()
+
+    tf0 = int(getattr(psc, "_tf_only_ctx_entries", 0))
+    with psc.force_tf_only_forward():
+        pass
+    assert int(psc._tf_only_ctx_entries) == tf0 + 1
+
+    qt0 = int(getattr(psc, "_quat_only_ctx_entries", 0))
+    with psc.force_quat_only_forward():
+        pass
+    assert int(psc._quat_only_ctx_entries) == qt0 + 1
+
+
 def test_psc_bulk_array_unfix_center_does_not_warn():
     """Unfixing an in-plane DOF (center/quat) must not emit the zero-VJP warning."""
     import warnings
@@ -2109,6 +2382,76 @@ def test_taylor_puck_thickness_shape_only():
     )
 
 
+def test_Rt_fd_gradient_deterministic_across_paths(monkeypatch: pytest.MonkeyPatch):
+    """Regression: ``_Rt_fd_gradient`` must be deterministic w.r.t. call history.
+
+    Bug discovered May 2026: the partial-L-reuse incremental rebuild path
+    (``SIMSOPT_PSC_PARTIAL_L_REUSE=1``, the default) caches per-puck
+    ``L_base`` updates keyed by ``changed_pucks_mask``.  When
+    :meth:`PSCBulkArray._Rt_fd_gradient` perturbs ``R{i}``/``t{i}`` and
+    immediately restores the value, the resulting host-side cache state
+    (``_jax_Lr_chol``, ``_jax_Q``) depends on the prior invocation history
+    -- specifically, on which path through ``_vjp_puck_geometry`` most
+    recently populated those caches (free-DOF JAX VJP vs shape-only TF VJP).
+    This produced path-dependent ``B_p - B0`` snapshots inside the FD loop
+    and constant-offset gradient errors visible to callers that sweep the
+    free-DOF set across consecutive ``Jf.dJ()`` invocations.
+
+    The fix in :meth:`PSCBulkArray._Rt_fd_gradient` overrides the
+    ``SIMSOPT_PSC_PARTIAL_L_REUSE`` env var to ``"0"`` for the duration
+    of the FD loop and restores the previous value on exit.  This test
+    pins the property that two consecutive ``_Rt_fd_gradient`` calls with
+    the same DOFs and call-context return identical results, regardless of
+    the value of ``SIMSOPT_PSC_PARTIAL_L_REUSE``.
+    """
+    monkeypatch.delenv("SIMSOPT_PSC_PARTIAL_L_REUSE", raising=False)
+    monkeypatch.setenv("SIMSOPT_PSC_PARTIAL_L_REUSE", "1")
+
+    s, coils_tf, base_curves, base_currents, psc, btot, Jf = _make_small_setup(
+        n_base_pucks=2,
+        nfp=2,
+        stellsym=True,
+    )
+    for i in range(int(psc._n_base_pucks)):
+        psc.unfix(f"R{i}")
+        psc.unfix(f"t{i}")
+    for c in base_curves:
+        c.fix_all()
+    for c in base_currents:
+        c.fix_all()
+
+    psc.recompute_currents()
+    btot.Bfields[0].clear_cached_properties()
+    pts = np.ascontiguousarray(s.gamma().reshape(-1, 3))
+    n = np.asarray(s.unitnormal(), dtype=np.float64).reshape(-1, 3)
+    abs_n = np.linalg.norm(s.normal().reshape(-1, 3), axis=1)
+    weights = abs_n / abs_n.size
+    B_at_pts = np.asarray(btot.B(), dtype=np.float64).reshape(-1, 3)
+    Bn = np.einsum("ij,ij->i", B_at_pts, n)
+    v_B = (n * (Bn * weights)[:, None]).reshape(-1, 3)
+
+    g1 = np.array(psc._Rt_fd_gradient(v_B, pts), dtype=float)
+    g2 = np.array(psc._Rt_fd_gradient(v_B, pts), dtype=float)
+
+    np.testing.assert_allclose(
+        g2, g1, rtol=1e-10, atol=1e-12,
+        err_msg=(
+            "Two consecutive _Rt_fd_gradient calls with identical inputs "
+            "must return identical outputs (cache-deterministic)."
+        ),
+    )
+
+    monkeypatch.setenv("SIMSOPT_PSC_PARTIAL_L_REUSE", "0")
+    g3 = np.array(psc._Rt_fd_gradient(v_B, pts), dtype=float)
+    np.testing.assert_allclose(
+        g3, g1, rtol=1e-10, atol=1e-12,
+        err_msg=(
+            "_Rt_fd_gradient output must not depend on SIMSOPT_PSC_PARTIAL_L_REUSE: "
+            "the FD loop must internally disable partial-L-reuse to be deterministic."
+        ),
+    )
+
+
 def test_taylor_combined_dofs():
     """Taylor test: perturb both TF and puck center DOFs simultaneously."""
     s, coils_tf, base_curves, base_currents, psc, btot, Jf = _make_small_setup(
@@ -2292,6 +2635,206 @@ def test_B_at_points_reduced_free_dof_path_deterministic():
     np.testing.assert_array_equal(B0, B1)
 
 
+def test_force_tf_only_forward_matches_unforced_at_init():
+    """``force_tf_only_forward()`` returns the same B as the JAX free-DoF path.
+
+    Setup: small symmetry-reduced PSC array with one free centre DoF so
+    ``B_at_points`` would normally route through the JAX free-DoF runner
+    (``B_at_points_free_reduced_jax``).  At the unperturbed initial state
+    the host-side ``_jax_Lr_chol`` / ``_jax_Q`` already encode the same
+    puck currents the free-DoF path would solve for, so the cheap
+    TF-only path must agree with the JAX free-DoF path to high precision.
+    A regression here would mean the cheap forward is silently using a
+    stale Cholesky.
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc.unfix("center_x0")
+    psc.recompute_currents()
+    assert psc._has_free_center_or_quat_dofs(), (
+        "Test fixture must have free centres for the gate to engage."
+    )
+    pts = np.asarray(psc.eval_points, dtype=float)
+
+    assert psc._force_tf_only_forward is False
+    B_jax_free = psc.B_at_points(pts)
+    with psc.force_tf_only_forward():
+        assert psc._force_tf_only_forward is True
+        B_forced = psc.B_at_points(pts)
+    assert psc._force_tf_only_forward is False
+
+    np.testing.assert_allclose(B_forced, B_jax_free, rtol=1e-10, atol=1e-12)
+
+
+def test_force_tf_only_forward_restores_flag_on_exception():
+    """The context manager restores ``_force_tf_only_forward`` even on error.
+
+    Wraps a ``B_at_points`` call inside the context and raises a synthetic
+    exception from inside the block; on exit the flag must return to its
+    pre-context value (``False`` here).  Guards against silent leaks of
+    the cheap-forward override into surrounding optimiser code.
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc.unfix("center_x0")
+    psc.recompute_currents()
+    assert psc._force_tf_only_forward is False
+    with pytest.raises(RuntimeError, match="boom"):
+        with psc.force_tf_only_forward():
+            assert psc._force_tf_only_forward is True
+            raise RuntimeError("boom")
+    assert psc._force_tf_only_forward is False
+
+
+def test_force_tf_only_forward_supports_nesting():
+    """Nested ``force_tf_only_forward`` blocks restore the previous value, not False.
+
+    Outer block sets the flag to ``True``; inner block runs while it is
+    already ``True`` and on exit must leave it ``True`` (so the outer
+    block continues to see the cheap path), not flip it back to ``False``.
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc.unfix("center_x0")
+    psc.recompute_currents()
+    assert psc._force_tf_only_forward is False
+    with psc.force_tf_only_forward():
+        assert psc._force_tf_only_forward is True
+        with psc.force_tf_only_forward():
+            assert psc._force_tf_only_forward is True
+        assert psc._force_tf_only_forward is True
+    assert psc._force_tf_only_forward is False
+
+
+def test_geometry_fd_gradient_matches_central_fd():
+    """``_geometry_fd_gradient`` matches a central-FD reference on a toy case.
+
+    Builds a 2-base-puck stellsym/nfp=2 fixture, unfixes both centres
+    and quaternions, picks a random cotangent v_B and a random
+    per-puck ``(dC, dQ)`` perturbation per puck.  The forward-FD
+    output of :meth:`_geometry_fd_gradient` (one-sided, eps=1e-5)
+    must match a hand-rolled central-FD reference (eps=1e-4) using
+    :meth:`_B_at_points_tf_only` to ~1e-3 relative — the two FD bias
+    constants are different so this is a structural agreement test,
+    not a precision test.
+
+    Also asserts that the array shape is ``(len(perturbations),)`` and
+    that DOFs are restored to their initial values after the call.
+    """
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    for i in range(2):
+        for prefix in ("center_x", "center_y", "center_z"):
+            psc.unfix(f"{prefix}{i}")
+        for prefix in ("q0_", "qi_", "qj_", "qk_"):
+            psc.unfix(f"{prefix}{i}")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    rng = np.random.default_rng(1234)
+    v_B = rng.standard_normal(pts.shape)
+    perturbations = []
+    for i in range(2):
+        dC = rng.standard_normal(3)
+        dQ = rng.standard_normal(4)
+        perturbations.append((i, dC, dQ))
+
+    name_to_initial: dict[str, float] = {}
+    for i in range(2):
+        for nm in (
+            f"center_x{i}",
+            f"center_y{i}",
+            f"center_z{i}",
+            f"q0_{i}",
+            f"qi_{i}",
+            f"qj_{i}",
+            f"qk_{i}",
+        ):
+            name_to_initial[nm] = float(psc.get(nm))
+
+    g_fd = psc._geometry_fd_gradient(v_B, pts, perturbations, eps=1e-5)
+    assert g_fd.shape == (len(perturbations),)
+
+    for nm, v in name_to_initial.items():
+        assert np.isclose(float(psc.get(nm)), v, atol=1e-12), (
+            f"DOF {nm!r} not restored after _geometry_fd_gradient"
+        )
+
+    eps_ref = 1e-4
+    g_ref = np.zeros(len(perturbations))
+    for k, (i, dC, dQ) in enumerate(perturbations):
+        center_names = (f"center_x{i}", f"center_y{i}", f"center_z{i}")
+        quat_names = (f"q0_{i}", f"qi_{i}", f"qj_{i}", f"qk_{i}")
+        c0 = np.array([float(psc.get(n)) for n in center_names])
+        q0 = np.array([float(psc.get(n)) for n in quat_names])
+        for nm, val in zip(center_names, c0 + eps_ref * dC):
+            psc.set(nm, float(val))
+        for nm, val in zip(quat_names, q0 + eps_ref * dQ):
+            psc.set(nm, float(val))
+        psc.recompute_currents()
+        B_plus = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+        for nm, val in zip(center_names, c0 - eps_ref * dC):
+            psc.set(nm, float(val))
+        for nm, val in zip(quat_names, q0 - eps_ref * dQ):
+            psc.set(nm, float(val))
+        psc.recompute_currents()
+        B_minus = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+        for nm, val in zip(center_names, c0):
+            psc.set(nm, float(val))
+        for nm, val in zip(quat_names, q0):
+            psc.set(nm, float(val))
+        psc.recompute_currents()
+        g_ref[k] = float(np.sum(v_B * (B_plus - B_minus))) / (2.0 * eps_ref)
+
+    np.testing.assert_allclose(g_fd, g_ref, rtol=2e-3, atol=1e-6)
+
+
+def test_geometry_fd_gradient_empty_returns_empty():
+    """Edge case: empty ``perturbations`` returns an empty array, no rebuilds."""
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc.unfix("center_x0")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    v_B = np.zeros_like(pts)
+    out = psc._geometry_fd_gradient(v_B, pts, [], eps=1e-5)
+    assert out.shape == (0,)
+    assert out.dtype == np.float64
+
+
+def test_geometry_fd_gradient_zero_perturbation_emits_zero():
+    """A zero ``(dC, dQ)`` perturbation must emit exactly ``0.0`` (FD of constant)."""
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc.unfix("center_x0")
+    psc.unfix("q0_0")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    v_B = np.ones_like(pts)
+    out = psc._geometry_fd_gradient(
+        v_B, pts, [(0, np.zeros(3), np.zeros(4))], eps=1e-5
+    )
+    assert out.shape == (1,)
+    np.testing.assert_allclose(out, 0.0, atol=1e-10)
+
+
+def test_geometry_fd_gradient_validates_inputs():
+    """Bad perturbation shapes / out-of-range puck indices raise informative errors."""
+    psc = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    psc.unfix("center_x0")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    v_B = np.zeros_like(pts)
+
+    with pytest.raises(IndexError, match="puck_idx=99"):
+        psc._geometry_fd_gradient(
+            v_B, pts, [(99, np.zeros(3), np.zeros(4))], eps=1e-5
+        )
+
+    with pytest.raises(ValueError, match="dC must be"):
+        psc._geometry_fd_gradient(
+            v_B, pts, [(0, np.zeros(2), np.zeros(4))], eps=1e-5
+        )
+
+    with pytest.raises(ValueError, match="dQ must be"):
+        psc._geometry_fd_gradient(
+            v_B, pts, [(0, np.zeros(3), np.zeros(3))], eps=1e-5
+        )
+
+
 def test_taylor_puck_quaternion_nfp2_stellsym_two_base_pucks():
     """Finite-difference Taylor: quaternion DoFs on two base pucks, ``nfp=2``,
     ``stellsym=True`` (symmetry-reduced :math:`L` and free-DoF JAX path).
@@ -2453,8 +2996,8 @@ def test_L_jax_blockwise_matches_numpy():
 
 
 @pytest.mark.slow
-def test_from_cylindrical_grid_smoke():
-    """from_cylindrical_grid builds radial axes and finite PSC bulk."""
+def test_from_toroidal_shell_smoke():
+    """from_toroidal_shell builds inward axes and finite PSC bulk."""
     from pathlib import Path
     from simsopt.geo import SurfaceRZFourier
     from simsopt.util import initialize_coils
@@ -2469,16 +3012,16 @@ def test_from_cylindrical_grid_smoke():
         regularization_rect(0.2, 0.2),
     )
     eval_pts = np.ascontiguousarray(s.gamma().reshape(-1, 3))
-    psc = PSCBulkArray.from_cylindrical_grid(
+    psc = PSCBulkArray.from_toroidal_shell(
         s,
         coils_tf,
         eval_pts,
-        dr=0.9,
-        dz=0.9,
+        n_theta=4,
         n_phi_slices=3,
-        d_inner=1.5,
-        d_outer=3.0,
         plasma_clearance=0.05,
+        safety=1.05,
+        puck_R=None,
+        puck_t=None,
         m_fourier=1,
         l_zernike=2,
         k_chebyshev=1,
@@ -2904,6 +3447,364 @@ def _make_symmetry_validation_array(
         eval_points=eval_pts,
         **default_psc_kwargs,
     )
+
+
+@pytest.mark.parametrize("nfp, stellsym", [(1, False), (2, True)])
+def test_fixed_field_matrix_matches_jax_path(nfp: int, stellsym: bool):
+    """The all-fixed ``M_field`` path matches the legacy JAX value path."""
+    pts = np.array(
+        [
+            [1.0, 0.05, 0.35],
+            [0.90, 0.10, 0.08],
+            [1.20, -0.03, 0.16],
+        ],
+        dtype=float,
+    )
+    psc = _make_symmetry_validation_array(
+        nfp=nfp,
+        stellsym=stellsym,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+
+    psc._fixed_bulk_operator_enabled = False
+    psc._invalidate_fixed_field_matrix()
+    B_ref = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+
+    psc._fixed_bulk_operator_enabled = True
+    psc._invalidate_fixed_field_matrix()
+    B_fast = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+
+    assert psc._M_field is not None
+    np.testing.assert_allclose(B_fast, B_ref, rtol=1.0e-9, atol=1.0e-12)
+
+
+def test_fixed_field_matrix_disabled_when_any_puck_dof_free():
+    """The fixed-field matrix is unreachable once any puck geometry DOF is free."""
+    pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]], dtype=float)
+    psc = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+
+    _ = psc._B_at_points_tf_only(pts)
+    assert psc._M_field is not None
+
+    psc.unfix("center_x0")
+    assert psc._fixed_field_matrix_for(pts, use_eigf=True) is None
+
+
+def test_fixed_field_matrix_invalidates_on_set_points():
+    """``PassiveBulkField.set_points_cart`` rebuilds the cached ``M_field``."""
+    pts0 = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]], dtype=float)
+    pts1 = np.array(
+        [[1.0, 0.05, 0.35], [0.90, 0.10, 0.08], [1.20, -0.03, 0.16]],
+        dtype=float,
+    )
+    psc = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts0,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+
+    bs = psc.biot_savart
+    bs.set_points_cart(np.ascontiguousarray(pts0))
+    _ = bs.B()
+    key0 = psc._M_field_key
+    M0 = psc._M_field
+    assert M0 is not None
+
+    bs.set_points_cart(np.ascontiguousarray(pts1))
+    _ = bs.B()
+    key1 = psc._M_field_key
+    M1 = psc._M_field
+    assert M1 is not None
+    assert key1 != key0
+    assert M1 is not M0
+    assert M1.shape[0] == 3 * pts1.shape[0]
+
+
+def test_fixed_field_matrix_warm_call_is_fast():
+    """A warm ``_B_at_points_tf_only`` call must not rebuild ``M_field``.
+
+    The plan's acceptance bound is < 250 ms on a small problem; locally
+    a warm call is sub-millisecond.  The generous threshold guards
+    against the previous regression (full rebuild on every call) while
+    tolerating slow CI workers.
+    """
+    pts = np.array(
+        [[1.0, 0.05, 0.35], [0.90, 0.10, 0.08], [1.20, -0.03, 0.16]],
+        dtype=float,
+    )
+    psc = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+
+    _ = psc._B_at_points_tf_only(pts)
+    assert psc._M_field is not None
+    M_id_before = id(psc._M_field)
+
+    t0 = time.perf_counter()
+    _ = psc._B_at_points_tf_only(pts)
+    elapsed_ms = 1.0e3 * (time.perf_counter() - t0)
+
+    assert id(psc._M_field) == M_id_before, (
+        "Warm call rebuilt M_field; cache key is unstable."
+    )
+    assert elapsed_ms < 250.0, (
+        f"Warm _B_at_points_tf_only took {elapsed_ms:.1f} ms (>250 ms); "
+        "expected a sub-millisecond cache hit."
+    )
+
+
+def test_fixed_field_matrix_fp32_parity():
+    """fp32 storage matches fp64 within a loose tolerance."""
+    pts = np.array(
+        [[1.0, 0.05, 0.35], [0.90, 0.10, 0.08], [1.20, -0.03, 0.16]],
+        dtype=float,
+    )
+    psc_fp64 = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+    psc_fp32 = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+        fixed_field_matrix_dtype="float32",
+    )
+
+    B64 = np.asarray(psc_fp64._B_at_points_tf_only(pts), dtype=np.float64)
+    B32 = np.asarray(psc_fp32._B_at_points_tf_only(pts), dtype=np.float64)
+    assert psc_fp32._M_field is not None
+    assert psc_fp32._M_field.dtype == np.float32
+    np.testing.assert_allclose(B32, B64, rtol=1.0e-4, atol=1.0e-4)
+
+
+def test_save_pucks_comsol_bundle_writes_expected_files():
+    """Manifest + one CSV per replica puck are created."""
+    pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]], dtype=float)
+    psc = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        info = save_pucks_comsol_bundle(psc, out, prefix="testpucks")
+        n_p = len(psc._all_pucks)
+        assert info["manifest_path"] == out / "testpucks_geometry.json"
+        assert info["manifest_path"].is_file()
+        assert len(info["csv_paths"]) == n_p
+        for p in range(n_p):
+            assert (out / f"testpucks_{p:03d}_K.csv").is_file()
+
+
+def test_save_pucks_comsol_bundle_manifest_shape():
+    """JSON ``pucks[*]`` matches ``_all_pucks`` and carries required keys."""
+    pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]], dtype=float)
+    psc = _make_symmetry_validation_array(
+        nfp=2,
+        stellsym=True,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+    with tempfile.TemporaryDirectory() as td:
+        save_pucks_comsol_bundle(psc, td, prefix="geom")
+        man = json.loads(Path(td, "geom_geometry.json").read_text(encoding="utf-8"))
+    n_p = len(psc._all_pucks)
+    assert man["schema_version"] == 1
+    assert man["n_pucks"] == n_p
+    assert len(man["pucks"]) == n_p
+    assert man["nfp"] == 2 and man["stellsym"] is True
+    for i, row in enumerate(man["pucks"]):
+        assert set(row.keys()) >= {
+            "id",
+            "base_id",
+            "R",
+            "t",
+            "center",
+            "axis",
+            "quat",
+            "n_quad",
+            "csv",
+        }
+        c, ax, R, t = psc._all_pucks[i]
+        np.testing.assert_allclose(row["R"], float(R), rtol=0, atol=1e-15)
+        np.testing.assert_allclose(row["t"], float(t), rtol=0, atol=1e-15)
+        np.testing.assert_allclose(row["center"], np.asarray(c).ravel()[:3], rtol=1e-15)
+        assert int(row["base_id"]) == int(np.asarray(psc._all_puck_base_indices).reshape(-1)[i])
+
+
+def test_save_pucks_comsol_bundle_csv_rows_match_quadrature():
+    """Per-CSV row counts partition global quadrature."""
+    pts = np.array([[1.0, 0.05, 0.35]], dtype=float)
+    psc = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=3,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=3,
+        n_phi=4,
+        n_z=2,
+    )
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        save_pucks_comsol_bundle(psc, base, prefix="q")
+        nq = int(psc._quad_points.shape[0])
+        total = 0
+        for i in range(len(psc._all_pucks)):
+            r0, r1 = psc._quad_row_ranges[i]
+            path = base / f"q_{i:03d}_K.csv"
+            lines = path.read_text(encoding="utf-8").splitlines()
+            data_lines = [
+                ln
+                for ln in lines
+                if ln.strip() and not ln.startswith("%") and not ln.startswith("x,")
+            ]
+            assert len(data_lines) == (r1 - r0)
+            total += len(data_lines)
+        assert total == nq
+
+
+def test_save_pucks_comsol_bundle_K_matches_get_shell_currents():
+    """Exported ``K`` matches :meth:`PSCBulkArray.get_shell_currents`."""
+    pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]], dtype=float)
+    psc = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+    K_exp, _ = psc.get_shell_currents()
+    K_exp = np.asarray(K_exp, dtype=np.float64)
+    with tempfile.TemporaryDirectory() as td:
+        save_pucks_comsol_bundle(psc, td, prefix="kcheck")
+        p0 = Path(td) / "kcheck_000_K.csv"
+        rows: list[list[float]] = []
+        for ln in p0.read_text(encoding="utf-8").splitlines():
+            if ln.startswith("%") or ln.startswith("x,"):
+                continue
+            if not ln.strip():
+                continue
+            vals = [float(x) for x in ln.split(",")]
+            rows.append(vals)
+    block = np.asarray(rows, dtype=np.float64)
+    K_csv = block[:, -3:]
+    r0, r1 = psc._quad_row_ranges[0]
+    np.testing.assert_allclose(K_csv, K_exp[r0:r1], rtol=1e-14, atol=1e-14)
+
+
+def test_save_pucks_vtk_bundle_writes_comsol_bundle():
+    """stellcoilbench ``save_pucks_vtk_bundle`` emits COMSOL files when enabled."""
+    stellcoilbench = pytest.importorskip(
+        "stellcoilbench", reason="stellcoilbench not installed"
+    )
+    _ = stellcoilbench  # quiet linters
+    from stellcoilbench.coil_optimization._bulk_passive import save_pucks_vtk_bundle
+
+    pts = np.array([[1.0, 0.05, 0.35], [0.90, 0.10, 0.08]], dtype=float)
+    psc = _make_symmetry_validation_array(
+        nfp=1,
+        stellsym=False,
+        n_base=2,
+        eval_pts=pts,
+        m_fourier=1,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=5,
+        n_z=3,
+    )
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        save_pucks_vtk_bundle(
+            psc,
+            out,
+            stem="trial",
+            write_field_grid=False,
+            save_comsol=True,
+        )
+        assert (out / "pucks_trial_geometry.json").is_file()
+        assert (out / "pucks_trial_000_K.csv").is_file()
+        # default-on: COMSOL bundle present
+        no_comsol = out / "no_comsol"
+        no_comsol.mkdir(parents=True)
+        save_pucks_vtk_bundle(
+            psc,
+            no_comsol,
+            stem="x",
+            write_field_grid=False,
+            save_comsol=False,
+        )
+        assert not (no_comsol / "pucks_x_geometry.json").exists()
 
 
 def _rodrigues_rotate_vector(
@@ -4326,7 +5227,7 @@ def test_detect_tf_symmetry_matches_coils_via_symmetries_ordering(
     ``n_base_coils == 1``, so every multi-coil TF set produced by
     :func:`coils_via_symmetries` (for example the
     ``SchuettHennebergQAnfp2`` set used in
-    ``passive_bulks_cylindrical_grid_optimization.py``) silently
+    ``passive_bulks_toroidal_shell_optimization.py``) silently
     dropped to the expensive full-``L`` path.
     """
     from simsopt.field.coil import Coil, coils_via_symmetries
@@ -4378,7 +5279,7 @@ def test_detect_tf_symmetry_matches_coils_via_symmetries_ordering(
 
 # ======================================================================
 # Phase A: Taylor-tests for TF curve + current DOFs in the regime that
-# reproduces the failing ``passive_bulks_cylindrical_grid_optimization``
+# reproduces the failing ``passive_bulks_toroidal_shell_optimization``
 # example.  The existing ``test_taylor_*`` coverage all uses
 # ``n_base_pucks == 1`` and/or only perturbs the TF current DOF, which
 # happens to silence the constant-offset VJP bug reproduced below.
@@ -4398,7 +5299,7 @@ def _make_multi_coil_multi_puck_setup(
     """Build a multi-base-TF-coil + multi-base-puck setup for Taylor tests.
 
     This is the minimal repro of the regime exercised by
-    ``examples/3_Advanced/passive_bulks_cylindrical_grid_optimization.py``
+    ``examples/3_Advanced/passive_bulks_toroidal_shell_optimization.py``
     (multiple base TF curves through ``coils_via_symmetries``, multiple
     base pucks, ``nfp=2, stellsym=True``) but scaled down enough to run
     inside the unit-test budget.
@@ -5880,6 +6781,50 @@ def test_pair_replica_chunk_constructor_arg_matches_env(
     assert psc_ref._resolved_pair_replica_chunk() == 2
 
 
+def test_pair_replica_chunk_auto_matches_manual_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AUTO heuristic matches the legacy replica ``vmap`` when explicitly disabled."""
+
+    monkeypatch.delenv("SIMSOPT_PSC_PAIR_REPLICA_CHUNK", raising=False)
+    monkeypatch.setenv("SIMSOPT_PSC_PAIR_REPLICA_CHUNK_AUTO", "1")
+    psc_auto = _make_replica_chunk_fixture()
+    c_auto = int(psc_auto._resolved_pair_replica_chunk())
+    n_all_auto = len(psc_auto._all_pucks)
+    assert c_auto <= n_all_auto
+
+    B_auto, grad_auto = _b_and_grad(psc_auto)
+
+    monkeypatch.setenv("SIMSOPT_PSC_PAIR_REPLICA_CHUNK_AUTO", "0")
+    monkeypatch.delenv("SIMSOPT_PSC_PAIR_REPLICA_CHUNK", raising=False)
+    psc_legacy = _make_replica_chunk_fixture()
+    assert psc_legacy._resolved_pair_replica_chunk() == 0
+    B_legacy, grad_legacy = _b_and_grad(psc_legacy)
+
+    np.testing.assert_allclose(B_auto, B_legacy, rtol=1e-12, atol=1e-14)
+    np.testing.assert_allclose(grad_auto, grad_legacy, rtol=1e-12, atol=1e-14)
+
+
+def test_maybe_prime_psc_reduced_sets_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import simsopt.field.psc_bulk as pb
+
+    monkeypatch.setenv("SIMSOPT_JAX_PRIME", "1")
+    monkeypatch.setenv("SIMSOPT_JAX_PRIME_REDUCED", "1")
+    pb._PSC_JAX_PRIME_ONCE = False
+    psc = _make_replica_chunk_fixture()
+    psc.recompute_currents()
+    pb._maybe_prime_psc_jax_kernels(psc)
+    assert pb._PSC_JAX_PRIME_ONCE is True
+
+
+def test_B_at_points_moving_puck_mask_shape_guard() -> None:
+    psc = _make_small_setup()[4]
+    pts = np.asarray(psc.eval_points, dtype=float).reshape(-1, 3)
+    bad = np.zeros(int(psc._n_base_pucks) + 1, dtype=bool)
+    with pytest.raises(ValueError):
+        _ = psc.B_at_points(pts, moving_puck_mask=bad)
+
+
 # ======================================================================
 # Cross-rebuild timing history (PSCBulkArray.get_timing_history)
 # ======================================================================
@@ -6000,4 +6945,261 @@ def test_timing_history_reset_clears_rows_and_counter(
     assert {int(r["rebuild_idx"]) for r in rows} == {0}, (
         "After reset, the next rebuild must restart at rebuild_idx=0."
     )
+
+
+# ======================================================================
+# May 2026 passive-bulk speedup audit — mandated parity / regression hooks
+# ======================================================================
+
+
+def test_recompute_currents_tf_only_step_records_rebuild_short_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit L1: TF-only dof bumps enter ``_rebuild`` with no puck motion.
+
+    After an initial factorisation exists, perturbing base TF coil geometry
+    alone must hit :meth:`PSCBulkArray._rebuild`'s ``rebuild_short_circuit``
+    branch (timing phase ``rebuild_short_circuit``) rather than rebuilding the
+    passive-shell inductance kernel.
+    """
+    monkeypatch.setenv("SIMSOPT_PSCBULK_TIMING", "1")
+    monkeypatch.delenv("SIMSOPT_PSC_PARTIAL_L_REUSE", raising=False)
+    _, coils_tf, _, _, psc, _, _ = _make_small_setup(n_base_pucks=2)
+    psc.reset_timing_history()
+    psc.recompute_currents()
+
+    curve = coils_tf[0].curve
+    x0 = np.asarray(curve.x, dtype=float).copy()
+    curve.x = x0 + 1e-6 * np.linspace(
+        -1.0, 1.0, num=int(x0.size), dtype=float
+    )
+    psc.recompute_currents()
+
+    phases = [str(r.get("phase", "")) for r in psc.get_timing_history()]
+    assert "rebuild_short_circuit" in phases, (
+        "Expected TF-only rebuild short-circuit timing phase; got phases "
+        f"{sorted(set(phases))}."
+    )
+
+
+def test_shell_eigenfloor_chol_from_eig_matches_pure_dual_eigh() -> None:
+    """Audit L5: fused-host ``eigh`` + eigenfloor Cholesky matches pure path."""
+    rng = np.random.default_rng(2026)
+    n = 14
+    a = rng.standard_normal((n, n))
+    lr = np.asarray(0.5 * (a.T @ a + a @ a.T), dtype=np.float64)
+    lam_np, v_np = np.linalg.eigh(lr)
+    thr = 1e-9
+    jit = 1e-11
+    chol_from_eig = np.asarray(
+        shell_eigenfloor_cholesky_from_eig(
+            jnp.asarray(lam_np),
+            jnp.asarray(v_np),
+            threshold=thr,
+            jitter=jit,
+        ),
+        dtype=np.float64,
+    )
+    chol_pure = np.asarray(
+        shell_eigenfloor_cholesky_pure(jnp.asarray(lr), threshold=thr, jitter=jit),
+        dtype=np.float64,
+    )
+    np.testing.assert_allclose(chol_from_eig, chol_pure, rtol=1e-12, atol=1e-12)
+
+
+def test_exact_disc_faces_disc_face_sym_audit_L6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit L6 routing + overlay wiring for ``exact_disc_faces``.
+
+    With :envvar:`SIMSOPT_PSC_DISC_FACE_SYM` unset, enabling ``exact_disc_faces``
+    forces the dense inductance assembler (``disc_sym_reduced_ok`` false).
+    With ``SYM=1``, reduction stays active and the overlay measurably perturbs the
+    folded ``L_work`` relative to the purely numerical symmetric-reduced assembly.
+    """
+    eval_pts = np.array(
+        [
+            [1.0, 0.05, 0.35],
+            [0.90, 0.10, 0.08],
+        ],
+        dtype=float,
+    )
+
+    monkeypatch.setenv("SIMSOPT_PSC_DISC_FACE_SYM", "0")
+    psc_dense_route = _make_symmetry_validation_array(
+        nfp=2,
+        stellsym=False,
+        n_base=1,
+        eval_pts=eval_pts,
+    )
+    psc_dense_route.exact_disc_faces = True
+    psc_dense_route.n_radial_disc = 16
+    psc_dense_route._rebuild()
+    assert not psc_dense_route._reduced_active
+
+    monkeypatch.setenv("SIMSOPT_PSC_DISC_FACE_SYM", "1")
+    psc = _make_symmetry_validation_array(
+        nfp=2,
+        stellsym=False,
+        n_base=1,
+        eval_pts=eval_pts,
+    )
+    psc.exact_disc_faces = False
+    psc._rebuild()
+    assert psc._reduced_active
+    l_num = np.asarray(psc._L_work, dtype=np.float64).copy()
+
+    psc.exact_disc_faces = True
+    psc.n_radial_disc = 16
+    psc._rebuild()
+    assert psc._reduced_active
+    l_exact = np.asarray(psc._L_work, dtype=np.float64)
+    assert np.all(np.isfinite(l_exact))
+    diff = float(np.linalg.norm(l_exact - l_num, ord="fro"))
+    denom = float(np.linalg.norm(l_num, ord="fro")) + 1e-300
+    assert diff > 1e-12 * denom, (
+        "Semi-analytic ``exact_disc_faces`` overlay must perturb ``L_work`` "
+        f"beyond numerical noise; relative Frobenius change was {diff / denom:g}."
+    )
+
+
+def test_partial_update_mutual_blocks_jax_matches_numpy_pair_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit L7: JAX row kernel matches sequential NumPy mutual assembly."""
+    monkeypatch.delenv("SIMSOPT_DISABLE_JAX", raising=False)
+    rng = np.random.default_rng(17)
+    nq_i, nq_j, nd = 6, 7, 4
+    n_all = 9
+    delta_reg = 1e-8
+    adaptive_self_reg = True
+
+    k_i = rng.standard_normal((nq_i, nd, 3))
+    pts_i = rng.standard_normal((nq_i, 3))
+    w_i = np.abs(rng.standard_normal(nq_i)) + 1e-3
+
+    k_stack = rng.standard_normal((n_all, nq_j, nd, 3))
+    pts_stack = rng.standard_normal((n_all, nq_j, 3))
+    w_stack = np.abs(rng.standard_normal((n_all, nq_j))) + 1e-3
+
+    blocks_jax = np.asarray(
+        PSCBulkArray._partial_update_mutual_blocks_vmap_row(
+            jnp.asarray(k_i),
+            jnp.asarray(pts_i),
+            jnp.asarray(w_i),
+            jnp.asarray(k_stack),
+            jnp.asarray(pts_stack),
+            jnp.asarray(w_stack),
+            float(delta_reg),
+            adaptive_self_reg,
+        ),
+        dtype=np.float64,
+    )
+
+    blocks_np = np.zeros((n_all, nd, nd), dtype=np.float64)
+    for j in range(n_all):
+        blocks_np[j] = PSCBulkArray._pair_block_inductance(
+            k_i,
+            pts_i,
+            w_i,
+            k_stack[j],
+            pts_stack[j],
+            w_stack[j],
+            float(delta_reg),
+            adaptive_self_reg,
+        )
+
+    np.testing.assert_allclose(blocks_jax, blocks_np, rtol=1e-11, atol=1e-13)
+
+
+def test_partial_L_incremental_jax_matches_numpy_when_reuse_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit L7 (integration): partial ``L_base`` update parity JAX vs NumPy."""
+    monkeypatch.setenv("SIMSOPT_PSC_PARTIAL_L_REUSE", "1")
+    monkeypatch.delenv("SIMSOPT_PSC_LCACHE", raising=False)
+
+    bump = 2e-4
+    # Default reuse threshold is ``0.3`` changed-puck fraction; use four bases so a
+    # single quaternion bump touches only one puck within the incremental gate.
+    n_base = 4
+
+    monkeypatch.setenv("SIMSOPT_PSC_PARTIAL_L_JAX", "0")
+    psc_np = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=n_base)
+    psc_np.recompute_currents()
+    q0_np = float(psc_np.get("q0_0"))
+    psc_np.set("q0_0", q0_np + bump)
+    psc_np.recompute_currents()
+    l_np = np.asarray(psc_np._L_red, dtype=np.float64).copy()
+    assert int(getattr(psc_np, "_partial_L_call_count", 0)) >= 1
+
+    monkeypatch.setenv("SIMSOPT_PSC_PARTIAL_L_JAX", "1")
+    psc_jax = _make_symmetry_validation_array(nfp=2, stellsym=False, n_base=n_base)
+    psc_jax.recompute_currents()
+    q0_j = float(psc_jax.get("q0_0"))
+    psc_jax.set("q0_0", q0_j + bump)
+    psc_jax.recompute_currents()
+    l_jax = np.asarray(psc_jax._L_red, dtype=np.float64).copy()
+    assert int(getattr(psc_jax, "_partial_L_call_count", 0)) >= 1
+
+    np.testing.assert_allclose(l_np, l_jax, rtol=1e-10, atol=1e-11)
+
+
+def test_rt_analytic_combo_stub_matches_fd_gradient(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit L8: analytic hook remains FD-backed until Jacobian wiring lands."""
+    monkeypatch.setenv("SIMSOPT_PSC_RT_ANALYTIC", "1")
+    _s, _coils_tf, _bc, _bcc, psc, _btot, _jf = _make_small_setup()
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=np.float64).reshape(-1, 3)
+    v_b = np.ones_like(pts)
+    g_combo = np.asarray(psc._Rt_analytic_directional_combo(v_b, pts), dtype=np.float64)
+    g_fd = np.asarray(psc._Rt_fd_gradient(v_b, pts), dtype=np.float64)
+    np.testing.assert_allclose(g_combo, g_fd, rtol=0.0, atol=0.0)
+
+
+def test_null_space_auto_matches_dense_numpy_projector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audit L10: Lanczos branch spans the same kept subspace as dense ``eigh``.
+
+    :func:`_null_space_projection_iterative` requests only the largest
+    ``k < n`` Ritz pairs.  Random full-rank PSD matrices therefore need not
+    match dense truncation; here ``L`` is diagonal with a modest-dimensional
+    well-separated spike above the eigenfloor so every kept mode lies in the
+    recovered Ritz set.
+    """
+    monkeypatch.delenv("SIMSOPT_PSC_BIG_CHOL", raising=False)
+    monkeypatch.setenv("SIMSOPT_PSC_NULL_SPACE_AUTO", "1")
+    monkeypatch.setenv("SIMSOPT_PSC_NULL_SPACE_AUTO_THRESHOLD", "48")
+
+    n = 120
+    n_signal = 12
+    diag = np.zeros(n, dtype=np.float64)
+    diag[:n_signal] = np.linspace(2.0, 3.0, num=n_signal)
+    l_mat = np.diag(diag)
+    threshold = 1e-10
+
+    q_auto = np.asarray(null_space_projection_matrix(l_mat, threshold=threshold))
+
+    monkeypatch.setenv("SIMSOPT_PSC_NULL_SPACE_AUTO", "0")
+    q_dense = np.asarray(null_space_projection_matrix(l_mat, threshold=threshold))
+
+    assert q_auto.shape == q_dense.shape == (n, n_signal)
+    p_auto = q_auto @ q_auto.T
+    p_dense = q_dense @ q_dense.T
+    np.testing.assert_allclose(p_auto, p_dense, rtol=1e-10, atol=1e-11)
+
+
+def test_try_warm_handoff_from_prev_reuses_factors_when_geometry_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Audit L11: FC-style warm handoff copies cached factorisations."""
+    monkeypatch.setenv("SIMSOPT_FC_WARM_HANDOFF", "1")
+    prev = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    prev.recompute_currents()
+
+    inst = _make_symmetry_validation_array(nfp=2, stellsym=True, n_base=2)
+    inst.recompute_currents()
+
+    ok = bool(inst.try_warm_handoff_from_prev(prev))
+    assert ok
+    assert inst._jax_Lr_chol is prev._jax_Lr_chol
 

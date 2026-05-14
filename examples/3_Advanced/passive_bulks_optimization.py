@@ -32,9 +32,9 @@ See also:
 
 * ``passive_bulks_winding_surface_optimization.py`` — pucks on a plasma-offset
   winding surface via :meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_winding_surface`.
-* ``passive_bulks_cylindrical_grid_optimization.py`` — pucks on a finite-shape-aware
-  ``(r, φ, z)`` lattice via
-  :meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_cylindrical_grid`.
+* ``passive_bulks_toroidal_shell_optimization.py`` — pucks on a single
+  axisymmetric toroidal shell via
+  :meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_toroidal_shell`.
 """
 
 import os

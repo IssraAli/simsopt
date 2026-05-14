@@ -1,11 +1,86 @@
+import os
+
 import numpy as np
 
 import simsoptpp as sopp
 from .._core.optimizable import Optimizable
-from .._core.derivative import derivative_dec
+from .._core.derivative import Derivative, derivative_dec
 
 
 __all__ = ["SquaredFlux"]
+
+
+_SQUARED_FLUX_FP32_ENV_VAR = "SIMSOPT_SQUARED_FLUX_FP32"
+_SQUARED_FLUX_FP32_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+# Module-level latch so the opt-in fp32 path only emits its banner once per
+# process. Reset only by re-importing the module (cheap; intended for run.log
+# visibility, not for fine-grained diagnostics).
+_squared_flux_fp32_logged = False
+
+
+def _squared_flux_fp32_enabled() -> bool:
+    """Return whether the SquaredFlux fp32 mixed-precision gradient is opted in.
+
+    The opt-in is controlled by the ``SIMSOPT_SQUARED_FLUX_FP32`` environment
+    variable. It is interpreted as a truthy value if (case-insensitively, after
+    stripping surrounding whitespace) it equals one of ``{"1", "true", "yes",
+    "on"}``. Any other value (including unset, empty string, or ``"0"``) leaves
+    the default fp64 gradient behaviour in place.
+
+    Returns:
+        ``True`` when the environment variable is set to a truthy value, in
+        which case :meth:`SquaredFlux.dJ` should down-cast its intermediate
+        cotangent arrays to ``float32`` before invoking the field VJP and
+        up-cast the resulting derivative back to ``float64``. ``False``
+        otherwise.
+    """
+    raw = os.environ.get(_SQUARED_FLUX_FP32_ENV_VAR)
+    if raw is None:
+        return False
+    return raw.strip().lower() in _SQUARED_FLUX_FP32_TRUTHY
+
+
+def _maybe_log_squared_flux_fp32_active() -> None:
+    """Emit a one-shot info banner the first time the fp32 dJ path executes.
+
+    Side-effects only: prints to stdout (which `run.log` captures for the
+    benchmark harness) and flips a module-level latch so subsequent
+    :meth:`SquaredFlux.dJ` calls in the same process stay quiet.
+    """
+    global _squared_flux_fp32_logged
+    if _squared_flux_fp32_logged:
+        return
+    _squared_flux_fp32_logged = True
+    print(
+        f"[SquaredFlux] {_SQUARED_FLUX_FP32_ENV_VAR}=1 active: "
+        "computing dJdB in float32 and up-casting field VJP result back to float64.",
+        flush=True,
+    )
+
+
+def _upcast_derivative_to_fp64(deriv: Derivative) -> Derivative:
+    """Up-cast every entry of a :class:`Derivative` to ``float64`` in-place.
+
+    Used by the SquaredFlux fp32 gradient path so that the gradient handed
+    back to the optimizer's parameter vector stays in fp64 even when the
+    field VJP was driven with an fp32 cotangent (and therefore returned
+    fp32-typed dof-derivative arrays).
+
+    Args:
+        deriv: The :class:`Derivative` returned by ``self.field.B_vjp(...)``
+            under the fp32 path.
+
+    Returns:
+        The same :class:`Derivative` instance, with each value array replaced
+        by an fp64 copy when its dtype was not already ``np.float64``.
+    """
+    data = deriv.data
+    for k, v in list(data.items()):
+        arr = np.asarray(v)
+        if arr.dtype != np.float64:
+            data[k] = arr.astype(np.float64, copy=False)
+    return deriv
 
 
 class SquaredFlux(Optimizable):
@@ -76,13 +151,26 @@ class SquaredFlux(Optimizable):
 
     @derivative_dec
     def dJ(self):
-        n = self.surface.normal()
+        fp32 = _squared_flux_fp32_enabled()
+        if fp32:
+            _maybe_log_squared_flux_fp32_active()
+
+            def _cast(a):
+                """Down-cast ``a`` to ``np.float32`` for the fp32 dJdB path."""
+                return np.asarray(a, dtype=np.float32)
+        else:
+
+            def _cast(a):
+                """Identity passthrough for the default fp64 dJdB path."""
+                return a
+
+        n = _cast(self.surface.normal())
         absn = np.linalg.norm(n, axis=2)
         unitn = n * (1.0 / absn)[:, :, None]
-        Bcoil = self.field.B().reshape(n.shape)
+        Bcoil = _cast(self.field.B().reshape(n.shape))
         Bcoil_n = np.sum(Bcoil * unitn, axis=2)
         if self.target is not None:
-            B_n = Bcoil_n - self.target
+            B_n = Bcoil_n - _cast(self.target)
         else:
             B_n = Bcoil_n
 
@@ -116,7 +204,12 @@ class SquaredFlux(Optimizable):
             raise ValueError("Should never get here")
 
         dJdB = dJdB.reshape((-1, 3))
+        if fp32:
+            dJdB = np.ascontiguousarray(dJdB, dtype=np.float32)
         if np.isclose(self.J(), 0.0, atol=1e-10, rtol=1e-10):
-            return self.field.B_vjp(np.zeros_like(dJdB))
+            deriv = self.field.B_vjp(np.zeros_like(dJdB))
         else:
-            return self.field.B_vjp(dJdB)
+            deriv = self.field.B_vjp(dJdB)
+        if fp32:
+            _upcast_derivative_to_fp64(deriv)
+        return deriv

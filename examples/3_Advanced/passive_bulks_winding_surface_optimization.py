@@ -30,7 +30,7 @@ coils, pucks). No VTK I/O during ``minimize`` so the loop stays near the cost of
 
 Requirements: JAX, pyevtk (optional, for VTK output).
 
-Companion: ``passive_bulks_cylindrical_grid_optimization.py`` (cylindrical ``(r,φ,z)`` lattice).
+Companion: ``passive_bulks_toroidal_shell_optimization.py`` (single axisymmetric toroidal shell).
 """
 
 import os

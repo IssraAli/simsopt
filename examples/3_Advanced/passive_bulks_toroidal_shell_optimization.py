@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 r"""
-Coupled optimization of TF coils with passive bulk pucks on a **cylindrical
-``(r, φ, z)`` lattice** with radial orientation
-(:meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_cylindrical_grid`).
+Coupled optimization of TF coils with passive bulk pucks on a **single
+axisymmetric toroidal shell** that envelops the plasma, with each puck axis
+pointing **inward** toward the magnetic axis
+(:meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_toroidal_shell`).
 
 This example uses the **reactor-scale** Schuett–Henneberg QA equilibrium
 (``wout_schuett_henneberg_nfp2_QA.nc``) and TF initialization matching
@@ -44,7 +45,7 @@ from scipy.optimize import minimize
 from simsopt.field import BiotSavart, coils_to_vtk
 from simsopt.field.psc_bulk import PSCBulkArray
 from simsopt.field.magneticfield import MagneticFieldSum
-from simsopt.field.puck_init import cylindrical_grid_pucks
+from simsopt.field.puck_init import toroidal_shell_pucks
 from simsopt.field.selffield import regularization_rect
 from simsopt.geo import CurveLength, SurfaceRZFourier
 from simsopt.objectives import SquaredFlux, Weight
@@ -52,7 +53,7 @@ from simsopt.util import initialize_coils
 
 OUT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "passive_bulks_cylindrical_grid_optimization_out",
+    "passive_bulks_toroidal_shell_optimization_out",
 )
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -109,8 +110,8 @@ base_curves_tf, _curves_tf, coils_tf, base_currents_tf = initialize_coils(
 )
 
 # ---------------------------------------------------------------------------
-# 3. Passive bulk pucks on a cylindrical (r, φ, z) lattice (radial axes); all puck
-#    DOFs fixed — only TF coils are optimized.
+# 3. Passive bulk pucks on a single axisymmetric toroidal shell (inward axes);
+#    all puck DOFs fixed — only TF coils are optimized.
 # ---------------------------------------------------------------------------
 eval_points = np.ascontiguousarray(s.gamma().reshape(-1, 3))
 
@@ -172,19 +173,16 @@ def _drop_symm_overlapping_base_pucks(
     return centers[keep], axes[keep], radii[keep], thicknesses[keep]
 
 
-centers, axes, radii, thicknesses = cylindrical_grid_pucks(
+centers, axes, radii, thicknesses = toroidal_shell_pucks(
     s,
-    dr=0.7,
-    dz=1.0,
+    n_theta=8,
     n_phi=2,
-    z_min=-3.5,
-    z_max=3.5,
-    d_inner=1.2,
-    d_outer=2.6,
+    plasma_clearance=0.6,
+    safety=1.05,
     puck_R=0.30,
     puck_t=0.45,
-    plasma_clearance=0.1,
     nfp=nfp,
+    stellsym=stellsym,
 )
 centers, axes, radii, thicknesses = _drop_symm_overlapping_base_pucks(
     centers,
