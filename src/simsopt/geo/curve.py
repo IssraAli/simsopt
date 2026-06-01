@@ -1224,23 +1224,38 @@ def _setup_uniform_grid_in_bounding_box(s_outer, Nx, Ny, Nz, Nmin_factor=2.01):
     if nfp != 1:
         x_min = 0.0
 
-    dx = (x_max - x_min) / (Nx - 1)  # x \in [x_min, x_max], x_min = 0.0 if nfp != 1
-    dy = (y_max) / (Ny - 1)  # y \in [0, y_max]
-    # Z-grid spacing should be symmetric around z = 0 to be able
-    # to properly impose stellarator symmetry
-    dz = 2 * z_max / (Nz - 1)  # z \in [-z_max, z_max]
-
     # Shift by dx / 2.0 to the right and dy / 2.0 to the top to continue to have
     # dx and dy spacing between points on either side of a symmetry plane.
-    X = np.linspace(dx / 2.0 + x_min, x_max - dx / 2.0, Nx, endpoint=True)
-    Y = np.linspace(dy / 2.0 + y_min, y_max - dy / 2.0, Ny, endpoint=True)
-    Z = np.linspace(-z_max, z_max, Nz, endpoint=True)
+    if Nx > 1:
+        dx = (x_max - x_min) / (Nx - 1)
+        X = np.linspace(dx / 2.0 + x_min, x_max - dx / 2.0, Nx, endpoint=True)
+    else:
+        dx = x_max - x_min
+        X = np.array([0.5 * (x_min + x_max)])
+    if Ny > 1:
+        dy = y_max / (Ny - 1)
+        Y = np.linspace(dy / 2.0 + y_min, y_max - dy / 2.0, Ny, endpoint=True)
+    else:
+        dy = y_max
+        Y = np.array([0.5 * y_max])
+    # Z-grid spacing should be symmetric around z = 0 to be able
+    # to properly impose stellarator symmetry.  Nz == 1 is a single
+    # midplane layer (used by dense DF grids with n_radial == 1).
+    if Nz > 1:
+        dz = 2 * z_max / (Nz - 1)
+        Z = np.linspace(-z_max, z_max, Nz, endpoint=True)
+    else:
+        Z = np.array([0.0])
+        dz = min(dx, dy)
 
     # Now recompute the grid spacing (for setting the coil radius R)
     # since we have shifted the end points of the grid.
-    dx = X[1] - X[0]
-    dy = Y[1] - Y[0]
-    dz = Z[1] - Z[0]
+    if len(X) > 1:
+        dx = X[1] - X[0]
+    if len(Y) > 1:
+        dy = Y[1] - Y[0]
+    if len(Z) > 1:
+        dz = Z[1] - Z[0]
     Nmin = min(dx, min(dy, dz))
 
     # Coils are now spaced so that every coil of radius R is at least 2R away from the next coil'

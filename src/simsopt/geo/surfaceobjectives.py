@@ -18,6 +18,7 @@ __all__ = [
     "Iotas",
     "MajorRadius",
     "NonQuasiSymmetricRatio",
+    "NonQuasiSymmetricRatioHelical",
     "BoozerResidual",
     "AspectRatio",
 ]
@@ -1025,6 +1026,301 @@ class NonQuasiSymmetricRatio(Optimizable):
         )
         dJ_by_dc = (denom * dnum_by_dc - num * ddenom_by_dc) / denom**2
         return dJ_by_dc
+
+
+class NonQuasiSymmetricRatioHelical(Optimizable):
+    r"""
+    Generalisation of :class:`NonQuasiSymmetricRatio` to arbitrary helicity ``(M, N)``.
+
+    Defines the helical Boozer angle
+
+    .. math::
+
+        \alpha = M\,\theta_B - N\,\varphi_B
+
+    and the (dS-weighted) helical projection
+
+    .. math::
+
+        B_{\text{QS}}(\alpha) = \frac{\sum_{(\varphi, \theta) \in L(\alpha)} |B|\, dS}{\sum_{(\varphi, \theta) \in L(\alpha)} dS}, \qquad
+        B_{\text{non-QS}} = |B| - B_{\text{QS}}
+
+    where ``L(\alpha)`` is the set of quadrature points on the helical line
+    ``M\,\theta - N\,\varphi \equiv \alpha`` (mod). The objective is
+
+    .. math::
+
+        J = \frac{\langle dS\, B_{\text{non-QS}}^2 \rangle}{\langle dS\, B_{\text{QS}}^2 \rangle}.
+
+    For ``(M, N) = (1, 0)`` this reduces to ordinary quasi-axisymmetry and
+    yields numerically identical ``J()`` / ``dJ()`` to
+    :class:`NonQuasiSymmetricRatio` (see the unit test in
+    ``tests/geo/test_nonqs_helical.py``).
+    For ``(M, N) = (1, nfp)`` it targets quasi-helical symmetry with the
+    standard Landreman-Paul-QH pitch.
+
+    Because the dS-weighted helical average is the optimal projection (the
+    inner-product residual ``\langle (B - B_{\text{QS}})\, dS \rangle_L`` is zero
+    on every line), the chain-rule terms through ``B_{\text{QS}}`` cancel in the
+    ``\partial J/\partial B`` formula and in the ``\partial J/\partial c``
+    formula, exactly as in the QA case. The gradient with respect to coil
+    degrees of freedom flows through ``BoozerSurface.res['vjp']`` via the same
+    PLU adjoint used by :class:`NonQuasiSymmetricRatio` and
+    :class:`MajorRadius`.
+
+    Args:
+        boozer_surface: input :class:`BoozerSurface` on which the penalty is
+            evaluated.
+        bs: BiotSavart object (not necessarily the same one carried on
+            ``boozer_surface``; matches the pattern of
+            :class:`NonQuasiSymmetricRatio`).
+        helicity_M: poloidal helicity integer (``1`` for QA / QH).
+        helicity_N: toroidal helicity integer in units of nfp (``0`` for QA,
+            ``nfp`` for QH, ``1`` for QP / quasi-poloidal).
+        sDIM: resolution of the auxiliary stellsym surface used for the QS
+            integral. The auxiliary surface uses ``2*sDIM`` quadrature points
+            in **both** phi and theta so the helical-line indexing is exact
+            (the implementation asserts ``nphi == ntheta``).
+    """
+
+    def __init__(self, boozer_surface, bs, helicity_M=1, helicity_N=0, sDIM=20):
+        # Match NonQuasiSymmetricRatio: only SurfaceXYZTensorFourier is supported.
+        assert type(boozer_surface.surface) is SurfaceXYZTensorFourier
+
+        Optimizable.__init__(self, depends_on=[boozer_surface])
+        in_surface = boozer_surface.surface
+        self.boozer_surface = boozer_surface
+
+        phis = np.linspace(0, 1 / in_surface.nfp, 2 * sDIM, endpoint=False)
+        thetas = np.linspace(0, 1.0, 2 * sDIM, endpoint=False)
+        surface = SurfaceXYZTensorFourier(
+            mpol=in_surface.mpol,
+            ntor=in_surface.ntor,
+            stellsym=in_surface.stellsym,
+            nfp=in_surface.nfp,
+            quadpoints_phi=phis,
+            quadpoints_theta=thetas,
+            dofs=in_surface.dofs,
+        )
+
+        self.in_surface = in_surface
+        self.surface = surface
+        self.biotsavart = bs
+        self.M = int(helicity_M)
+        self.N = int(helicity_N)
+        self.nfp = int(in_surface.nfp)
+
+        # Pre-compute the helical-line index for each quadrature point.
+        # phi_i = i / (nfp * nphi), theta_j = j / ntheta, nphi = ntheta = K.
+        # alpha = M*theta - N*phi  ->  alpha * (K * nfp) = M*j*nfp - N*i  (integer).
+        K = 2 * sDIM
+        assert K > 0
+        j_idx = np.arange(K)
+        i_idx = np.arange(K)
+        nlines = K * self.nfp  # full integer modulus
+        if self.M == 0 and self.N == 0:
+            raise ValueError("helicity (M, N) = (0, 0) is degenerate")
+        alpha_idx = (self.M * j_idx[None, :] * self.nfp
+                     - self.N * i_idx[:, None]) % nlines
+        self._alpha_idx = alpha_idx.astype(np.int64)
+        self._alpha_flat = self._alpha_idx.ravel()
+        self._nlines = int(nlines)
+
+        self.recompute_bell()
+
+    def recompute_bell(self, parent=None):
+        self._J = None
+        self._dJ = None
+
+    def J(self):
+        if self._J is None:
+            self.compute()
+        return self._J
+
+    @derivative_dec
+    def dJ(self):
+        if self._dJ is None:
+            self.compute()
+        return self._dJ
+
+    # ----- helical line reductions -----
+    def _line_sum(self, arr_2d):
+        """Sum ``arr_2d`` (shape (nphi, ntheta)) along each helical line."""
+        return np.bincount(
+            self._alpha_flat, weights=arr_2d.ravel(), minlength=self._nlines
+        )
+
+    def _line_sum_along_lastaxis(self, arr_3d):
+        """Sum ``arr_3d`` (shape (nphi, ntheta, K)) along each helical line, returning shape ``(nlines, K)``."""
+        nphi, ntheta, ncols = arr_3d.shape
+        out = np.zeros((self._nlines, ncols))
+        flat = arr_3d.reshape(nphi * ntheta, ncols)
+        # np.add.at is the canonical scatter-add (slow Python loop but ncols
+        # is typically small; bincount cannot do multi-column natively).
+        for k in range(ncols):
+            out[:, k] = np.bincount(
+                self._alpha_flat, weights=flat[:, k], minlength=self._nlines
+            )
+        return out
+
+    def _helical_qs(self, modB, dS):
+        """Return ``B_QS`` (shape (nphi, ntheta)) broadcast back from the helical lines."""
+        num_line = self._line_sum(modB * dS)
+        den_line = self._line_sum(dS)
+        # Guard against empty bins. With nphi == ntheta == 2*sDIM and the
+        # helicity check above, every used bin index will have ``>= 1`` sample,
+        # but unused bins (those skipped by the mod) get den_line == 0.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            B_QS_line = np.where(
+                den_line > 0, num_line / np.maximum(den_line, 1e-300), 0.0
+            )
+        B_QS = B_QS_line[self._alpha_flat].reshape(modB.shape)
+        return B_QS, num_line, den_line
+
+    # ----- main forward pass -----
+    def compute(self):
+        if self.boozer_surface.need_to_run_code:
+            res = self.boozer_surface.res
+            res = self.boozer_surface.run_code(res["iota"], G=res["G"])
+
+        self.biotsavart.set_points(self.surface.gamma().reshape((-1, 3)))
+
+        surface = self.surface
+        nphi = surface.quadpoints_phi.size
+        ntheta = surface.quadpoints_theta.size
+        assert nphi == ntheta, (
+            "NonQuasiSymmetricRatioHelical requires the auxiliary surface to "
+            "have nphi == ntheta (both equal to 2*sDIM)."
+        )
+
+        B = self.biotsavart.B().reshape((nphi, ntheta, 3))
+        modB = np.sqrt(B[..., 0] ** 2 + B[..., 1] ** 2 + B[..., 2] ** 2)
+
+        nor = surface.normal()
+        dS = np.sqrt(nor[..., 0] ** 2 + nor[..., 1] ** 2 + nor[..., 2] ** 2)
+
+        B_QS, _, _ = self._helical_qs(modB, dS)
+        B_nonQS = modB - B_QS
+        self._J = float(np.mean(dS * B_nonQS**2) / np.mean(dS * B_QS**2))
+
+        # --- adjoint to coil dofs (mirrors NonQuasiSymmetricRatio.compute) ---
+        booz_surf = self.boozer_surface
+        iota = booz_surf.res["iota"]
+        G = booz_surf.res["G"]
+        P, L, U = booz_surf.res["PLU"]
+        dconstraint_dcoils_vjp = booz_surf.res["vjp"]
+
+        dJ_by_dB = self.dJ_by_dB().reshape((-1, 3))
+        dJ_by_dcoils = self.biotsavart.B_vjp(dJ_by_dB)
+
+        dJ_ds = np.zeros(L.shape[0])
+        dj_ds = self.dJ_by_dsurfacecoefficients()
+        dJ_ds[: dj_ds.size] = dj_ds
+        adj = forward_backward(P, L, U, dJ_ds)
+
+        adj_times_dg_dcoil = dconstraint_dcoils_vjp(adj, booz_surf, iota, G)
+        self._dJ = dJ_by_dcoils - adj_times_dg_dcoil
+
+    # ----- partials -----
+    def dJ_by_dB(self):
+        r"""Return ``dJ/dB`` with shape (nphi, ntheta, 3).
+
+        The helical projection is the dS-weighted mean of ``|B|`` along each
+        helical line. By the optimality of that projection,
+        :math:`\sum_L (|B| - B_{QS})\,dS = 0`, so the chain-rule contributions
+        through ``B_{QS}`` cancel and the formulas reduce to the same shape as
+        the QA case in :class:`NonQuasiSymmetricRatio`.
+        """
+        surface = self.surface
+        nphi = surface.quadpoints_phi.size
+        ntheta = surface.quadpoints_theta.size
+
+        B = self.biotsavart.B().reshape((nphi, ntheta, 3))
+        modB = np.sqrt(B[..., 0] ** 2 + B[..., 1] ** 2 + B[..., 2] ** 2)
+        nor = surface.normal()
+        dS = np.sqrt(nor[..., 0] ** 2 + nor[..., 1] ** 2 + nor[..., 2] ** 2)
+
+        B_QS, _, _ = self._helical_qs(modB, dS)
+        B_nonQS = modB - B_QS
+
+        dmodB_dB = B / modB[..., None]
+        dnum_by_dB = B_nonQS[..., None] * dmodB_dB * dS[..., None] / (nphi * ntheta)
+        ddenom_by_dB = B_QS[..., None] * dmodB_dB * dS[..., None] / (nphi * ntheta)
+
+        num = 0.5 * np.mean(dS * B_nonQS**2)
+        denom = 0.5 * np.mean(dS * B_QS**2)
+        return (denom * dnum_by_dB - num * ddenom_by_dB) / denom**2
+
+    def dJ_by_dsurfacecoefficients(self):
+        """Return ``dJ/dc`` with shape (n_surface_dofs,).
+
+        Mirrors :meth:`NonQuasiSymmetricRatio.dJ_by_dsurfacecoefficients` but
+        replaces the ``np.mean(..., axis=axis)`` reductions with helical-line
+        sums computed via :meth:`_line_sum_along_lastaxis`.
+        """
+        surface = self.surface
+        nphi = surface.quadpoints_phi.size
+        ntheta = surface.quadpoints_theta.size
+
+        B = self.biotsavart.B().reshape((nphi, ntheta, 3))
+        modB = np.sqrt(B[..., 0] ** 2 + B[..., 1] ** 2 + B[..., 2] ** 2)
+
+        nor = surface.normal()
+        dnor_dc = surface.dnormal_by_dcoeff()
+        dS = np.sqrt(nor[..., 0] ** 2 + nor[..., 1] ** 2 + nor[..., 2] ** 2)
+        dS_dc = (
+            nor[..., 0, None] * dnor_dc[..., 0, :]
+            + nor[..., 1, None] * dnor_dc[..., 1, :]
+            + nor[..., 2, None] * dnor_dc[..., 2, :]
+        ) / dS[..., None]
+
+        # B_QS and broadcasts back to (nphi, ntheta).
+        B_QS, num_line, den_line = self._helical_qs(modB, dS)
+        B_nonQS = modB - B_QS
+
+        dB_by_dX = self.biotsavart.dB_by_dX().reshape((nphi, ntheta, 3, 3))
+        dx_dc = surface.dgamma_by_dcoeff()
+        dB_dc = np.einsum("ijkl,ijkm->ijlm", dB_by_dX, dx_dc, optimize=True)
+        dmodB_dc = (
+            B[..., 0, None] * dB_dc[..., 0, :]
+            + B[..., 1, None] * dB_dc[..., 1, :]
+            + B[..., 2, None] * dB_dc[..., 2, :]
+        ) / modB[..., None]
+
+        # Per-line sums (shape (nlines, ndofs)) used to differentiate B_QS
+        # against surface coefficients.
+        dnum_dc_line = self._line_sum_along_lastaxis(
+            dmodB_dc * dS[..., None] + modB[..., None] * dS_dc
+        )
+        ddenom_dc_line = self._line_sum_along_lastaxis(dS_dc)
+
+        # Per-grid-point d B_QS / d c, broadcast from helical-line values.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            inv_den = np.where(den_line > 0, 1.0 / np.maximum(den_line, 1e-300), 0.0)
+        # B_QS_line = num_line * inv_den (shape (nlines,))
+        B_QS_line = num_line * inv_den
+        # d(B_QS_line)/d c = (dnum_dc * den - ddenom_dc * num) / den^2
+        #                  = inv_den * (dnum_dc_line - ddenom_dc_line * B_QS_line[:, None])
+        B_QS_line_dc = inv_den[:, None] * (
+            dnum_dc_line - ddenom_dc_line * B_QS_line[:, None]
+        )
+        # Scatter back to (nphi, ntheta, ndofs).
+        B_QS_dc = B_QS_line_dc[self._alpha_flat].reshape((nphi, ntheta, -1))
+        B_nonQS_dc = dmodB_dc - B_QS_dc
+
+        num = 0.5 * np.mean(dS * B_nonQS**2)
+        denom = 0.5 * np.mean(dS * B_QS**2)
+        dnum_by_dc = np.mean(
+            0.5 * dS_dc * B_nonQS[..., None] ** 2
+            + dS[..., None] * B_nonQS[..., None] * B_nonQS_dc,
+            axis=(0, 1),
+        )
+        ddenom_by_dc = np.mean(
+            0.5 * dS_dc * B_QS[..., None] ** 2
+            + dS[..., None] * B_QS[..., None] * B_QS_dc,
+            axis=(0, 1),
+        )
+        return (denom * dnum_by_dc - num * ddenom_by_dc) / denom**2
 
 
 class Iotas(Optimizable):

@@ -25,7 +25,7 @@ as ``PSCBulkArray`` (``W = 1/2 m^T L m + m^T f`` with ``L m + f = 0``).
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import jax
@@ -195,6 +195,28 @@ def _quat_to_matrix(q: jnp.ndarray) -> jnp.ndarray:
     )
 
 
+def _quat_to_matrices_vmap(quats: jnp.ndarray) -> jnp.ndarray:
+    """Batched quaternion-to-rotation-matrix conversion.
+
+    Shared helper for the Phase-M trace-size shrink.  Equivalent to
+    ``jnp.stack([_quat_to_matrix(quats[i]) for i in range(n)], axis=0)``
+    but produces a ``vmap``-collapsed trace node (constant trace cost in
+    ``n``) instead of unrolling ``n`` Python-side calls, which keeps the
+    XLA compile time of :func:`assemble_L_dipole_reduced_jax` and
+    :func:`B_at_points_dipole` from growing linearly with the number of
+    base pucks.
+
+    Args:
+        quats: ``(n, 4)`` stack of quaternions in ``[w, x, y, z]`` order
+            (unnormalised input is fine -- :func:`_quat_to_matrix`
+            renormalises internally).
+
+    Returns:
+        ``(n, 3, 3)`` stack of rotation matrices, one per quaternion.
+    """
+    return jax.vmap(_quat_to_matrix)(quats)
+
+
 def _replicate_pucks_dipole(
     centers_base: jnp.ndarray,
     quats_base: jnp.ndarray,
@@ -359,11 +381,11 @@ def assemble_L_dipole_reduced_jax(
     centers_all, R_all, signs_all, base_idx_all = _replicate_pucks_dipole(
         centers_base, quats_base, int(nfp), bool(stellsym)
     )
-    # Rotation matrices for base pucks: ``R_i`` (3, 3, n_base layout
-    # transposed below for einsum convenience).
-    R_base = jnp.stack(
-        [_quat_to_matrix(quats_base[i]) for i in range(n_base)], axis=0
-    )
+    # Rotation matrices for base pucks: ``R_i`` (n_base, 3, 3) built via
+    # the shared :func:`_quat_to_matrices_vmap` helper so the trace
+    # cost is constant in ``n_base`` (was ``O(n_base)`` Python-unrolled
+    # nodes pre-Phase-M).
+    R_base = _quat_to_matrices_vmap(quats_base)
     # ``L_self_global[i] = R_i L^self_local[i] R_i^T`` for each base.
     L_self_global = jnp.einsum(
         "iab,ibc,idc->iad", R_base, self_L_local_cached, R_base
@@ -415,16 +437,20 @@ def assemble_L_dipole_reduced_jax(
     # Shape (n_base_j, n_base_i, 3, 3); rotate to (n_base_i, n_base_j).
     L_off = float(G) * jnp.transpose(blocks_sum_j, (1, 0, 2, 3))
 
-    # Now assemble the (3 n_base, 3 n_base) dense matrix.
-    L_full = jnp.zeros((3 * n_base, 3 * n_base), dtype=centers_base.dtype)
-    for i in range(n_base):
-        for j in range(n_base):
-            block = L_off[i, j]
-            if i == j:
-                block = block + L_self_block[i]
-            L_full = L_full.at[
-                3 * i : 3 * i + 3, 3 * j : 3 * j + 3
-            ].set(block)
+    # Assemble the ``(3 n_base, 3 n_base)`` dense matrix in a single
+    # ``transpose + reshape`` (Phase-M trace shrink: was an
+    # ``O(n_base**2)`` Python double-loop of ``.at[..].set(..)`` slices,
+    # which exploded XLA compile time at large ``n_base``).  The
+    # block layout maps ``T[i, j, a, b] -> M[3*i + a, 3*j + b]`` so we
+    # interleave axis order to ``(i, a, j, b)`` and flatten.
+    eye_diag = jnp.eye(n_base, dtype=L_off.dtype)
+    # Add the symmetric self-block on the diagonal of the (i, j) block
+    # grid: ``L_self_block`` only contributes when ``i == j``.
+    L_diag_contrib = eye_diag[:, :, None, None] * L_self_block[:, None, :, :]
+    L_full_blocks = L_off + L_diag_contrib  # (n_base, n_base, 3, 3)
+    L_full = jnp.transpose(L_full_blocks, (0, 2, 1, 3)).reshape(
+        3 * n_base, 3 * n_base
+    )
     # Symmetrise to remove any tiny non-symmetry from the float
     # accumulation order.
     L_full = 0.5 * (L_full + L_full.T)
@@ -514,7 +540,6 @@ def assemble_f_dipole_reduced_jax(
     Returns:
         ``(3 n_base,)`` reduced load vector.
     """
-    n_base = int(centers_base.shape[0])
     G = int(nfp) * (2 if bool(stellsym) else 1)
     # ``B_TF`` at each base puck centre.  Pure JAX trapezoidal sum.
 
@@ -606,10 +631,12 @@ def B_at_points_dipole(
     # m_local[i]``.  So ``m_global_replica[g] = R_phi R_i m_local[i] =
     # R_phi m_global_base[i]``.  We need ``R_phi`` alone; recover it
     # as ``R_all[g] @ R_base[i]^T``.
-    n_base = int(centers_base.shape[0])
-    R_base = jnp.stack(
-        [_quat_to_matrix(quats_base[i]) for i in range(n_base)], axis=0
-    )
+    # Phase-M trace shrink: shared :func:`_quat_to_matrices_vmap` helper
+    # collapses the per-puck quaternion conversion to a single
+    # ``vmap``-trace node, mirroring the change in
+    # :func:`assemble_L_dipole_reduced_jax`.  Keeps cold-compile cost
+    # constant in ``n_base`` instead of growing linearly.
+    R_base = _quat_to_matrices_vmap(quats_base)
 
     def m_one_replica(g_idx: int) -> jnp.ndarray:
         i_b = base_idx_all[g_idx]

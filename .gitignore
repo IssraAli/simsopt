@@ -91,3 +91,12 @@ tests/boundary*
 # Version file
 src/simsopt/_version.py
 
+# Local scratch / generated artifacts (dipole array + QUASR scan work)
+/dipole_array_tutorial*/
+/jac_log_*.dat
+/passive_bulks_rotated_timing*.csv
+/src/simsopt/configs/QUASR_cache/
+/examples/3_Advanced/stage1_quasr_scan/
+/input.basic_non_stellsym_*
+/input.default_*
+

@@ -473,11 +473,28 @@ def _psc_rt_analytic_combo_env() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
-def _fc_bulk_warm_handoff_env() -> bool:
-    """Optional PSC warm handoff across FC orders (audit L11)."""
+def _fc_bulk_warm_handoff_env(solver_mode: Optional[str] = None) -> bool:
+    """Optional PSC warm handoff across FC orders (audit L11).
 
-    raw = os.environ.get("SIMSOPT_FC_WARM_HANDOFF", "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    ``SIMSOPT_FC_WARM_HANDOFF`` explicitly enables (``1``/``on``) or
+    disables (``0``/``off``) warm handoff. When the variable is **unset**,
+    dipole mode defaults to **on** so continuation stages reuse compiled
+    dipole JAX kernels; energy / shell_l2 modes keep the historical
+    default (**off**) unless the environment is set.
+
+    Parameters
+    ----------
+    solver_mode:
+        ``PSCBulkArray.solver_mode`` of the receiver when inferring the
+        unset-env default.
+    """
+
+    raw = os.environ.get("SIMSOPT_FC_WARM_HANDOFF", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return str(solver_mode or "") == "dipole"
 
 
 def _psc_rt_fd_eps_env() -> float:
@@ -957,7 +974,12 @@ def _maybe_prime_psc_jax_kernels(psc: "PSCBulkArray") -> None:
         return
     if _PSC_JAX_PRIME_ONCE:
         return
-    if psc._jax_phi_work_stack is None or psc._jax_K_stack is None:
+    # Dipole-mode :meth:`_rebuild` returns before the sheet-basis path
+    # allocates ``_jax_phi_work_stack`` / ``_jax_K_stack``; treat missing
+    # attributes like ``None`` so JAX priming is skipped instead of raising.
+    if getattr(psc, "_jax_phi_work_stack", None) is None or getattr(
+        psc, "_jax_K_stack", None
+    ) is None:
         return
     try:
         g_tf, gd_tf, I_tf = psc._tf_arrays()
@@ -3552,6 +3574,207 @@ _vjp_reduced_free_center_only_jitted = jax.jit(
 
 
 # ======================================================================
+# Module-level dipole JIT handles (Phase L3, May 2026)
+# ======================================================================
+#
+# Hoisted out of the per-instance ``_ensure_dipole_*_jit_cache`` methods
+# below so that the JAX internal abstract-shape cache survives across
+# :class:`PSCBulkArray` instances.  Before this change every new
+# instance built during Fourier continuation (or any sweep / test
+# re-instantiation) created a fresh ``jax.jit(...)`` wrapper whose
+# internal cache started empty, forcing a full XLA re-trace of the
+# dipole VJP graph at every stage (tens to hundreds of seconds per
+# stage at reactor scale, see
+# ``bench_results/dipole_solver/fc_bulk_stage_profile_before.md``).
+#
+# The module-level handles are shared by ALL instances; JAX keys its
+# internal cache on ``(input shapes, static argument values)`` so
+# matching geometries hit the existing XLA artifact regardless of which
+# :class:`PSCBulkArray` first compiled it.  Phase-K
+# :meth:`PSCBulkArray.warm_handoff_from` still copies the per-instance
+# ``_dipole_jit_*`` slots; since those slots point at the same
+# module-level objects, the copy is a no-op but the contract continues
+# to hold.
+
+from jax.scipy.linalg import cho_solve as _DIPOLE_JAX_CHO_SOLVE
+
+
+_DIPOLE_ASSEMBLE_L_JIT = jax.jit(
+    _psc_bulk_dipole_mod.assemble_L_dipole_reduced_jax,
+    static_argnums=(3, 4),
+)
+"""Module-level JIT handle for :func:`assemble_L_dipole_reduced_jax`."""
+
+
+_DIPOLE_ASSEMBLE_F_JIT = jax.jit(
+    _psc_bulk_dipole_mod.assemble_f_dipole_reduced_jax,
+    static_argnums=(5, 6),
+)
+"""Module-level JIT handle for :func:`assemble_f_dipole_reduced_jax`."""
+
+
+_DIPOLE_FIELD_JIT = jax.jit(
+    _psc_bulk_dipole_mod.B_at_points_dipole,
+    static_argnums=(4, 5),
+)
+"""Module-level JIT handle for :func:`B_at_points_dipole`."""
+
+
+_DIPOLE_FORWARD_JIT = jax.jit(
+    _psc_bulk_dipole_mod.forward_dipole_pipeline,
+    static_argnums=(7, 8),
+)
+"""Module-level JIT handle for :func:`forward_dipole_pipeline`."""
+
+
+def _dipole_vjp_B_kernel(
+    pts_arg: "jnp.ndarray",
+    centers_base: "jnp.ndarray",
+    quats_base: "jnp.ndarray",
+    m_global_base: "jnp.ndarray",
+    v_B_arg: "jnp.ndarray",
+    nfp_arg: int,
+    stellsym_arg: bool,
+) -> "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]":
+    """Backward through :func:`B_at_points_dipole` (centres / quats / m).
+
+    Discards the ``pts`` cotangent because evaluation points are not
+    optimisation DoFs.  Static ``(nfp, stellsym)`` are concretised inside
+    JAX so independent ``(nfp, stellsym)`` pairs share this trace
+    template without recompilation of the kernel object itself.
+    """
+    _, vjp_fn = jax.vjp(
+        _psc_bulk_dipole_mod.B_at_points_dipole,
+        pts_arg,
+        centers_base,
+        quats_base,
+        m_global_base,
+        int(nfp_arg),
+        bool(stellsym_arg),
+    )
+    _, lam_c, lam_q, lam_m, _, _ = vjp_fn(v_B_arg)
+    return lam_c, lam_q, lam_m
+
+
+_DIPOLE_VJP_B_JIT = jax.jit(_dipole_vjp_B_kernel, static_argnums=(5, 6))
+"""Module-level JIT handle for the dipole VJP through ``B_at_points_dipole``."""
+
+
+def _dipole_vjp_f_kernel(
+    centers_base: "jnp.ndarray",
+    quats_base: "jnp.ndarray",
+    g_tf_arg: "jnp.ndarray",
+    gd_tf_arg: "jnp.ndarray",
+    I_tf_arg: "jnp.ndarray",
+    lam_f_arg: "jnp.ndarray",
+    nfp_arg: int,
+    stellsym_arg: bool,
+) -> "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]":
+    """Backward through :func:`assemble_f_dipole_reduced_jax`.
+
+    Returns ``(lam_c, lam_q, vg, vgd, vI)`` from the cotangent of
+    ``f_red`` (which is computed on the host via :func:`cho_solve`).
+    """
+    _, vjp_fn = jax.vjp(
+        _psc_bulk_dipole_mod.assemble_f_dipole_reduced_jax,
+        centers_base,
+        quats_base,
+        g_tf_arg,
+        gd_tf_arg,
+        I_tf_arg,
+        int(nfp_arg),
+        bool(stellsym_arg),
+    )
+    lam_c, lam_q, vg, vgd, vI, _, _ = vjp_fn(lam_f_arg)
+    return lam_c, lam_q, vg, vgd, vI
+
+
+_DIPOLE_VJP_F_JIT = jax.jit(_dipole_vjp_f_kernel, static_argnums=(6, 7))
+"""Module-level JIT handle for the dipole VJP through ``assemble_f``."""
+
+
+def _dipole_vjp_L_kernel(
+    centers_base: "jnp.ndarray",
+    quats_base: "jnp.ndarray",
+    self_L_local_cached: "jnp.ndarray",
+    L_cotangent: "jnp.ndarray",
+    nfp_arg: int,
+    stellsym_arg: bool,
+) -> "tuple[jnp.ndarray, jnp.ndarray]":
+    """Backward through :func:`assemble_L_dipole_reduced_jax` -- centres / quats only.
+
+    Only invoked when centre or quaternion DoFs are free.
+    """
+    _, vjp_fn = jax.vjp(
+        _psc_bulk_dipole_mod.assemble_L_dipole_reduced_jax,
+        centers_base,
+        quats_base,
+        self_L_local_cached,
+        int(nfp_arg),
+        bool(stellsym_arg),
+    )
+    lam_c, lam_q, _, _, _ = vjp_fn(L_cotangent)
+    return lam_c, lam_q
+
+
+_DIPOLE_VJP_L_JIT = jax.jit(_dipole_vjp_L_kernel, static_argnums=(4, 5))
+"""Module-level JIT handle for the dipole VJP through ``assemble_L``."""
+
+
+def _dipole_vjp_fused_tf_kernel(
+    pts_arg: "jnp.ndarray",
+    centers_base: "jnp.ndarray",
+    quats_base: "jnp.ndarray",
+    m_global_base: "jnp.ndarray",
+    g_tf_arg: "jnp.ndarray",
+    gd_tf_arg: "jnp.ndarray",
+    I_tf_arg: "jnp.ndarray",
+    L_chol: "jnp.ndarray",
+    v_B_arg: "jnp.ndarray",
+    nfp_arg: int,
+    stellsym_arg: bool,
+) -> "tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]":
+    """Fused TF-only dipole VJP: B-backward + cho_solve + f-backward.
+
+    Combines the three small backward kernels into a single JAX trace
+    to minimise per-call dispatch overhead in the hot loop where the
+    L-side adjoint is not needed (i.e. centres + quats fixed).
+    """
+    _, vjp_B = jax.vjp(
+        _psc_bulk_dipole_mod.B_at_points_dipole,
+        pts_arg,
+        centers_base,
+        quats_base,
+        m_global_base,
+        int(nfp_arg),
+        bool(stellsym_arg),
+    )
+    _, lam_c_B, lam_q_B, lam_m_b, _, _ = vjp_B(v_B_arg)
+    lam_m = lam_m_b.reshape(-1)
+    lam_f = -_DIPOLE_JAX_CHO_SOLVE((L_chol, True), lam_m)
+    _, vjp_f = jax.vjp(
+        _psc_bulk_dipole_mod.assemble_f_dipole_reduced_jax,
+        centers_base,
+        quats_base,
+        g_tf_arg,
+        gd_tf_arg,
+        I_tf_arg,
+        int(nfp_arg),
+        bool(stellsym_arg),
+    )
+    lam_c_f, lam_q_f, vg, vgd, vI, _, _ = vjp_f(lam_f)
+    vc = lam_c_B + lam_c_f
+    vq = lam_q_B + lam_q_f
+    return vc, vq, vg, vgd, vI
+
+
+_DIPOLE_VJP_FUSED_TF_JIT = jax.jit(
+    _dipole_vjp_fused_tf_kernel, static_argnums=(9, 10)
+)
+"""Module-level JIT handle for the fused dipole VJP (TF-only hot loop)."""
+
+
+# ======================================================================
 # PSCBulkArray
 # ======================================================================
 
@@ -3761,6 +3984,13 @@ class PSCBulkArray(Optimizable):
         fixed_field_matrix_dtype: str = "float64",
     ):
         self.coils_TF = list(coils_TF)
+        # Phase-J J1: ``eval_points`` is now a property whose setter
+        # bumps :attr:`_eval_points_version` and clears the cached
+        # device-side ``_dipole_jdev_pts``.  Initialise the dipole
+        # cache slot to ``None`` first so the setter's invalidation
+        # branch sees a defined attribute on every assignment path.
+        self._dipole_jdev_pts: Optional[Any] = None
+        self._eval_points_version: int = 0
         self.eval_points = np.asarray(eval_points, dtype=float, order="C")
         self.nfp = int(nfp)
         self.stellsym = bool(stellsym)
@@ -3803,6 +4033,51 @@ class PSCBulkArray(Optimizable):
         self._dipole_jit_forward: Optional[Any] = None
         self._dipole_jit_field: Optional[Any] = None
         self._dipole_jit_key: Optional[tuple] = None
+        # Persistent jits for the rebuild path -- ``assemble_L`` and
+        # ``assemble_f`` are called from :meth:`_rebuild_dipole` on
+        # every outer optimisation iter so a cached compiled kernel
+        # eliminates the dominant per-iter cost.
+        self._dipole_jit_assemble_L: Optional[Any] = None
+        self._dipole_jit_assemble_f: Optional[Any] = None
+        self._dipole_jit_rebuild_key: Optional[tuple] = None
+        # Separate JIT-key for the cached-B path that drops TF shape.
+        # The closed-form dipole sum does not depend on TF arrays so
+        # this key is just ``(n_base, n_eval, nfp, stellsym)``.
+        self._dipole_jit_field_key: Optional[tuple] = None
+        # Phase-H analytic VJP: three small jitted kernels replace the
+        # old monolithic ``jax.grad(forward_dipole_pipeline)`` so the
+        # backward never reassembles ``L_red`` or refactors Cholesky.
+        # ``_dipole_jit_vjp_B``        -- jax.vjp of ``B_at_points_dipole`` (no TF)
+        # ``_dipole_jit_vjp_f``        -- jax.vjp of ``assemble_f_dipole_reduced_jax``
+        # ``_dipole_jit_vjp_L``        -- jax.vjp of ``assemble_L_dipole_reduced_jax``
+        # All three are keyed on the shape tuple stored in
+        # ``_dipole_jit_vjp_key``.  ``_dipole_jit_vjp`` is the legacy
+        # monolithic slot kept for the parity test.
+        self._dipole_jit_vjp: Optional[Any] = None
+        self._dipole_jit_vjp_B: Optional[Any] = None
+        self._dipole_jit_vjp_f: Optional[Any] = None
+        self._dipole_jit_vjp_L: Optional[Any] = None
+        # Fused TF-only analytic backward: collapses
+        # vjp_B + cho_solve + vjp_f into a single JIT trace so the
+        # allfixed iter pays a single device dispatch.  The L-side
+        # vjp branch is kept separate because it is only used when
+        # centre / quaternion DoFs are free.
+        self._dipole_jit_vjp_fused_tf: Optional[Any] = None
+        self._dipole_jit_vjp_key: Optional[tuple] = None
+        # Device-side ``cho_solve`` factor of ``L_red`` for the
+        # fused TF-only backward.  Populated alongside the host-side
+        # ``_dipole_L_red_chol`` in :meth:`_rebuild_dipole`.
+        self._dipole_jdev_L_red_chol: Optional[Any] = None
+        # Device-resident snapshots of static puck-geometry arrays.
+        # Populated at the end of each ``_rebuild_dipole`` and reused
+        # by the cached forward + analytic VJP so we don't pay an
+        # ``np.asarray`` -> ``jnp.asarray`` host-to-device copy per
+        # call.  Cleared (set to ``None``) when the rebuild changes
+        # ``L_red`` or the moments.
+        self._dipole_jdev_centers: Optional[Any] = None
+        self._dipole_jdev_quats: Optional[Any] = None
+        self._dipole_jdev_self_L_local: Optional[Any] = None
+        self._dipole_jdev_m_global: Optional[Any] = None
         # When ``True``, the cached ``_dipole_self_L_local_cached`` is
         # reused across rebuilds even if ``R_i`` / ``t_i`` change.
         # Default behaviour comes from
@@ -4508,6 +4783,43 @@ class PSCBulkArray(Optimizable):
             return False
         return True
 
+    def compatible_dipole_warm_handoff(self, prev: Optional["PSCBulkArray"]) -> bool:
+        """Return ``True`` if ``prev`` dipole JIT slots may be reused on ``self``.
+
+        Requires identical reduced problem shape (base puck count, eval grid,
+        symmetry, TF coil count) and identical TF quadrature layout on the
+        first TF coil (``gamma()`` shape matches the dipole field/JIT keys).
+        """
+        if prev is None:
+            return False
+        if str(getattr(prev, "solver_mode", "")) != "dipole":
+            return False
+        if str(getattr(self, "solver_mode", "")) != "dipole":
+            return False
+        if int(getattr(prev, "_n_base_pucks", -1)) != int(
+            getattr(self, "_n_base_pucks", -2)
+        ):
+            return False
+        ep_prev = np.asarray(getattr(prev, "eval_points", []))
+        ep_self = np.asarray(getattr(self, "eval_points", []))
+        if ep_prev.shape != ep_self.shape:
+            return False
+        if int(getattr(prev, "nfp", -1)) != int(getattr(self, "nfp", -2)):
+            return False
+        if bool(getattr(prev, "stellsym", False)) != bool(
+            getattr(self, "stellsym", False)
+        ):
+            return False
+        tfp = getattr(prev, "coils_TF", None) or []
+        tfc = getattr(self, "coils_TF", None) or []
+        if len(tfp) != len(tfc):
+            return False
+        if len(tfc) == 0:
+            return True
+        g0 = np.asarray(tfp[0].curve.gamma())
+        g1 = np.asarray(tfc[0].curve.gamma())
+        return g0.shape == g1.shape
+
     def warm_handoff_from(self, prev: "PSCBulkArray") -> None:
         """Copy PSC factorisation / inductance workspaces from compatible ``prev`` (L11)."""
         jax_attrs = (
@@ -4538,10 +4850,35 @@ class PSCBulkArray(Optimizable):
             if hasattr(prev, attr):
                 setattr(self, attr, getattr(prev, attr))
 
+        dipole_jit_attrs = (
+            "_dipole_jit_rebuild_key",
+            "_dipole_jit_assemble_L",
+            "_dipole_jit_assemble_f",
+            "_dipole_jit_field_key",
+            "_dipole_jit_field",
+            "_dipole_jit_key",
+            "_dipole_jit_forward",
+            "_dipole_jit_vjp_key",
+            "_dipole_jit_vjp_B",
+            "_dipole_jit_vjp_f",
+            "_dipole_jit_vjp_L",
+            "_dipole_jit_vjp_fused_tf",
+        )
+        if (
+            str(getattr(prev, "solver_mode", "")) == "dipole"
+            and str(getattr(self, "solver_mode", "")) == "dipole"
+        ):
+            for attr in dipole_jit_attrs:
+                if hasattr(prev, attr):
+                    setattr(self, attr, getattr(prev, attr))
+
     def try_warm_handoff_from_prev(self, prev: Optional["PSCBulkArray"]) -> bool:
         """Best-effort JAX / host-factor reuse across FC orders when geometries match."""
-        if prev is None or not _fc_bulk_warm_handoff_env():
+        if prev is None or not _fc_bulk_warm_handoff_env(self.solver_mode):
             return False
+        if self.compatible_dipole_warm_handoff(prev):
+            self.warm_handoff_from(prev)
+            return True
         if not self.compatible_fc_warm_handoff(prev):
             return False
         Lp = getattr(prev, "_L_red", None)
@@ -4884,10 +5221,27 @@ class PSCBulkArray(Optimizable):
                 cm_arr = np.asarray(changed_mask, dtype=bool)
                 if cm_arr.size > 0 and not bool(cm_arr.any()):
                     g_tf_sc, gd_tf_sc, I_tf_sc = self._tf_arrays()
+                    self._ensure_dipole_rebuild_jit_cache(g_tf_sc)
+                    assert self._dipole_jit_assemble_f is not None
+                    # Reuse the device-side puck geometry snapshot
+                    # from the previous rebuild (puck DoFs haven't
+                    # moved, by construction of this branch).  Saves
+                    # a fresh H->D transfer of ``centers`` and
+                    # ``quats`` per iter.
+                    centers_j = (
+                        self._dipole_jdev_centers
+                        if self._dipole_jdev_centers is not None
+                        else jnp.asarray(centers)
+                    )
+                    quats_j = (
+                        self._dipole_jdev_quats
+                        if self._dipole_jdev_quats is not None
+                        else jnp.asarray(quats)
+                    )
                     f_red_sc = np.asarray(
-                        _psc_bulk_dipole_mod.assemble_f_dipole_reduced_jax(
-                            jnp.asarray(centers),
-                            jnp.asarray(quats),
+                        self._dipole_jit_assemble_f(
+                            centers_j,
+                            quats_j,
                             jnp.asarray(g_tf_sc),
                             jnp.asarray(gd_tf_sc),
                             jnp.asarray(I_tf_sc),
@@ -4906,6 +5260,12 @@ class PSCBulkArray(Optimizable):
                     self._geom_hash = hash(tuple(self.local_full_x))
                     self._puck_dofs_hash_at_rebuild = (
                         self._hash_puck_local_dofs()
+                    )
+                    # Refresh only the moments snapshot: centres and
+                    # quaternions are unchanged in this branch, so
+                    # their device-side copies stay valid.
+                    self._refresh_dipole_device_cache(
+                        centers, quats, moments_only=True
                     )
                     if _t_total is not None and self._timing_rows is not None:
                         self._timing_rows.append(
@@ -4943,12 +5303,24 @@ class PSCBulkArray(Optimizable):
             self._dipole_self_L_keys = keys
         assert self._dipole_self_L_local_cached is not None  # for type-checkers
         # Assemble the reduced (3 n_base, 3 n_base) inductance matrix.
-        L_red = _psc_bulk_dipole_mod.assemble_L_dipole_reduced(
-            centers,
-            quats,
-            self._dipole_self_L_local_cached,
-            int(self.nfp),
-            bool(self.stellsym),
+        # Use the persistent ``jax.jit`` for ``assemble_L`` so repeated
+        # rebuilds at fixed ``n_base`` / symmetry skip the tracing
+        # overhead.  ``g_tf`` shape is not part of ``assemble_L``'s key
+        # but the helper uses it only for ``assemble_f`` -- pre-fetch
+        # the TF arrays here so the key is consistent across both
+        # jitted kernels.
+        g_tf_for_key, gd_tf_for_key, I_tf_for_key = self._tf_arrays()
+        self._ensure_dipole_rebuild_jit_cache(g_tf_for_key)
+        assert self._dipole_jit_assemble_L is not None
+        L_red = np.asarray(
+            self._dipole_jit_assemble_L(
+                jnp.asarray(centers),
+                jnp.asarray(quats),
+                jnp.asarray(self._dipole_self_L_local_cached),
+                int(self.nfp),
+                bool(self.stellsym),
+            ),
+            dtype=np.float64,
         )
         self._dipole_L_red = L_red
         # Cholesky factor with a tiny relative jitter for stability.  L
@@ -4963,15 +5335,26 @@ class PSCBulkArray(Optimizable):
         try:
             c, lower = sp_linalg.cho_factor(L_reg, lower=True, check_finite=False)
             self._dipole_L_red_chol = (np.asarray(c), bool(lower))
+            # Mirror the lower-triangular Cholesky factor onto the
+            # device so the fused TF-only backward kernel can perform
+            # ``jax.scipy.linalg.cho_solve`` without a fresh H->D
+            # transfer per VJP call.  We deliberately materialise the
+            # strictly lower-triangular part so ``cho_solve(..., lower=True)``
+            # sees a clean factor (``cho_factor`` overwrites only the
+            # used triangle).
+            self._dipole_jdev_L_red_chol = jnp.asarray(np.tril(c))
         except sp_linalg.LinAlgError as exc:
             raise RuntimeError(
                 "Dipole-mode reduced inductance matrix is not "
                 "positive-definite (after eigenfloor jitter)."
             ) from exc
-        # Solve for moments using current TF arrays.
-        g_tf, gd_tf, I_tf = self._tf_arrays()
+        # Solve for moments using current TF arrays.  Reuse the TF
+        # arrays already fetched above for the JIT-key calculation;
+        # use the cached jitted ``assemble_f`` for amortised tracing.
+        g_tf, gd_tf, I_tf = g_tf_for_key, gd_tf_for_key, I_tf_for_key
+        assert self._dipole_jit_assemble_f is not None
         f_red = np.asarray(
-            _psc_bulk_dipole_mod.assemble_f_dipole_reduced_jax(
+            self._dipole_jit_assemble_f(
                 jnp.asarray(centers),
                 jnp.asarray(quats),
                 jnp.asarray(g_tf),
@@ -4991,6 +5374,9 @@ class PSCBulkArray(Optimizable):
         # detect "no DoFs moved" and short-circuit.
         self._geom_hash = hash(tuple(self.local_full_x))
         self._puck_dofs_hash_at_rebuild = self._hash_puck_local_dofs()
+        # Refresh device-side puck-geometry snapshots used by the
+        # cached B path and the analytic VJP.
+        self._refresh_dipole_device_cache(centers, quats)
         if _t_total is not None:
             elapsed = time.perf_counter() - _t_total
             if self._timing_rows is not None:
@@ -6179,19 +6565,25 @@ class PSCBulkArray(Optimizable):
     @property
     def _K_stack(self) -> Optional[np.ndarray]:
         """Host view of ``_jax_K_stack`` (no duplicate NumPy storage)."""
-        if not self._uniform_puck_shape or self._jax_K_stack is None:
+        if not getattr(self, "_uniform_puck_shape", False):
+            return None
+        if getattr(self, "_jax_K_stack", None) is None:
             return None
         return np.asarray(self._jax_K_stack)
 
     @property
     def _phi_stack(self) -> Optional[np.ndarray]:
-        if not self._uniform_puck_shape or self._jax_phi_stack is None:
+        if not getattr(self, "_uniform_puck_shape", False):
+            return None
+        if getattr(self, "_jax_phi_stack", None) is None:
             return None
         return np.asarray(self._jax_phi_stack)
 
     @property
     def _w_stack(self) -> Optional[np.ndarray]:
-        if not self._uniform_puck_shape or self._jax_w_stack is None:
+        if not getattr(self, "_uniform_puck_shape", False):
+            return None
+        if getattr(self, "_jax_w_stack", None) is None:
             return None
         return np.asarray(self._jax_w_stack)
 
@@ -6433,6 +6825,100 @@ class PSCBulkArray(Optimizable):
         """Passive bulk contribution as a :class:`PassiveBulkField`."""
         return self._field
 
+    @property
+    def eval_points(self) -> np.ndarray:
+        """``(n_eval, 3)`` Cartesian evaluation grid for :meth:`B_at_points`.
+
+        The attribute is exposed as a property (Phase-J J1) so that
+        reassignments invalidate the device-side cache used by the
+        dipole-mode forward and backward kernels.  Reads behave
+        identically to the historical plain attribute -- callers can
+        continue to do ``psc.eval_points[i]`` etc.
+
+        Returns
+        -------
+        np.ndarray
+            ``(n_eval, 3)`` contiguous ``float64`` array.  The
+            returned array is the canonical backing store; callers
+            should not mutate it in place (doing so will silently leave
+            the device-side cache stale, since the setter is the only
+            invalidation hook).
+        """
+        return self._eval_points
+
+    @eval_points.setter
+    def eval_points(self, value: np.ndarray) -> None:
+        r"""Replace the evaluation grid and invalidate the dipole device cache.
+
+        Bumps :attr:`_eval_points_version` so any helper that snapshots
+        a previous version can detect the change in ``O(1)``, and
+        clears :attr:`_dipole_jdev_pts` so the next call to
+        :meth:`_get_dipole_jdev_pts` rebuilds the device-side copy.
+
+        The input is normalised exactly like the original
+        :meth:`__init__` assignment -- ``float64`` dtype and C-order
+        contiguous layout -- so downstream JAX kernels see the same
+        memory layout regardless of how the caller built ``value``.
+
+        Parameters
+        ----------
+        value : np.ndarray
+            ``(n_eval, 3)`` array of Cartesian evaluation points.
+
+        Notes
+        -----
+        Defensive ``getattr`` calls are used because :meth:`__init__`
+        assigns ``self.eval_points`` before the dipole cache slots are
+        guaranteed to exist on every code path; production reassignments
+        always hit both branches.
+        """
+        self._eval_points = np.asarray(value, dtype=float, order="C")
+        # ``getattr`` is defensive against being called from a subclass
+        # ``__init__`` that runs before our own slot initialisation.
+        self._eval_points_version = (
+            getattr(self, "_eval_points_version", 0) + 1
+        )
+        self._dipole_jdev_pts = None
+
+    def _get_dipole_jdev_pts(self, pts: np.ndarray) -> "jnp.ndarray":
+        r"""Return a device-resident ``jnp.ndarray`` for ``pts``, cached when reusable.
+
+        Phase-J J1 host->device cache.  Each call to
+        :meth:`_B_at_points_dipole` and :meth:`_vjp_dipole` historically
+        re-wrapped ``pts`` with :func:`jnp.asarray`, paying a
+        ``(n_eval, 3) float64`` host-to-device copy every iteration.
+        For a single optimisation, ``pts is self.eval_points`` and
+        only changes when the plasma quadrature changes.
+
+        This helper returns the cached :attr:`_dipole_jdev_pts` when
+        ``pts`` is the canonical backing array, and falls back to a
+        fresh :func:`jnp.asarray` conversion otherwise (e.g., when an
+        ad-hoc one-off eval grid is passed via ``B_at_points(other_pts)``).
+        The cache is invalidated automatically by the
+        :meth:`eval_points` setter.
+
+        Parameters
+        ----------
+        pts : np.ndarray
+            ``(n_eval, 3)`` host array of evaluation points.
+
+        Returns
+        -------
+        jnp.ndarray
+            ``(n_eval, 3)`` device array equivalent to
+            ``jnp.asarray(pts)``.  When ``pts is self.eval_points``
+            the same array reference is returned on every subsequent
+            call until :meth:`eval_points` is reassigned.
+        """
+        if pts is self._eval_points:
+            cached = self._dipole_jdev_pts
+            if cached is not None and cached.shape == pts.shape:
+                return cached
+            jdev = jnp.asarray(pts)
+            self._dipole_jdev_pts = jdev
+            return jdev
+        return jnp.asarray(pts)
+
     def recompute_currents(self) -> None:
         """Recompute modal coefficients after TF geometry/currents or puck DOFs change.
 
@@ -6460,10 +6946,28 @@ class PSCBulkArray(Optimizable):
             (id(opt._dofs), opt._dofs._state_version)
             for opt in self._unique_dof_opts
         )
-        base_geom_now = self._base_geom_state_matrix()
-        changed_pucks: Optional[np.ndarray] = None
-        if self._last_base_geom_state is not None:
-            changed_pucks = np.any(base_geom_now != self._last_base_geom_state, axis=1)
+        puck_dofs_unchanged = (
+            self._last_base_geom_state is not None
+            and current_versions == self._geom_versions
+        )
+        if puck_dofs_unchanged:
+            # Phase-J J3: when every puck DOF object's ``_state_version``
+            # is unchanged since the previous rebuild, no row of the
+            # ``(n_base, 9)`` base-geometry state matrix can have moved.
+            # Reuse the previous snapshot directly and skip the
+            # ``ascontiguousarray + reshape + copy + np.any`` overhead.
+            # Mostly matters in the ``allfixed`` configuration where
+            # only TF currents move and the puck DOF graph never
+            # changes; saves ~10-30us per ``recompute_currents`` call.
+            base_geom_now = self._last_base_geom_state
+            changed_pucks = np.zeros(self._n_base_pucks, dtype=bool)
+        else:
+            base_geom_now = self._base_geom_state_matrix()
+            changed_pucks = None
+            if self._last_base_geom_state is not None:
+                changed_pucks = np.any(
+                    base_geom_now != self._last_base_geom_state, axis=1
+                )
         if self.solver_mode == "dipole":
             # Dipole mode: ``_rebuild_dipole`` itself dispatches between
             # the full reduced-L assembly (puck DoFs moved) and the
@@ -6615,7 +7119,6 @@ class PSCBulkArray(Optimizable):
             the numerical path.
         """
         _t_total = self._mark_phase_start()
-        g_tf, gd_tf, I_tf = self._tf_arrays()
         pts = np.asarray(points)
         if moving_puck_mask is not None:
             mk = np.asarray(moving_puck_mask, dtype=bool).reshape(-1)
@@ -6625,9 +7128,15 @@ class PSCBulkArray(Optimizable):
                     f"({self._n_base_pucks},), got {mk.shape}"
                 )
         if self.solver_mode == "dipole":
-            out = self._B_at_points_dipole(pts, g_tf, gd_tf, I_tf)
+            # Defer the ``_tf_arrays()`` host-side stack until we know
+            # the dispatch needs it.  The cached B branch (allfixed +
+            # also free-DoF *unless* recompute_currents has not yet
+            # run since the last DoF change) ignores TF arrays
+            # entirely.
+            out = self._B_at_points_dipole(pts)
             self._mark_phase_end("B_at_points_dipole_total", _t_total)
             return out
+        g_tf, gd_tf, I_tf = self._tf_arrays()
         if self.solver_mode == "shell_l2":
             if self._has_free_puck_dofs():
                 raise NotImplementedError(
@@ -6796,12 +7305,56 @@ class PSCBulkArray(Optimizable):
         self._mark_phase_end("B_at_points_tf_total", _t_total)
         return out
 
+    def _refresh_dipole_device_cache(
+        self,
+        centers: np.ndarray,
+        quats: np.ndarray,
+        *,
+        moments_only: bool = False,
+    ) -> None:
+        """Store device-side snapshots of puck geometry for reuse.
+
+        Phase-H Step 3.  Called at the tail of every successful
+        :meth:`_rebuild_dipole` return (full rebuild and TF-only
+        short-circuit).  The cached ``jax.Array`` objects are reused
+        by :meth:`_B_at_points_dipole` (cached branch) and
+        :meth:`_vjp_dipole` so the per-iter forward + backward only
+        re-wrap ``pts`` and the cotangent.  The buffers are
+        invalidated by setting any one of them to ``None`` when the
+        underlying geometry / moments change again -- which we don't
+        need to do explicitly because every change goes through
+        ``_rebuild_dipole`` and lands back in this refresh.
+
+        Args:
+            centers: ``(n_base, 3)`` base puck centres (host).
+            quats: ``(n_base, 4)`` base puck quaternions (host).
+            moments_only: When ``True`` (TF-only short-circuit), only
+                ``m_global`` is re-wrapped to device; the static
+                centre / quaternion / self-L snapshots from the
+                previous full rebuild are left untouched.  This saves
+                one H->D transfer per iter in the dominant
+                ``allfixed`` regime.
+        """
+        n_base = int(self._n_base_pucks)
+        if not moments_only:
+            self._dipole_jdev_centers = jnp.asarray(centers)
+            self._dipole_jdev_quats = jnp.asarray(quats)
+            if self._dipole_self_L_local_cached is not None:
+                self._dipole_jdev_self_L_local = jnp.asarray(
+                    self._dipole_self_L_local_cached
+                )
+            else:
+                self._dipole_jdev_self_L_local = None
+        if self._dipole_m_red is not None:
+            self._dipole_jdev_m_global = jnp.asarray(
+                self._dipole_m_red.reshape(n_base, 3)
+            )
+        else:
+            self._dipole_jdev_m_global = None
+
     def _B_at_points_dipole(
         self,
         pts: np.ndarray,
-        g_tf: np.ndarray,
-        gd_tf: np.ndarray,
-        I_tf: np.ndarray,
     ) -> np.ndarray:
         """Evaluate ``B(pts)`` for ``solver_mode == 'dipole'``.
 
@@ -6818,19 +7371,27 @@ class PSCBulkArray(Optimizable):
            :func:`_psc_bulk_dipole_mod.B_at_points_dipole`, which is
            ``O(n_eval * n_all)`` and very cheap.
 
+        The cached path **never** fetches TF coil arrays (the closed-
+        form dipole sum does not depend on them); ``_tf_arrays()`` is
+        only invoked when the free-DoF branch is taken.
+
         Args:
             pts: ``(n_eval, 3)`` evaluation points.
-            g_tf, gd_tf, I_tf: TF coil arrays from :meth:`_tf_arrays`.
 
         Returns:
             ``(n_eval, 3)`` bulk magnetic field.
         """
-        centers, quats, _radii, _thicknesses = self._get_base_puck_geometry()
-        self._ensure_dipole_jit_cache(pts, g_tf)
-        if (
+        take_free_dof_branch = (
             self._has_free_center_or_quat_dofs()
             and not getattr(self, "_force_tf_only_forward", False)
-        ):
+        )
+        if take_free_dof_branch:
+            # Free-DoF branch: end-to-end JAX pipeline; needs TF.
+            centers, quats, _radii, _thicknesses = (
+                self._get_base_puck_geometry()
+            )
+            g_tf, gd_tf, I_tf = self._tf_arrays()
+            self._ensure_dipole_jit_cache(pts, g_tf)
             self_L_cached = self._dipole_self_L_local_cached
             assert self_L_cached is not None, (
                 "PSCBulkArray dipole mode: self-inductance cache missing; "
@@ -6844,7 +7405,7 @@ class PSCBulkArray(Optimizable):
                     jnp.asarray(g_tf),
                     jnp.asarray(gd_tf),
                     jnp.asarray(I_tf),
-                    jnp.asarray(pts),
+                    self._get_dipole_jdev_pts(pts),
                     jnp.asarray(self_L_cached),
                     int(self.nfp),
                     bool(self.stellsym),
@@ -6852,21 +7413,34 @@ class PSCBulkArray(Optimizable):
                 dtype=np.float64,
             )
             return out
-        # Cached fast path.
+        # Cached fast path: just the closed-form dipole sum.  No
+        # TF arrays are touched.
         m_red = self._dipole_m_red
         assert m_red is not None, (
             "PSCBulkArray dipole mode: moments not solved; call "
             "recompute_currents first."
         )
         n_base = int(self._n_base_pucks)
-        m_global_base = m_red.reshape(n_base, 3)
+        # Build the field jit kernel only (drops TF from the key).
+        self._ensure_dipole_jit_cache(pts, None)
         assert self._dipole_jit_field is not None
+        # Reuse device-side puck geometry snapshot when available.
+        centers_j = self._dipole_jdev_centers
+        quats_j = self._dipole_jdev_quats
+        m_global_j = self._dipole_jdev_m_global
+        if centers_j is None or quats_j is None or m_global_j is None:
+            centers, quats, _radii, _thicknesses = (
+                self._get_base_puck_geometry()
+            )
+            centers_j = jnp.asarray(centers)
+            quats_j = jnp.asarray(quats)
+            m_global_j = jnp.asarray(m_red.reshape(n_base, 3))
         out = np.asarray(
             self._dipole_jit_field(
-                jnp.asarray(pts),
-                jnp.asarray(centers),
-                jnp.asarray(quats),
-                jnp.asarray(m_global_base),
+                self._get_dipole_jdev_pts(pts),
+                centers_j,
+                quats_j,
+                m_global_j,
                 int(self.nfp),
                 bool(self.stellsym),
             ),
@@ -6874,40 +7448,146 @@ class PSCBulkArray(Optimizable):
         )
         return out
 
+    def _ensure_dipole_rebuild_jit_cache(self, g_tf: np.ndarray) -> None:
+        """Bind the per-instance assemble-L / assemble-f handles.
+
+        As of Phase L3 the actual ``jax.jit`` decorators live at module
+        level (:data:`_DIPOLE_ASSEMBLE_L_JIT`,
+        :data:`_DIPOLE_ASSEMBLE_F_JIT`), so every instance shares JAX's
+        internal abstract-shape cache.  This method now only updates the
+        per-instance pointers + cache key; the first call from a fresh
+        :class:`PSCBulkArray` at a previously-seen shape signature pays
+        zero XLA compile cost.
+
+        Parameters
+        ----------
+        g_tf : np.ndarray
+            TF coil gamma array, shape ``(n_tf, n_tf_q, 3)``.  Only its
+            shape is consulted (for the staleness key).
+        """
+        n_base = int(self._n_base_pucks)
+        n_tf = int(np.asarray(g_tf).shape[0])
+        n_tf_q = int(np.asarray(g_tf).shape[1])
+        key = (n_base, int(self.nfp), bool(self.stellsym), n_tf, n_tf_q)
+        if (
+            self._dipole_jit_rebuild_key == key
+            and self._dipole_jit_assemble_L is _DIPOLE_ASSEMBLE_L_JIT
+            and self._dipole_jit_assemble_f is _DIPOLE_ASSEMBLE_F_JIT
+        ):
+            return
+        self._dipole_jit_assemble_L = _DIPOLE_ASSEMBLE_L_JIT
+        self._dipole_jit_assemble_f = _DIPOLE_ASSEMBLE_F_JIT
+        self._dipole_jit_rebuild_key = key
+
     def _ensure_dipole_jit_cache(
+        self, pts: np.ndarray, g_tf: Optional[np.ndarray]
+    ) -> None:
+        """Bind the per-instance forward and field jit handles.
+
+        As of Phase L3 the actual ``jax.jit`` decorators live at module
+        level (:data:`_DIPOLE_FIELD_JIT`, :data:`_DIPOLE_FORWARD_JIT`),
+        so the JAX internal abstract-shape cache survives across
+        :class:`PSCBulkArray` instances.  This method only updates the
+        per-instance pointers + staleness keys.
+
+        Two separate caches are managed here so that the cached
+        :func:`B_at_points_dipole` path (which only depends on the
+        dipole sum) is keyed independently of the TF-aware
+        :func:`forward_dipole_pipeline` path:
+
+        * ``_dipole_jit_forward`` -- end-to-end pipeline used in
+          free-DoF mode; keyed on
+          ``(n_base, n_eval, nfp, stellsym, n_tf, n_tf_q)``.  When
+          ``g_tf`` is ``None`` (cached path only) the forward handle
+          is **not** bound here.
+        * ``_dipole_jit_field`` -- :func:`B_at_points_dipole` only;
+          keyed on ``(n_base, n_eval, nfp, stellsym)``.
+
+        Parameters
+        ----------
+        pts : np.ndarray
+            Evaluation points, shape ``(n_eval, 3)``.  Only the shape
+            is consulted.
+        g_tf : np.ndarray | None
+            TF coil gamma array.  When ``None``, only the field handle
+            is bound.
+        """
+        n_base = int(self._n_base_pucks)
+        n_eval = int(np.asarray(pts).shape[0])
+        field_key = (n_base, n_eval, int(self.nfp), bool(self.stellsym))
+        if (
+            self._dipole_jit_field_key != field_key
+            or self._dipole_jit_field is not _DIPOLE_FIELD_JIT
+        ):
+            self._dipole_jit_field = _DIPOLE_FIELD_JIT
+            self._dipole_jit_field_key = field_key
+        if g_tf is None:
+            return
+        n_tf = int(np.asarray(g_tf).shape[0])
+        n_tf_q = int(np.asarray(g_tf).shape[1])
+        fwd_key = (
+            n_base,
+            n_eval,
+            int(self.nfp),
+            bool(self.stellsym),
+            n_tf,
+            n_tf_q,
+        )
+        if (
+            self._dipole_jit_key == fwd_key
+            and self._dipole_jit_forward is _DIPOLE_FORWARD_JIT
+        ):
+            return
+        self._dipole_jit_forward = _DIPOLE_FORWARD_JIT
+        self._dipole_jit_key = fwd_key
+
+    def _ensure_dipole_vjp_jit_cache(
         self, pts: np.ndarray, g_tf: np.ndarray
     ) -> None:
-        """Lazily (re)build the persistent dipole-mode jit handles.
+        """Bind the per-instance analytic VJP handles to the module cache.
 
-        The compiled kernels are keyed on shape-and-static arguments
-        that determine the trace -- ``n_base``, ``n_eval``,
-        ``(nfp, stellsym)``, and the TF coil shape ``(n_tf, n_tf_quad)``.
-        When the key matches the cached entry the existing compiled
-        function is reused; otherwise both jit wrappers are rebuilt.
+        As of Phase L3 the actual ``jax.jit`` decorators for the four
+        analytic-adjoint sub-kernels live at module level
+        (:data:`_DIPOLE_VJP_B_JIT`, :data:`_DIPOLE_VJP_F_JIT`,
+        :data:`_DIPOLE_VJP_L_JIT`, :data:`_DIPOLE_VJP_FUSED_TF_JIT`).
+        That makes the JAX internal abstract-shape cache survive across
+        :class:`PSCBulkArray` instances; a freshly constructed instance
+        whose shape signature matches a previously-compiled one pays
+        zero XLA compile cost on first call.
+
+        The four sub-kernels implement the Phase-H analytic adjoint --
+        i.e. the dipole backward pass decomposed so the host-side
+        chain rule reuses the cached Cholesky factor and never
+        reassembles ``L_red`` (see :data:`_dipole_vjp_B_kernel`,
+        :data:`_dipole_vjp_f_kernel`, :data:`_dipole_vjp_L_kernel`,
+        :data:`_dipole_vjp_fused_tf_kernel` for kernel-level docstrings).
+
+        Parameters
+        ----------
+        pts : np.ndarray
+            Evaluation points, shape ``(n_eval, 3)``.
+        g_tf : np.ndarray
+            TF coil gamma array, shape ``(n_tf, n_tf_q, 3)``.
         """
         n_base = int(self._n_base_pucks)
         n_eval = int(np.asarray(pts).shape[0])
         n_tf = int(np.asarray(g_tf).shape[0])
         n_tf_q = int(np.asarray(g_tf).shape[1])
         key = (n_base, n_eval, int(self.nfp), bool(self.stellsym), n_tf, n_tf_q)
-        if self._dipole_jit_key == key and self._dipole_jit_forward is not None:
+        if (
+            self._dipole_jit_vjp_key == key
+            and self._dipole_jit_vjp_B is _DIPOLE_VJP_B_JIT
+            and self._dipole_jit_vjp_f is _DIPOLE_VJP_F_JIT
+            and self._dipole_jit_vjp_L is _DIPOLE_VJP_L_JIT
+            and self._dipole_jit_vjp_fused_tf is _DIPOLE_VJP_FUSED_TF_JIT
+        ):
             return
-        # ``forward_dipole_pipeline`` signature:
-        #   (centers_base, quats_base, g_tf, gd_tf, I_tf, pts,
-        #    self_L_local_cached, nfp, stellsym)
-        # Static argnums -> 7 (nfp), 8 (stellsym).
-        self._dipole_jit_forward = jax.jit(
-            _psc_bulk_dipole_mod.forward_dipole_pipeline,
-            static_argnums=(7, 8),
-        )
-        # ``B_at_points_dipole`` signature:
-        #   (pts, centers_base, quats_base, m_global_base, nfp, stellsym)
-        # Static argnums -> 4 (nfp), 5 (stellsym).
-        self._dipole_jit_field = jax.jit(
-            _psc_bulk_dipole_mod.B_at_points_dipole,
-            static_argnums=(4, 5),
-        )
-        self._dipole_jit_key = key
+
+        self._dipole_jit_vjp_B = _DIPOLE_VJP_B_JIT
+        self._dipole_jit_vjp_f = _DIPOLE_VJP_F_JIT
+        self._dipole_jit_vjp_L = _DIPOLE_VJP_L_JIT
+        self._dipole_jit_vjp_fused_tf = _DIPOLE_VJP_FUSED_TF_JIT
+        self._dipole_jit_vjp_key = key
 
     def _B_at_points_tf_only(
         self,
@@ -7255,6 +7935,10 @@ class PSCBulkArray(Optimizable):
         _t_total = self._mark_phase_start()
         v_B = np.asarray(v_B).reshape(-1, 3)
         pts = eval_pts if eval_pts is not None else self.eval_points
+        if self.solver_mode == "dipole":
+            out = self._vjp_dipole(v_B, pts)
+            self._mark_phase_end("vjp_setup_B_dipole_total", _t_total)
+            return out
         if self._has_free_puck_dofs():
             out = self._vjp_puck_geometry(v_B, pts)
             self._mark_phase_end("vjp_setup_B_free_total", _t_total)
@@ -7262,6 +7946,248 @@ class PSCBulkArray(Optimizable):
         out = self._vjp_tf_only(v_B, pts)
         self._mark_phase_end("vjp_setup_B_tf_total", _t_total)
         return out
+
+    def _merge_tf_coil_vjps(
+        self,
+        vg_np: np.ndarray,
+        vgd_np: np.ndarray,
+        vI_np: np.ndarray,
+    ) -> Derivative:
+        r"""Sum :meth:`Coil.vjp` outputs across all TF coils into one ``Derivative``.
+
+        Phase-J J2 micro-optimisation that replaces the historical
+        idiom
+
+        .. code-block:: python
+
+            vjp_tf = sum(
+                self.coils_TF[i].vjp(vg_np[i], vgd_np[i], np.asarray([vI_np[i]]))
+                for i in range(len(self.coils_TF))
+            )
+
+        used at every dipole-mode backward call.  ``sum`` walks
+        :meth:`Derivative.__add__`, which calls :func:`copy_numpy_dict`
+        on the running accumulator every iteration -- ``n_tf - 1``
+        full-dict copies per backward pass.  For ``n_tf in {2..4}``
+        the Python-side cost is ~10-20 us per copy, and it scales
+        linearly with the number of TF coils.
+
+        This helper accumulates into the first coil's freshly-allocated
+        ``Derivative`` via :meth:`Derivative.__iadd__` so the running
+        dict is mutated in place; the per-call cost becomes
+        ``len(coils_TF)`` ``Coil.vjp`` calls + ``len(coils_TF) - 1``
+        in-place dict merges (no LHS-side copies).  Behaviour is
+        otherwise byte-identical to the historical ``sum`` -- each
+        leaf array is the same elementwise.
+
+        Parameters
+        ----------
+        vg_np, vgd_np : np.ndarray
+            ``(n_tf, n_quad, 3)`` arrays of TF-side ``v_gamma`` and
+            ``v_gammadash`` cotangents (from the fused dipole VJP).
+        vI_np : np.ndarray
+            ``(n_tf,)`` array of TF-side current cotangents.
+
+        Returns
+        -------
+        Derivative
+            Sum of ``self.coils_TF[i].vjp(vg_np[i], vgd_np[i], [vI_np[i]])``
+            across all TF coils.  When ``self.coils_TF`` is empty the
+            returned :class:`Derivative` has an empty data dict.
+        """
+        n_tf = len(self.coils_TF)
+        if n_tf == 0:
+            return Derivative({})
+        out = self.coils_TF[0].vjp(
+            vg_np[0], vgd_np[0], np.asarray([vI_np[0]])
+        )
+        for i in range(1, n_tf):
+            out += self.coils_TF[i].vjp(
+                vg_np[i], vgd_np[i], np.asarray([vI_np[i]])
+            )
+        return out
+
+    def _vjp_dipole(self, v_B: np.ndarray, pts: np.ndarray) -> Derivative:
+        """Dipole-mode analytic VJP.
+
+        Phase-H factored adjoint.  With the forward
+        ``m = -L^{-1} f`` and ``B = B(c, q, m, pts)``, the backward
+        for ``J = <v_B, B>`` factors as
+
+        1. ``(lam_c_B, lam_q_B, lam_m) = (dB/dc, dB/dq, dB/dm)^T v_B``
+           (no L involved -- one ``jax.vjp`` through
+           :func:`B_at_points_dipole`).
+        2. ``lam_f = -L^{-T} lam_m`` -- one
+           :func:`scipy.linalg.cho_solve` against the cached
+           ``_dipole_L_red_chol`` (NO Cholesky refactor, NO L
+           reassembly).
+        3. ``(lam_c_f, lam_q_f, vg, vgd, vI) = (df/d{c,q,g,gd,I})^T lam_f``
+           -- one ``jax.vjp`` through
+           :func:`assemble_f_dipole_reduced_jax` (no L involved).
+        4. For free centre / quaternion DoFs only, add
+           ``(lam_c_L, lam_q_L) = (dL/d{c,q})^T outer(lam_f, m)`` --
+           one ``jax.vjp`` through
+           :func:`assemble_L_dipole_reduced_jax` (does **not** invert
+           or refactor L; the cotangent is built from the already-
+           solved ``m`` and ``lam_f``).
+
+        The TF-side ``(vg, vgd, vI)`` are then mapped back through
+        each ``coils_TF[i].vjp(...)`` (unchanged from the old kernel).
+        """
+        n_base = int(self._n_base_pucks)
+        centers, quats, _radii, _thicknesses = self._get_base_puck_geometry()
+        self_L_cached = self._dipole_self_L_local_cached
+        assert self_L_cached is not None, (
+            "PSCBulkArray dipole mode: self-inductance cache missing; "
+            "call recompute_currents first."
+        )
+        chol = self._dipole_L_red_chol
+        assert chol is not None, (
+            "PSCBulkArray dipole mode: Cholesky factor missing; "
+            "call recompute_currents first."
+        )
+        m_red = self._dipole_m_red
+        assert m_red is not None, (
+            "PSCBulkArray dipole mode: moments missing; call "
+            "recompute_currents first."
+        )
+        g_tf, gd_tf, I_tf = self._tf_arrays()
+        self._ensure_dipole_vjp_jit_cache(np.asarray(pts), g_tf)
+        assert self._dipole_jit_vjp_B is not None
+        assert self._dipole_jit_vjp_f is not None
+        assert self._dipole_jit_vjp_fused_tf is not None
+
+        free_geom = self._has_free_center_or_quat_dofs()
+
+        # Reuse device-resident puck geometry snapshots when valid;
+        # otherwise wrap fresh NumPy arrays.
+        centers_j = (
+            self._dipole_jdev_centers
+            if self._dipole_jdev_centers is not None
+            else jnp.asarray(centers)
+        )
+        quats_j = (
+            self._dipole_jdev_quats
+            if self._dipole_jdev_quats is not None
+            else jnp.asarray(quats)
+        )
+        m_global = m_red.reshape(n_base, 3)
+        m_global_j = (
+            self._dipole_jdev_m_global
+            if self._dipole_jdev_m_global is not None
+            else jnp.asarray(m_global)
+        )
+
+        if not free_geom:
+            # ``allfixed`` fast path: a single fused JAX kernel does
+            # vjp_B + on-device cho_solve + vjp_f.  Cuts the per-iter
+            # backward to one device dispatch + one D->H copy.
+            L_chol_j = self._dipole_jdev_L_red_chol
+            assert L_chol_j is not None, (
+                "dipole device-side Cholesky factor missing; call "
+                "recompute_currents first."
+            )
+            _t_jax = self._mark_phase_start()
+            vc_j, vq_j, vg, vgd, vI = self._dipole_jit_vjp_fused_tf(
+                self._get_dipole_jdev_pts(pts),
+                centers_j,
+                quats_j,
+                m_global_j,
+                jnp.asarray(g_tf),
+                jnp.asarray(gd_tf),
+                jnp.asarray(I_tf),
+                L_chol_j,
+                jnp.asarray(v_B),
+                int(self.nfp),
+                bool(self.stellsym),
+            )
+            self._mark_phase_end("vjp_dipole_fused_tf", _t_jax)
+            # ``vc`` / ``vq`` are not used downstream when puck DoFs
+            # are fixed, but materialising them is essentially free
+            # next to a single JAX dispatch.
+            vg_np = np.asarray(vg)
+            vgd_np = np.asarray(vgd)
+            vI_np = np.asarray(vI)
+            _t_tf_pullback = self._mark_phase_start()
+            vjp_tf = self._merge_tf_coil_vjps(vg_np, vgd_np, vI_np)
+            self._mark_phase_end("vjp_dipole_tf_pullback", _t_tf_pullback)
+            return vjp_tf
+
+        # Free centre / quaternion DoFs: keep the split kernels +
+        # host-side cho_solve and add the L-side adjoint.
+        _t_jax = self._mark_phase_start()
+        lam_c_B, lam_q_B, lam_m_b = self._dipole_jit_vjp_B(
+            self._get_dipole_jdev_pts(pts),
+            centers_j,
+            quats_j,
+            m_global_j,
+            jnp.asarray(v_B),
+            int(self.nfp),
+            bool(self.stellsym),
+        )
+        self._mark_phase_end("vjp_dipole_vjp_B", _t_jax)
+        lam_m_np = np.asarray(lam_m_b).reshape(-1)
+
+        _t_solve = self._mark_phase_start()
+        c_factor, low = chol
+        lam_f = -sp_linalg.cho_solve(
+            (c_factor, low), lam_m_np, check_finite=False
+        )
+        self._mark_phase_end("vjp_dipole_chol_solve", _t_solve)
+        lam_f_j = jnp.asarray(lam_f)
+
+        _t_jax_f = self._mark_phase_start()
+        lam_c_f, lam_q_f, vg, vgd, vI = self._dipole_jit_vjp_f(
+            centers_j,
+            quats_j,
+            jnp.asarray(g_tf),
+            jnp.asarray(gd_tf),
+            jnp.asarray(I_tf),
+            lam_f_j,
+            int(self.nfp),
+            bool(self.stellsym),
+        )
+        self._mark_phase_end("vjp_dipole_vjp_f", _t_jax_f)
+
+        # L-side adjoint: ``(dL/d{c,q})^T outer(lam_f, m)``.
+        assert self._dipole_jit_vjp_L is not None
+        self_L_local_j = (
+            self._dipole_jdev_self_L_local
+            if self._dipole_jdev_self_L_local is not None
+            else jnp.asarray(self_L_cached)
+        )
+        _t_jax_L = self._mark_phase_start()
+        outer_ct = jnp.outer(lam_f_j, jnp.asarray(m_red))
+        lam_c_L, lam_q_L = self._dipole_jit_vjp_L(
+            centers_j,
+            quats_j,
+            self_L_local_j,
+            outer_ct,
+            int(self.nfp),
+            bool(self.stellsym),
+        )
+        self._mark_phase_end("vjp_dipole_vjp_L", _t_jax_L)
+        vc_np = (
+            np.asarray(lam_c_B) + np.asarray(lam_c_f) + np.asarray(lam_c_L)
+        )
+        vq_np = (
+            np.asarray(lam_q_B) + np.asarray(lam_q_f) + np.asarray(lam_q_L)
+        )
+
+        vg_np = np.asarray(vg)
+        vgd_np = np.asarray(vgd)
+        vI_np = np.asarray(vI)
+
+        grad_local = np.zeros(n_base * _DOFS_PER_PUCK)
+        for i in range(n_base):
+            off = i * _DOFS_PER_PUCK
+            grad_local[off : off + 3] = vc_np[i]
+            grad_local[off + 3 : off + 7] = vq_np[i]
+
+        _t_tf_pullback = self._mark_phase_start()
+        vjp_tf = self._merge_tf_coil_vjps(vg_np, vgd_np, vI_np)
+        self._mark_phase_end("vjp_dipole_tf_pullback", _t_tf_pullback)
+        return Derivative({self: grad_local}) + vjp_tf
 
     def _vjp_tf_only(self, v_B, pts):
         if _USE_JAX_TF_VJP:

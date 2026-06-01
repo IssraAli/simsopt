@@ -8,19 +8,227 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.spatial.transform import Rotation
 
 from simsopt.field.biotsavart import BiotSavart
-
-contig = np.ascontiguousarray
 
 try:
     from pyevtk.hl import unstructuredGridToVTK
     from pyevtk.vtk import VtkTriangle
 except ImportError:
-    unstructuredGridToVTK = None
-    VtkTriangle = None
+    unstructuredGridToVTK = None  # type: ignore[assignment,misc]
+    VtkTriangle = None  # type: ignore[assignment,misc]
 
-__all__ = ["puck_surface_mesh", "pucks_to_vtk", "pucks_field_to_vtk"]
+contig = np.ascontiguousarray
+
+
+def _quaternion_wxyz_from_rotation_matrix(R: np.ndarray) -> np.ndarray:
+    """Scalar-first quaternion ``[w, x, y, z]`` for a proper rotation matrix.
+
+    Wraps SciPy because :func:`~simsopt.field.psc_bulk._rotation_matrix_from_quat`
+    is one-way in the codebase and replica VTK export needs mesh roll parity
+    with the dipole solver's symmetry-replicated frames.
+    """
+    Rmat = np.asarray(R, dtype=float).reshape(3, 3)
+    q_xyzw = Rotation.from_matrix(Rmat).as_quat()
+    return np.array([q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]], dtype=float)
+
+
+def _approx_vertex_normals_puck(
+    pts: np.ndarray,
+    center: np.ndarray,
+    R_l2g: np.ndarray,
+    R_disk: float,
+    t: float,
+) -> np.ndarray:
+    """Cylinder outward normals (unit) for VTK ``B_n`` diagnostics.
+
+    ``R_l2g`` maps puck-local Cartesian coordinates to global (same convention
+    as :func:`~simsopt.field.psc_bulk._rotation_matrix_from_quat`).
+    Vertex positions are projected into local coords with ``rel @ R_l2g``.
+    """
+    c = np.asarray(center, dtype=float).reshape(3)
+    R = np.asarray(R_l2g, dtype=float).reshape(3, 3)
+    pl = (pts - c[None, :]) @ R
+    xl, yl, zl = pl[:, 0], pl[:, 1], pl[:, 2]
+    rho = np.hypot(xl, yl)
+    tol_z = 1e-9 * max(float(R_disk), float(t), 1e-15)
+    tol_r = 1e-6 * max(float(R_disk), 1e-15)
+    mask_top = (np.abs(zl - 0.5 * t) < tol_z) & (rho <= R_disk + tol_r)
+    mask_bot = (np.abs(zl + 0.5 * t) < tol_z) & (rho <= R_disk + tol_r)
+    mask_side = (rho >= R_disk * (1.0 - 1e-5)) & (
+        np.abs(zl) <= 0.5 * t * (1.0 + 1e-5)
+    )
+    n_loc = np.zeros_like(pl)
+    n_loc[mask_top] = np.array([0.0, 0.0, 1.0], dtype=float)
+    n_loc[mask_bot] = np.array([0.0, 0.0, -1.0], dtype=float)
+    xy = np.stack([xl, yl, np.zeros_like(xl)], axis=-1)
+    norms = np.linalg.norm(xy, axis=-1)
+    sel_side = mask_side & (norms > 1e-15)
+    n_loc[sel_side] = xy[sel_side] / norms[sel_side, None]
+
+    unresolved = ~(mask_top | mask_bot | mask_side)
+    if np.any(unresolved):
+        n_loc[unresolved] = np.array([0.0, 0.0, 1.0], dtype=float)
+    ng = n_loc @ R.T
+    nn = np.linalg.norm(ng, axis=-1, keepdims=True)
+    nn = np.maximum(nn, 1e-15)
+    return ng / nn
+
+
+def _dipole_puck_equivalent_K_base(psc_bulk) -> np.ndarray:
+    """Per-base equivalent uniform :math:`\\mathbf{K}` in the global frame.
+
+    Matches the ``m \\times \\hat n / (\\pi R^2)`` projection used in
+    downstream dipole/energy comparison tooling.
+    """
+    from .psc_bulk import _rotation_matrix_from_quat
+
+    m_red = getattr(psc_bulk, "_dipole_m_red", None)
+    centers_b, quats_b, radii_b, _thick_b = psc_bulk._get_base_puck_geometry()
+    n_base = int(centers_b.shape[0])
+    if m_red is None:
+        m_base = np.zeros((n_base, 3), dtype=float)
+    else:
+        m_base = np.asarray(m_red, dtype=float).reshape(n_base, 3)
+    K_base = np.zeros((n_base, 3), dtype=float)
+    quats_b = np.asarray(quats_b, dtype=float)
+    radii_b = np.asarray(radii_b, dtype=float).ravel()
+    for bi in range(n_base):
+        R_b = _rotation_matrix_from_quat(quats_b[bi])
+        n_hat = R_b @ np.array([0.0, 0.0, 1.0], dtype=float)
+        nn = float(np.linalg.norm(n_hat))
+        if nn < 1e-15:
+            continue
+        n_hat = n_hat / nn
+        R_val = float(radii_b[bi])
+        area = float(np.pi * R_val * R_val)
+        if area <= 0.0:
+            continue
+        K_base[bi] = np.cross(m_base[bi], n_hat) / area
+    return K_base
+
+
+def _pucks_to_vtk_dipole(
+    psc_bulk,
+    filename: str,
+    n_phi: int = 64,
+    n_r: int = 16,
+) -> None:
+    """VTK export for ``solver_mode='dipole'`` (no shell basis / ``_K_stack``)."""
+    import jax.numpy as jnp
+
+    from ._psc_bulk_dipole import _replicate_pucks_dipole
+    from .psc_bulk import _rotation_matrix_from_quat
+
+    if unstructuredGridToVTK is None:
+        raise ImportError("pucks_to_vtk requires pyevtk (pip install pyevtk)")
+
+    K_base = _dipole_puck_equivalent_K_base(psc_bulk)
+    centers_b, quats_b, radii_b, thick_b = psc_bulk._get_base_puck_geometry()
+    centers_b = np.asarray(centers_b, dtype=float)
+    quats_b = np.asarray(quats_b, dtype=float)
+    radii_b = np.asarray(radii_b, dtype=float).ravel()
+    thick_b = np.asarray(thick_b, dtype=float).ravel()
+
+    centers_all, R_all, signs_all, base_idx_all = _replicate_pucks_dipole(
+        jnp.asarray(centers_b),
+        jnp.asarray(quats_b),
+        int(psc_bulk.nfp),
+        bool(psc_bulk.stellsym),
+    )
+    centers_all = np.asarray(centers_all, dtype=float)
+    R_all = np.asarray(R_all, dtype=float)
+    signs_all = np.asarray(signs_all, dtype=float).ravel()
+    base_idx_all = np.asarray(base_idx_all, dtype=np.int64).ravel()
+
+    bs_tf = BiotSavart(psc_bulk.coils_TF)
+    all_x: List[np.ndarray] = []
+    all_y: List[np.ndarray] = []
+    all_z: List[np.ndarray] = []
+    all_Km: List[np.ndarray] = []
+    all_Kv: List[np.ndarray] = []
+    all_Bn: List[np.ndarray] = []
+    all_g: List[np.ndarray] = []
+    all_Ieq: List[np.ndarray] = []
+    offset = 0
+    all_tri: List[np.ndarray] = []
+
+    for j in range(int(centers_all.shape[0])):
+        bi = int(base_idx_all[j])
+        R_disk = float(radii_b[bi])
+        t_val = float(thick_b[bi])
+        R_b_mat = _rotation_matrix_from_quat(quats_b[bi])
+        K_rep = signs_all[j] * (R_all[j] @ R_b_mat.T @ K_base[bi])
+        Kmag = float(np.linalg.norm(K_rep))
+        q_wxyz = _quaternion_wxyz_from_rotation_matrix(R_all[j])
+        ax_z = R_all[j] @ np.array([0.0, 0.0, 1.0], dtype=float)
+        x, y, z, tri = puck_surface_mesh(
+            centers_all[j],
+            ax_z,
+            R_disk,
+            t_val,
+            n_phi=n_phi,
+            n_r=n_r,
+            quat=q_wxyz,
+        )
+        pts = np.stack([x, y, z], axis=-1)
+        n_vertex = _approx_vertex_normals_puck(pts, centers_all[j], R_all[j], R_disk, t_val)
+        bs_tf.set_points_cart(contig(pts))
+        B_tf = bs_tf.B()
+        Bn = np.einsum("ij,ij->i", B_tf, n_vertex)
+        Km = np.full_like(x, Kmag, dtype=float)
+        Kv = np.broadcast_to(K_rep, (len(x), 3)).copy()
+        g = np.zeros_like(x, dtype=float)
+        I_side = Kmag * t_val
+        I_face = Kmag * 2.0 * R_disk
+        Ieq_scalar = float(max(I_side, I_face))
+        all_x.append(x)
+        all_y.append(y)
+        all_z.append(z)
+        all_Km.append(Km)
+        all_Kv.append(Kv)
+        all_Bn.append(Bn)
+        all_g.append(g)
+        all_Ieq.append(np.full_like(x, Ieq_scalar))
+        all_tri.append(tri + offset)
+        offset += len(x)
+
+    x = contig(np.concatenate(all_x))
+    y = contig(np.concatenate(all_y))
+    z = contig(np.concatenate(all_z))
+    tri = contig(np.vstack(all_tri))
+    connectivity = contig(tri.reshape(-1))
+    offsets = contig(3 * np.arange(tri.shape[0]) + 3)
+    cell_types = contig(np.full(offsets.shape, VtkTriangle.tid))
+
+    K_mag = contig(np.concatenate(all_Km))
+    K_concat = np.concatenate(all_Kv)
+    K_vec = (
+        contig(K_concat[:, 0]),
+        contig(K_concat[:, 1]),
+        contig(K_concat[:, 2]),
+    )
+    Bn_bg = contig(np.concatenate(all_Bn))
+    g_pot = contig(np.concatenate(all_g))
+    I_equivalent = contig(np.concatenate(all_Ieq))
+
+    unstructuredGridToVTK(
+        str(filename),
+        x,
+        y,
+        z,
+        connectivity,
+        offsets,
+        cell_types,
+        pointData={
+            "K_magnitude": K_mag,
+            "K_vector": K_vec,
+            "B_n_bg": Bn_bg,
+            "g_potential": g_pot,
+            "I_equivalent": I_equivalent,
+        },
+    )  # type: ignore[call-arg]
 
 
 def puck_surface_mesh(
@@ -312,6 +520,9 @@ def pucks_to_vtk(
     """
     if unstructuredGridToVTK is None:
         raise ImportError("pucks_to_vtk requires pyevtk (pip install pyevtk)")
+    if str(getattr(psc_bulk, "solver_mode", "")).strip().lower() == "dipole":
+        _pucks_to_vtk_dipole(psc_bulk, filename, n_phi=n_phi, n_r=n_r)
+        return
     I_eq = psc_bulk.get_equivalent_currents()
 
     all_x: List[np.ndarray] = []
@@ -412,3 +623,6 @@ def pucks_field_to_vtk(
             )
         },
     )
+
+
+__all__ = ["puck_surface_mesh", "pucks_to_vtk", "pucks_field_to_vtk"]
