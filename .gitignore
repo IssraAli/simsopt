@@ -93,6 +93,10 @@ src/simsopt/_version.py
 
 # Local scratch / generated artifacts (dipole array + QUASR scan work)
 /dipole_array_tutorial*/
+# Winding-surface / regcoil example + test outputs
+/simsopt_regcoil_out.*.nc
+/simsopt_winding_surface_example/
+/winding_surface_regcoil_out.*/
 /jac_log_*.dat
 /passive_bulks_rotated_timing*.csv
 /src/simsopt/configs/QUASR_cache/

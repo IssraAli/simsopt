@@ -22,6 +22,7 @@ typedef xt::pytensor<double, 2, xt::layout_type::row_major> PyTensor;
 #include "wireframe_optimization.h"
 #include "reiman.h"
 #include "simdhelpers.h"
+#include "winding_surface.h"
 #include "boozerresidual_py.h"
 
 namespace py = pybind11;
@@ -35,6 +36,7 @@ void init_magneticfields(py::module_ &);
 void init_boozermagneticfields(py::module_ &);
 void init_tracing(py::module_ &);
 void init_distance(py::module_ &);
+void init_currentpotential(py::module_ &);
 
 
 
@@ -47,6 +49,7 @@ PYBIND11_MODULE(simsoptpp, m) {
     init_boozermagneticfields(m);
     init_tracing(m);
     init_distance(m);
+    init_currentpotential(m);
 
 #if defined(USE_XSIMD)
     m.attr("using_xsimd") = true;
@@ -87,6 +90,15 @@ PYBIND11_MODULE(simsoptpp, m) {
 
     m.def("DommaschkB" , &DommaschkB);
     m.def("DommaschkdB", &DommaschkdB);
+
+    m.def("WindingSurfaceBn_REGCOIL", &WindingSurfaceBn_REGCOIL);
+    m.def("WindingSurfaceB", &WindingSurfaceB);
+    m.def("WindingSurfacedB", &WindingSurfacedB);
+    m.def("WindingSurfaceA", &WindingSurfaceA);
+    m.def("WindingSurfacedA", &WindingSurfacedA);
+    m.def("winding_surface_field_Bn", &winding_surface_field_Bn);
+    m.def("winding_surface_field_K2_matrices", &winding_surface_field_K2_matrices);
+    m.def("winding_surface_field_Bn_GI", &winding_surface_field_Bn_GI);
 
     m.def("integral_BdotN", &integral_BdotN);
 

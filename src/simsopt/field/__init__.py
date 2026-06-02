@@ -4,6 +4,7 @@ from .coil import *
 from .coilset import *
 from .magneticfield import *
 from .magneticfieldclasses import *
+from .currentpotential import *
 from .mgrid import *
 from .normal_field import *
 from .tracing import *
@@ -19,6 +20,7 @@ __all__ = (
     + coilset.__all__
     + magneticfield.__all__
     + magneticfieldclasses.__all__
+    + currentpotential.__all__
     + mgrid.__all__
     + normal_field.__all__
     + tracing.__all__
