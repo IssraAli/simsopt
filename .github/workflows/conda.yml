@@ -43,9 +43,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
           channels: conda-forge
           channel-priority: strict
+          conda-build-version: ">=3.26"
 
       - name: Prepare
-        run: conda install -y conda-build setuptools_scm anaconda-client scikit-build-core
+        run: conda install -y --name base anaconda-client setuptools_scm scikit-build-core
 
       - name: Build and upload
         if: github.event_name == 'release' && github.event.action == 'published'

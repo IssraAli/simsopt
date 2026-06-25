@@ -2,7 +2,7 @@ import unittest
 
 from simsopt.configs.zoo import get_data, configurations
 from simsopt.geo import Curve
-from simsopt.field.coil import Current
+from simsopt.field.coil import Current, ScaledCurrent
 from simsopt.field.biotsavart import BiotSavart
 
 
@@ -56,10 +56,8 @@ class TestGetData(unittest.TestCase):
                 )
                 for i, current in enumerate(base_currents):
                     self.assertIsInstance(
-                        current,
-                        Current,
-                        f"base_currents[{i}] should be a Current for {config_name}, got {type(current)}",
-                    )
+                        current, (Current, ScaledCurrent),
+                        f"base_currents[{i}] should be a Current or ScaledCurrent for {config_name}, got {type(current)}")
 
                 # Check ma is a CurveRZFourier
                 self.assertIsInstance(
