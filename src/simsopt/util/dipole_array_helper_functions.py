@@ -772,7 +772,8 @@ def generate_tf_array(
     TF_a,
     TF_b,
     fixed_geo_tfs=False,
-    planar_tfs=True,
+    planar_fourier_tfs=True,
+    elliptical_tfs=False,
     order=6,
     numquadpoints=32,
 ):
@@ -794,7 +795,25 @@ def generate_tf_array(
     from simsopt.geo import create_equally_spaced_curves
 
     if not fixed_geo_tfs:
-        if planar_tfs:
+        assert not (planar_fourier_tfs and elliptical_tfs), "Only one of planar and elliptical tfs can be true. "
+        if planar_fourier_tfs:
+            # try:
+            from simsopt.geo import create_equally_spaced_planar_curves
+
+            base_tf_curves = create_equally_spaced_planar_curves(
+                ntf,
+                winding_surface.nfp,
+                stellsym=winding_surface.stellsym,
+                R0=TF_R0,
+                R1=TF_a,
+                order=order,
+                numquadpoints=numquadpoints,
+            )
+            # except ImportError:
+            #     raise ImportError(
+            #         "Need to be on the windowpane branch with the correct TF curve class to unfix TF geometry"
+            #     )
+        elif elliptical_tfs:
             try:
                 from simsopt.geo import create_equally_spaced_cylindrical_curves
 
@@ -834,6 +853,7 @@ def generate_tf_array(
         )
         # add this for elliptical TF coils - keep same ellipticity as VV
         for c in base_tf_curves:
+            c.fix_all()
             c.set(
                 "zs(1)", -TF_b
             )  # see create_equally_spaced_curves doc for minus sign info
@@ -844,14 +864,16 @@ def generate_tf_array(
 def generate_curves(
     surf,
     VV,
-    planar_tfs=False,
+    planar_fourier_tfs=False,
+    ellptical_tfs=False,
     outdir="",
     inboard_radius=0.8,
     wp_fil_spacing=0.75,
     half_per_spacing=0.75,
     wp_n=2,
     numquadpoints=32,
-    order=12,
+    order_wp=12,
+    order_tf=6,
     verbose=True,
     fixed_geo_tfs=False,
     tf_init_fac=4,
@@ -900,7 +922,7 @@ def generate_curves(
         half_per_spacing=half_per_spacing,
         wp_n=wp_n,  # elliptical coils
         numquadpoints=numquadpoints,
-        order=order,  # want high order to approximate ellipse
+        order=order_wp,  # want high order to approximate ellipse
         verbose=verbose,
     )
     # generate TFs of the class CurvePlanarEllipticalCylindrical (fixed_geo_TFs=False)
@@ -911,11 +933,12 @@ def generate_curves(
         TF_a=surf.minor_radius() * tf_init_fac,
         TF_b=surf.minor_radius() * tf_init_fac,
         fixed_geo_tfs=fixed_geo_tfs,
-        planar_tfs=planar_tfs,
-        order=order,
+        planar_fourier_tfs=planar_fourier_tfs,
+        elliptical_tfs=ellptical_tfs,
+        order=order_tf,
         numquadpoints=numquadpoints,
     )
-    if planar_tfs:
+    if ellptical_tfs:
         # unfix the relevant TF dofs
         for c in base_tf_curves:
             c.fix_all()
