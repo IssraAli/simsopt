@@ -621,6 +621,7 @@ def generate_windowpane_array(
     wp_n,
     numquadpoints=32,
     order=12,
+    square=False,
     verbose=False,
 ):
     """
@@ -706,11 +707,14 @@ def generate_windowpane_array(
                     (VV_b * np.cos(theta_coil)) ** 2 + (VV_a * np.sin(theta_coil)) ** 2
                 )
             )
-            Rtor = (
-                np.pi / winding_surface.nfp * (VV_R0 + r * np.cos(theta_coil))
-                - half_per_spacing
-                - (nwps_toroidal - 1) * wp_fil_spacing
-            ) / (2 * nwps_toroidal)
+            if square:
+                Rtor = r
+            else:
+                Rtor = (
+                        np.pi / winding_surface.nfp * (VV_R0 + r * np.cos(theta_coil))
+                        - half_per_spacing
+                        - (nwps_toroidal - 1) * wp_fil_spacing
+                    ) / (2 * nwps_toroidal)
             # Calculate toroidal angle of center of coil
             dphi = (half_per_spacing / 2 + Rtor) / (
                 VV_R0 + r * np.cos(theta_coil)
@@ -876,6 +880,7 @@ def generate_curves(
     order_tf=6,
     verbose=True,
     fixed_geo_tfs=False,
+    square_wps = True,
     tf_init_fac=4,
     ntf=3,
 ):
@@ -923,6 +928,7 @@ def generate_curves(
         wp_n=wp_n,  # elliptical coils
         numquadpoints=numquadpoints,
         order=order_wp,  # want high order to approximate ellipse
+        square=square_wps,
         verbose=verbose,
     )
     # generate TFs of the class CurvePlanarEllipticalCylindrical (fixed_geo_TFs=False)
