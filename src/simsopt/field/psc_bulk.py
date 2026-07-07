@@ -184,7 +184,7 @@ from .puck_basis import (
     build_puck_shell_basis,
     normalize_mode_truncate,
 )
-from .puck_init import toroidal_shell_pucks, winding_surface_pucks
+from .puck_init import curves_to_pucks, toroidal_shell_pucks, winding_surface_pucks
 from . import _psc_bulk_dipole as _psc_bulk_dipole_mod
 
 # Route TF-only VJP through the analytic adjoint + C++ BiotSavart (default
@@ -9109,6 +9109,75 @@ class PSCBulkArray(Optimizable):
             psc.n_radial_disc = int(n_radial_disc)
             psc._rebuild()
         return psc
+
+    @classmethod
+    def from_curves(
+        cls,
+        curves,
+        coils_TF,
+        eval_points: np.ndarray,
+        *,
+        radius: Optional[Union[float, np.ndarray]] = None,
+        thickness: Optional[Union[float, np.ndarray]] = None,
+        m_fourier: int = 4,
+        l_zernike: int = 6,
+        k_chebyshev: int = 4,
+        n_rho: int = 10,
+        n_phi: int = 12,
+        n_z: int = 6,
+        nfp: int = 1,
+        stellsym: bool = False,
+        regularization_delta: float = 1e-6,
+        default_thickness: float = 0.02,
+        strict_rim_continuity: bool = False,
+        adaptive_self_reg: bool = True,
+    ) -> "PSCBulkArray":
+        """Passive bulk pucks placed directly from a list of planar coil curves.
+
+        Reuses each curve's own center and orientation, so it composes
+        naturally with e.g.
+        :func:`~simsopt.util.dipole_array_helper_functions.generate_windowpane_metric_ring_array`
+        (or the other ``generate_windowpane_*`` functions) -- pass their
+        returned curves straight in.  See :func:`~simsopt.field.puck_init.curves_to_pucks`
+        for the center/axis/radius conversion and its approximation caveat
+        (a puck is a circular disc; the input curves need not be).
+
+        Args:
+            curves: sequence of planar coil curves (e.g. ``CurvePlanarFourier``)
+                with ``get('X'/'Y'/'Z'/'q0'/'qi'/'qj'/'qk')`` dofs.
+            radius: forwarded to :func:`~simsopt.field.puck_init.curves_to_pucks`;
+                ``None`` (default) uses each curve's own area-equivalent radius.
+            thickness: forwarded to :func:`~simsopt.field.puck_init.curves_to_pucks`;
+                ``None`` (default) uses ``default_thickness`` for every puck.
+
+        See :class:`PSCBulkArray` for the meaning of the remaining arguments.
+        """
+        centers, axes, radii, thicknesses = curves_to_pucks(
+            curves,
+            radius=radius,
+            thickness=thickness,
+            default_thickness=default_thickness,
+        )
+        return cls(
+            centers,
+            axes,
+            radii,
+            thicknesses,
+            coils_TF,
+            eval_points=np.asarray(eval_points, dtype=float, order="C"),
+            m_fourier=m_fourier,
+            l_zernike=l_zernike,
+            k_chebyshev=k_chebyshev,
+            n_rho=n_rho,
+            n_phi=n_phi,
+            n_z=n_z,
+            nfp=nfp,
+            stellsym=stellsym,
+            regularization_delta=regularization_delta,
+            default_thickness=default_thickness,
+            strict_rim_continuity=strict_rim_continuity,
+            adaptive_self_reg=bool(adaptive_self_reg),
+        )
 
 
 # ======================================================================

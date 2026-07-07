@@ -2,8 +2,9 @@
 Helpers for placing passive-bulk pucks on winding surfaces or toroidal shells.
 
 See :class:`~simsopt.field.psc_bulk.PSCBulkArray` factory methods
-:meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_winding_surface` and
-:meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_toroidal_shell`.
+:meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_winding_surface`,
+:meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_toroidal_shell`, and
+:meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_curves`.
 """
 
 from __future__ import annotations
@@ -12,10 +13,13 @@ from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from ..util.dipole_array_helper_functions import rotate_vector
+
 __all__ = [
     "drop_overlapping_pucks",
     "toroidal_shell_pucks",
     "winding_surface_pucks",
+    "curves_to_pucks",
 ]
 
 
@@ -443,4 +447,84 @@ def winding_surface_pucks(
         radii,
         thicknesses,
     )
+    return centers, axes, radii, thicknesses
+
+
+def curves_to_pucks(
+    curves: Sequence,
+    *,
+    radius: Optional[Union[float, np.ndarray]] = None,
+    thickness: Optional[Union[float, np.ndarray]] = None,
+    default_thickness: float = 0.02,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Convert a list of planar coil curves into puck placement arrays.
+
+    Each curve (e.g. a :class:`~simsopt.geo.curveplanarfourier.CurvePlanarFourier`,
+    such as those returned by
+    :func:`~simsopt.util.dipole_array_helper_functions.generate_windowpane_metric_ring_array`,
+    :func:`~simsopt.util.dipole_array_helper_functions.generate_windowpane_ring_array`,
+    :func:`~simsopt.util.dipole_array_helper_functions.generate_windowpane_wedge_array`, or
+    :func:`~simsopt.util.dipole_array_helper_functions.generate_windowpane_array`) must
+    expose ``get('X')``/``get('Y')``/``get('Z')`` (its center) and
+    ``get('q0')``/``get('qi')``/``get('qj')``/``get('qk')`` (its orientation
+    quaternion). Puck orientation uses the same scalar-first quaternion
+    convention as ``CurvePlanarFourier``, so each curve's own quaternion dofs are
+    reused directly (by rotating the local +z axis) to get the puck axis.
+
+    A puck is a right-circular cylinder, but the input curves can be elliptical
+    or (super)square in cross section (e.g. from a windowpane generator with a
+    large ``wp_n``), so the default per-curve radius is only an
+    *approximation* of the curve's actual footprint: the area-equivalent
+    radius, computed as the RMS distance of the curve's quadrature points
+    (``curve.gamma()``) from its own center. Pass ``radius`` explicitly to
+    override this (e.g. with each curve's own ``Rpol``/``Rtor``, or a fixed
+    value) if the approximation isn't tight enough for your use case.
+
+    Args:
+        curves: sequence of planar coil curves, e.g. a list of
+                ``CurvePlanarFourier`` objects.
+        radius: scalar or per-curve array of puck radii (m). If ``None``
+                (default), the area-equivalent radius is computed from each
+                curve's own quadrature points.
+        thickness: scalar or per-curve array of puck thicknesses (m). If
+                   ``None`` (default), every puck gets ``default_thickness``.
+        default_thickness: used when ``thickness`` is ``None``.
+
+    Returns:
+        Tuple ``(centers, axes, radii, thicknesses)`` with shapes ``(N, 3)``,
+        ``(N, 3)``, ``(N,)``, ``(N,)`` -- the same layout
+        :func:`toroidal_shell_pucks`/:func:`winding_surface_pucks` return, and
+        what :class:`~simsopt.field.psc_bulk.PSCBulkArray` (or
+        :meth:`~simsopt.field.psc_bulk.PSCBulkArray.from_curves`) expects.
+    """
+    n = len(curves)
+    centers = np.zeros((n, 3))
+    axes = np.zeros((n, 3))
+    computed_radii = np.zeros(n)
+    for i, curve in enumerate(curves):
+        centers[i] = [curve.get("X"), curve.get("Y"), curve.get("Z")]
+        q = np.array(
+            [curve.get("q0"), curve.get("qi"), curve.get("qj"), curve.get("qk")]
+        )
+        q = q / np.linalg.norm(q)
+        axes[i] = rotate_vector(np.array([0.0, 0.0, 1.0]), q)
+        if radius is None:
+            rel = curve.gamma() - centers[i]
+            computed_radii[i] = np.sqrt(np.mean(np.sum(rel ** 2, axis=-1)))
+
+    if radius is None:
+        radii = computed_radii
+    elif np.isscalar(radius):
+        radii = np.full(n, float(radius))
+    else:
+        radii = np.asarray(radius, dtype=float)
+
+    if thickness is None:
+        thicknesses = np.full(n, float(default_thickness))
+    elif np.isscalar(thickness):
+        thicknesses = np.full(n, float(thickness))
+    else:
+        thicknesses = np.asarray(thickness, dtype=float)
+
     return centers, axes, radii, thicknesses
