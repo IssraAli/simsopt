@@ -341,7 +341,7 @@ def dipole_array_optimization_function(dofs, obj_dict, weight_dict, psc_array=No
     return J, grad
 
 
-def save_coil_sets(btot, OUT_DIR, file_suffix):
+def save_coil_sets(btot, OUT_DIR, file_suffix, compute_forces_torques=True):
     """
     Save TF and dipole array coil sets together for a dipole array solution.
     Coils are saved together so that coils_to_vtk can compute forces and torques
@@ -354,6 +354,11 @@ def save_coil_sets(btot, OUT_DIR, file_suffix):
             The output directory.
         file_suffix: str
             The suffix for the output files.
+        compute_forces_torques: bool
+            Forwarded to coils_to_vtk. Force/torque computation is O(n_coils^2), so
+            for large windowpane arrays (e.g. from a small inboard_radius in
+            generate_curves) it can dominate the save time; set to False to skip it
+            and just write coil geometry and currents (O(n_coils)).
     """
     from simsopt.field import coils_to_vtk
 
@@ -361,6 +366,7 @@ def save_coil_sets(btot, OUT_DIR, file_suffix):
         btot.Bfields[0].coils + btot.Bfields[1].coils,
         OUT_DIR + "coils" + file_suffix,
         close=True,
+        compute_forces_torques=compute_forces_torques,
     )
 
 
@@ -618,7 +624,7 @@ def generate_even_arc_angles(a, b, ntheta):
 
 
 def generate_even_arc_angles_from_surface(
-    winding_surface, phi_vals, ntheta, ndense=2000
+    winding_surface, phi_vals, ntheta, ndense=2000, theta_range=(0.0, 2 * np.pi)
 ):
     """
     Generate ntheta evenly spaced (by real 3D arc length) poloidal angles, using the
@@ -648,12 +654,15 @@ def generate_even_arc_angles_from_surface(
         ntheta: number of angles to generate.
         ndense: number of points used to densely sample each cross section for building
                 the arc-length parameterization.
+        theta_range: (theta_min, theta_max) in radians over which theta_locs are
+                     equispaced by arc length. Defaults to the full poloidal loop,
+                     (0, 2*pi); a strict subrange is treated as an open arc (no
+                     wraparound segment closing theta_max back to theta_min).
     Returns:
         theta_locs: array of ntheta poloidal angles (radians), evenly spaced by the
-                    (possibly worst-of-all-samples) real arc length.
+                    (possibly worst-of-all-samples) real arc length over theta_range.
         total_arc_length: the (possibly worst-of-all-samples) real arc length, in the
-                          same units as winding_surface.gamma(), of the full poloidal
-                          loop.
+                          same units as winding_surface.gamma(), spanned by theta_range.
     """
     from scipy.interpolate import RegularGridInterpolator
 
@@ -662,8 +671,19 @@ def generate_even_arc_angles_from_surface(
     phi_max = np.max(winding_surface.quadpoints_phi)
     theta_max = np.max(winding_surface.quadpoints_theta)
 
-    theta_dense = np.linspace(0, 2 * np.pi, ndense, endpoint=False)
-    theta_dense_norm = np.clip(theta_dense / (2 * np.pi), 0.0, theta_max)
+    theta_min_range, theta_max_range = theta_range
+    if theta_min_range >= theta_max_range:
+        raise ValueError(
+            f"theta_range must satisfy theta_min < theta_max; got {theta_range}"
+        )
+    # ndense segments (ndense + 1 points), matching the resolution of the closed-loop
+    # full-range case (ndense points wrapped around into ndense segments).
+    theta_dense = np.linspace(theta_min_range, theta_max_range, ndense + 1, endpoint=True)
+    # theta_range need not start at 0 (or even be nonnegative), so wrap into [0, 1)
+    # via mod (a true periodic wrap) before clipping to the grid's own upper bound --
+    # clipping alone would incorrectly map negative theta to the grid's theta=0
+    # sample instead of its true periodic-equivalent location.
+    theta_dense_norm = np.clip(np.mod(theta_dense / (2 * np.pi), 1.0), 0.0, theta_max)
     gamma_interpolators = [
         RegularGridInterpolator(
             (winding_surface.quadpoints_phi, winding_surface.quadpoints_theta),
@@ -674,19 +694,18 @@ def generate_even_arc_angles_from_surface(
     ]
 
     # For each sampled cross section, get the segment lengths between consecutive
-    # dense theta points (including the segment closing the loop back to theta=0).
+    # dense theta points along the open arc from theta_min to theta_max.
     seg_lengths_per_phi = []
     for phi_val in phi_vals:
         phi_norm = np.clip(phi_val / (2 * np.pi), phi_min, phi_max)
         pts = np.stack(
             [
-                interp((np.full(ndense, phi_norm), theta_dense_norm))
+                interp((np.full(theta_dense.shape[0], phi_norm), theta_dense_norm))
                 for interp in gamma_interpolators
             ],
             axis=-1,
         )
-        pts_closed = np.vstack([pts, pts[0]])
-        seg_lengths_per_phi.append(np.linalg.norm(np.diff(pts_closed, axis=0), axis=1))
+        seg_lengths_per_phi.append(np.linalg.norm(np.diff(pts, axis=0), axis=1))
 
     # Conservative (pointwise-minimum) segment lengths, then their cumulative sum.
     seg_lengths = np.min(seg_lengths_per_phi, axis=0)
@@ -694,8 +713,7 @@ def generate_even_arc_angles_from_surface(
     total_arc_length = cum_length[-1]
 
     arc_targets = np.linspace(0, total_arc_length, ntheta, endpoint=False)
-    theta_dense_closed = np.concatenate([theta_dense, [2 * np.pi]])
-    theta_locs = np.interp(arc_targets, cum_length, theta_dense_closed)
+    theta_locs = np.interp(arc_targets, cum_length, theta_dense)
     return theta_locs, total_arc_length
 
 
@@ -1111,6 +1129,7 @@ def generate_windowpane_ring_array(
     wp_n,
     numquadpoints=32,
     order=12,
+    theta_range=(0.0, 2 * np.pi),
     verbose=False,
 ):
     """
@@ -1131,8 +1150,9 @@ def generate_windowpane_ring_array(
         this cross section -- and so the arc length, Rpol, and theta_locs derived from
         it -- is the same at every toroidal angle, so a single reference cross section
         (phi=0) fully determines the poloidal ring layout. theta_locs are equispaced by
-        real arc length with exactly the minimum required spacing, 2*inboard_radius +
-        wp_fil_spacing, between every adjacent pair of rings.
+        real arc length -- over theta_range, which defaults to the full poloidal loop --
+        with exactly the minimum required spacing, 2*inboard_radius + wp_fil_spacing,
+        between every adjacent pair of rings.
     (b) For each ring, the first coil is placed so that its near edge sits at least
         half_per_spacing/2 from the phi=0 stellarator-symmetric mirror plane, using the
         ring's local circumference (the same at phi=0 and phi=pi/nfp, again because the
@@ -1156,6 +1176,11 @@ def generate_windowpane_ring_array(
         numquadpoints: number of points representing each coil (see CurvePlanarFourier documentation)
         order: number of Fourier moments for the planar coil representation, 0 = circle
                (see CurvePlanarFourier documentation), more for square approximation
+        theta_range: (theta_min, theta_max) in radians defining the range of poloidal
+                     angle over which the poloidal ring is equispaced by real arc
+                     length. Defaults to the full poloidal loop, (0, 2*pi); a strict
+                     subrange restricts the ring to that arc only (e.g. to skip the
+                     inboard side).
     Returns:
         base_wp_curves: list of initialized curves (half field period)
     """
@@ -1178,7 +1203,7 @@ def generate_windowpane_ring_array(
     # surface.
     arc_length_ref_phi = 0.0
     _, arc_length = generate_even_arc_angles_from_surface(
-        winding_surface, arc_length_ref_phi, 2
+        winding_surface, arc_length_ref_phi, 2, theta_range=theta_range
     )
     nwps_poloidal = int(
         arc_length / (2 * inboard_radius + wp_fil_spacing)
@@ -1188,7 +1213,7 @@ def generate_windowpane_ring_array(
     )  # adjust the poloidal length based off npol to fix filament distance
     Rtor = Rpol  # square coil: same physical size in both directions, everywhere
     theta_locs, _ = generate_even_arc_angles_from_surface(
-        winding_surface, arc_length_ref_phi, nwps_poloidal
+        winding_surface, arc_length_ref_phi, nwps_poloidal, theta_range=theta_range
     )
 
     if verbose:
@@ -1233,7 +1258,9 @@ def generate_windowpane_ring_array(
     phi_start_norm = np.clip(0.0, phi_min, phi_max)
     for ii in range(nwps_poloidal):
         theta_coil = theta_locs[ii]
-        theta_norm = np.clip(theta_coil / (2 * np.pi), 0.0, theta_max)
+        # theta_coil may be negative when theta_range doesn't start at 0, so wrap
+        # into [0, 1) via mod before clipping to the grid's own upper bound.
+        theta_norm = np.clip(np.mod(theta_coil / (2 * np.pi), 1.0), 0.0, theta_max)
         # Since the surface is axisymmetric, the local circumference is the same at
         # phi=0, phi=pi/nfp, or anywhere else along this ring, so it can be read off
         # at a single reference toroidal angle.
@@ -1325,6 +1352,7 @@ def generate_windowpane_metric_ring_array(
     wp_n,
     numquadpoints=32,
     order=12,
+    theta_range=(0.0, 2 * np.pi),
     verbose=False,
 ):
     """
@@ -1357,8 +1385,9 @@ def generate_windowpane_metric_ring_array(
         buffered by half_per_spacing/2 + Rtor of real arc length from each mirror plane.
 
     As with generate_windowpane_ring_array, poloidal rings are equispaced by real arc
-    length with exactly the minimum required spacing (2*inboard_radius + wp_fil_spacing)
-    between every adjacent pair; within a ring, toroidal coils are equispaced by real arc
+    length -- over theta_range, which defaults to the full poloidal loop -- with
+    exactly the minimum required spacing (2*inboard_radius + wp_fil_spacing) between
+    every adjacent pair; within a ring, toroidal coils are equispaced by real arc
     length with at least wp_fil_spacing between every adjacent pair (more, if the
     available length doesn't divide evenly).
 
@@ -1374,6 +1403,11 @@ def generate_windowpane_metric_ring_array(
         numquadpoints: number of points representing each coil (see CurvePlanarFourier documentation)
         order: number of Fourier moments for the planar coil representation, 0 = circle
                (see CurvePlanarFourier documentation), more for square approximation
+        theta_range: (theta_min, theta_max) in radians defining the range of poloidal
+                     angle over which the poloidal ring is equispaced by real arc
+                     length. Defaults to the full poloidal loop, (0, 2*pi); a strict
+                     subrange restricts the ring to that arc only (e.g. to skip the
+                     inboard side).
     Returns:
         base_wp_curves: list of initialized curves (half field period)
     """
@@ -1427,8 +1461,13 @@ def generate_windowpane_metric_ring_array(
         # values. gammadash2 is dX/dtheta_normalized (quadpoints_theta runs over
         # [0, 1) for a full poloidal turn), so it must be divided by 2*pi to get the
         # derivative with respect to theta in radians.
+        # theta_vals may be negative (a caller-supplied theta_range need not start
+        # at 0), so wrap into [0, 1) via mod (a true periodic wrap) before clipping
+        # to the grid's own upper bound -- clipping alone would incorrectly map
+        # negative theta to the grid's theta=0 sample instead of its true
+        # periodic-equivalent location.
         phi_norm = np.full(theta_vals.shape, np.clip(phi_val / (2 * np.pi), phi_min, phi_max))
-        theta_norm = np.clip(theta_vals / (2 * np.pi), 0.0, theta_max)
+        theta_norm = np.clip(np.mod(theta_vals / (2 * np.pi), 1.0), 0.0, theta_max)
         dxdtheta = np.stack(
             [interp((phi_norm, theta_norm)) for interp in dgammadtheta_interpolators],
             axis=-1,
@@ -1437,10 +1476,11 @@ def generate_windowpane_metric_ring_array(
 
     def speed_phi(theta_val, phi_vals):
         # sqrt(E) = |dX/dphi_radians| at fixed theta_val, over an array of phi values.
-        # gammadash1 is dX/dphi_normalized, so likewise divide by 2*pi.
+        # gammadash1 is dX/dphi_normalized, so likewise divide by 2*pi. theta_val (a
+        # ring's theta_coil) may be negative -- see the mod comment in speed_theta.
         phi_norm = np.clip(phi_vals / (2 * np.pi), phi_min, phi_max)
         theta_norm = np.full(
-            phi_vals.shape, np.clip(theta_val / (2 * np.pi), 0.0, theta_max)
+            phi_vals.shape, np.clip(np.mod(theta_val / (2 * np.pi), 1.0), 0.0, theta_max)
         )
         dxdphi = np.stack(
             [interp((phi_norm, theta_norm)) for interp in dgammadphi_interpolators],
@@ -1450,18 +1490,30 @@ def generate_windowpane_metric_ring_array(
 
     # (a) Poloidal ring layout, from the metric's theta-direction coefficient,
     # conservatively combined across several toroidal cross sections (a no-op for an
-    # axisymmetric surface, where sqrt(G) doesn't depend on phi at all).
+    # axisymmetric surface, where sqrt(G) doesn't depend on phi at all). theta_range
+    # is treated as an open arc from theta_min to theta_max (no wraparound segment
+    # closing theta_max back to theta_min); the default (0, 2*pi) covers the same
+    # physical loop as a closed ring, since theta=0 and theta=2*pi are the same point.
+    theta_min_range, theta_max_range = theta_range
+    if theta_min_range >= theta_max_range:
+        raise ValueError(
+            f"theta_range must satisfy theta_min < theta_max; got {theta_range}"
+        )
     ndense_theta = 2000
-    theta_dense = np.linspace(0, 2 * np.pi, ndense_theta, endpoint=False)
+    # ndense_theta segments (ndense_theta + 1 points), matching the resolution of the
+    # closed-loop full-range case (ndense_theta points wrapped around into
+    # ndense_theta segments).
+    theta_dense = np.linspace(
+        theta_min_range, theta_max_range, ndense_theta + 1, endpoint=True
+    )
     n_phi_samples = 17
     phi_samples = np.linspace(0, phi_end, n_phi_samples)
     speeds = np.array([speed_theta(phi_val, theta_dense) for phi_val in phi_samples])
     conservative_speed_theta = np.min(speeds, axis=0)
-    theta_step = 2 * np.pi / ndense_theta
     seg_lengths = (
         0.5
-        * (conservative_speed_theta + np.roll(conservative_speed_theta, -1))
-        * theta_step
+        * (conservative_speed_theta[:-1] + conservative_speed_theta[1:])
+        * np.diff(theta_dense)
     )
     cum_theta_length = np.concatenate([[0.0], np.cumsum(seg_lengths)])
     arc_length = cum_theta_length[-1]
@@ -1473,8 +1525,7 @@ def generate_windowpane_metric_ring_array(
     )  # adjust the poloidal length based off npol to fix filament distance
     Rtor = Rpol  # square coil: same physical size in both directions, everywhere
     arc_targets_theta = np.linspace(0, arc_length, nwps_poloidal, endpoint=False)
-    theta_dense_closed = np.concatenate([theta_dense, [2 * np.pi]])
-    theta_locs = np.interp(arc_targets_theta, cum_theta_length, theta_dense_closed)
+    theta_locs = np.interp(arc_targets_theta, cum_theta_length, theta_dense)
 
     if verbose:
         print(f"     Number of Poroidal Dipoles: {nwps_poloidal}")
@@ -1521,7 +1572,9 @@ def generate_windowpane_metric_ring_array(
             ) * coil_pitch
         phi_coils = np.interp(arc_targets_phi, cum_phi_length, phi_dense)
 
-        theta_norm = np.clip(theta_coil / (2 * np.pi), 0.0, theta_max)
+        # theta_coil may be negative when theta_range doesn't start at 0, so wrap
+        # into [0, 1) via mod before clipping to the grid's own upper bound.
+        theta_norm = np.clip(np.mod(theta_coil / (2 * np.pi), 1.0), 0.0, theta_max)
         for phi_coil in phi_coils:
             # Normalize coordinates to [0, 1) for interpolation, clamping to grid bounds to avoid out-of-bounds errors
             phi_norm = np.clip(phi_coil / (2 * np.pi), phi_min, phi_max)
@@ -1684,6 +1737,7 @@ def generate_curves(
     verbose=True,
     fixed_geo_tfs=False,
     wp_layout="metric_ring",
+    theta_range=None,
     tf_init_fac=4,
     ntf=3,
 ):
@@ -1733,12 +1787,24 @@ def generate_curves(
                     surface's exact first fundamental form, so it also works for
                     non-axisymmetric winding surfaces (and reduces to exactly the same
                     result as "ring" for an axisymmetric one).
+        theta_range: (theta_min, theta_max) in radians, only valid when wp_layout is
+            "ring" or "metric_ring" (raises ValueError otherwise). Defines the range
+            of poloidal angle over which the poloidal ring is equispaced by real arc
+            length; ``None`` (default) uses the full poloidal loop, (0, 2*pi). Pass a
+            strict subrange to restrict dipole coils to that poloidal arc only (e.g.
+            to skip the inboard side).
         tf_init_fac: float
             The factor by which to scale the TF coils.
         ntf: int
             The number of TF coils per half field period.
     """
     from simsopt.geo import curves_to_vtk
+
+    if theta_range is not None and wp_layout not in ("ring", "metric_ring"):
+        raise ValueError(
+            f"theta_range is only valid when wp_layout is 'ring' or 'metric_ring'; "
+            f"got wp_layout={wp_layout!r} with theta_range={theta_range!r}."
+        )
 
     # choose some reasonable parameters for array initialization
     if wp_layout == "jake":
@@ -1772,6 +1838,7 @@ def generate_curves(
             wp_n=wp_n,  # square coils
             numquadpoints=numquadpoints,
             order=order_wp,  # want high order to approximate square
+            theta_range=theta_range if theta_range is not None else (0.0, 2 * np.pi),
             verbose=verbose,
         )
     elif wp_layout == "metric_ring":
@@ -1783,6 +1850,7 @@ def generate_curves(
             wp_n=wp_n,  # square coils
             numquadpoints=numquadpoints,
             order=order_wp,  # want high order to approximate square
+            theta_range=theta_range if theta_range is not None else (0.0, 2 * np.pi),
             verbose=verbose,
         )
     else:

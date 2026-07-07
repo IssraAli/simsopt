@@ -182,7 +182,7 @@ class RegularizedCoil(Coil):
         selfforce = self.self_force()
         return selfforce + mutualforce
 
-    def net_force(self, source_coils):
+    def net_force(self, source_coils, force=None):
         r"""
         Compute the net forces on this coil from other coils, in Newtons. This is
         the integrated pointwise force per unit length dF_i/d\ell on the coil curve.
@@ -194,16 +194,21 @@ class RegularizedCoil(Coil):
             source_coils (list of Coil or RegularizedCoil, shape (m,)):
                 List of coils contributing forces on this coil.
                 Can be a mix of Coil and RegularizedCoil objects.
+            force (array (shape (n,3)), optional): Precomputed pointwise force per
+                unit length from :meth:`force`, e.g. if the caller already has it
+                from a previous call and wants to avoid recomputing the (expensive)
+                mutual Biot-Savart field. If ``None`` (default), computed via
+                ``self.force(source_coils)`` as before.
         Returns:
             np.array (shape (3,)): Array of net forces.
         """
-        Fi = self.force(source_coils)
+        Fi = self.force(source_coils) if force is None else force
         gammadash = self.curve.gammadash()
         gammadash_norm = np.linalg.norm(gammadash, axis=1)[:, None]
         net_force = np.sum(gammadash_norm * Fi, axis=0) / gammadash.shape[0]
         return net_force
 
-    def torque(self, source_coils):
+    def torque(self, source_coils, force=None):
         r"""
         Compute the torques per unit length on this coil from other coils in Newtons
         (note that the force is per unit length, so the force has units of Newtons/meter
@@ -220,14 +225,20 @@ class RegularizedCoil(Coil):
             source_coils (list of Coil or RegularizedCoil, shape (m,)):
                 List of coils contributing torques on this coil.
                 Can be a mix of Coil and RegularizedCoil objects.
+            force (array (shape (n,3)), optional): Precomputed pointwise force per
+                unit length from :meth:`force`, e.g. if the caller already has it
+                from a previous call and wants to avoid recomputing the (expensive)
+                mutual Biot-Savart field. If ``None`` (default), computed via
+                ``self.force(source_coils)`` as before.
         Returns:
             np.array (shape (n,3)): Array of torques per unit length along the coil curve.
         """
+        Fi = self.force(source_coils) if force is None else force
         gamma = self.curve.gamma()
         center = self.curve.centroid()
-        return np.cross(gamma - center, self.force(source_coils))
+        return np.cross(gamma - center, Fi)
 
-    def net_torque(self, source_coils):
+    def net_torque(self, source_coils, torque=None):
         r"""
         Compute the net torques on this coil from other coils, in Newton-meters. This is
         the integrated pointwise torque per unit length on the coil curve.
@@ -239,10 +250,15 @@ class RegularizedCoil(Coil):
             source_coils (list of Coil or RegularizedCoil, shape (m,)):
                 List of coils contributing torques on this coil.
                 Can be a mix of Coil and RegularizedCoil objects.
+            torque (array (shape (n,3)), optional): Precomputed pointwise torque per
+                unit length from :meth:`torque`, e.g. if the caller already has it
+                (or the underlying force) from a previous call and wants to avoid
+                recomputing the (expensive) mutual Biot-Savart field. If ``None``
+                (default), computed via ``self.torque(source_coils)`` as before.
         Returns:
             np.array (shape (3,)): Array of net torques.
         """
-        Ti = self.torque(source_coils)
+        Ti = self.torque(source_coils) if torque is None else torque
         gammadash = self.curve.gammadash()
         gammadash_norm = np.linalg.norm(gammadash, axis=1)[:, None]
         net_torque = np.sum(gammadash_norm * Ti, axis=0) / gammadash.shape[0]
@@ -631,19 +647,26 @@ def apply_symmetries_to_currents(base_currents, nfp, stellsym):
     return currents
 
 
-def coils_to_vtk(coils, filename, close=False, extra_data=None):
+def coils_to_vtk(coils, filename, close=False, extra_data=None, compute_forces_torques=True):
     """
     Export a list of Coil objects in VTK format, so they can be
     viewed using Paraview. This function requires the python package ``pyevtk``,
     which can be installed using ``pip install pyevtk``.
 
-    Saves coil currents, net forces, net torques, and pointwise forces and torques.
+    Saves coil currents, and (if ``compute_forces_torques``) net forces, net
+    torques, and pointwise forces and torques.
 
     Args:
         coils (list): A python list of Coil objects.
         filename (str): Name of the file to write.
         close (bool): Whether to draw the segment from the last quadrature point back to the first.
         extra_data (dict): Additional data to save to the VTK file.
+        compute_forces_torques (bool): If ``False``, skip computing forces and
+            torques entirely (only coil geometry and currents are written). Force/
+            torque computation is O(n_coils^2) (each coil's mutual field is a fresh
+            Biot-Savart evaluation over every other coil), so for large coil sets
+            where forces/torques aren't needed, setting this to ``False`` turns the
+            export into an O(n_coils) operation.
     """
     from simsopt.geo.curve import curves_to_vtk
 
@@ -668,7 +691,9 @@ def coils_to_vtk(coils, filename, close=False, extra_data=None):
     pointData["I"] = coil_data
     pointData["I_mag"] = contig(np.abs(coil_data))
 
-    if not isinstance(coils[0], RegularizedCoil):
+    if not compute_forces_torques:
+        pass
+    elif not isinstance(coils[0], RegularizedCoil):
         print(
             "Warning: coils_to_vtk will not save forces and torques for coils that "
             "do not have a model for their cross section. Please use the RegularizedCoil class."
@@ -682,14 +707,17 @@ def coils_to_vtk(coils, filename, close=False, extra_data=None):
         net_torques = np.zeros((len(coils), 3))
 
         for i, c in enumerate(coils):
-            # get the pointwise forces and torques for the current coil
+            # Compute the (expensive) mutual Biot-Savart force once per coil and
+            # reuse it for torque/net_force/net_torque, instead of letting each of
+            # the four calls recompute it from scratch (a 4x redundant cost on top
+            # of the O(n_coils) mutual-field evaluation this already does per coil).
             coil_force_temp = c.force(coils)
-            coil_torque_temp = c.torque(coils)
+            coil_torque_temp = c.torque(coils, force=coil_force_temp)
 
             # get the net forces and torques for the current coil,
             # which is the same at every point on the coil
-            net_forces[i, :] = c.net_force(coils)
-            net_torques[i, :] = c.net_torque(coils)
+            net_forces[i, :] = c.net_force(coils, force=coil_force_temp)
+            net_torques[i, :] = c.net_torque(coils, torque=coil_torque_temp)
 
             # if the curve is closed, add the first point to the end
             if close:
