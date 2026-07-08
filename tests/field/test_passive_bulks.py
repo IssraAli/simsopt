@@ -3074,6 +3074,223 @@ def test_from_winding_surface_smoke():
     assert np.all(np.isfinite(B))
 
 
+def test_from_winding_surface_normal_offset_smoke():
+    """``center_parameterization="normal_offset"`` builds usable ``d{i}`` DOFs."""
+    from pathlib import Path
+    from simsopt.geo import SurfaceRZFourier
+    from simsopt.util import initialize_coils
+    from simsopt.field.selffield import regularization_rect
+
+    TEST_DIR = (Path(__file__).parent / ".." / "test_files").resolve()
+    filename = TEST_DIR / "wout_schuett_henneberg_nfp2_QA.nc"
+    s = SurfaceRZFourier.from_wout(filename, range="half period", nphi=4, ntheta=4)
+    _, _, coils_tf, _ = initialize_coils(
+        s,
+        "SchuettHennebergQAnfp2",
+        regularization_rect(0.2, 0.2),
+    )
+    eval_pts = np.ascontiguousarray(s.gamma().reshape(-1, 3))
+    distance = 2.0
+    psc = PSCBulkArray.from_winding_surface(
+        s,
+        coils_tf,
+        eval_points=eval_pts,
+        distance=distance,
+        n_phi_pucks=3,
+        n_theta_pucks=2,
+        puck_t=0.15,
+        m_fourier=1,
+        l_zernike=2,
+        k_chebyshev=1,
+        n_rho=4,
+        n_phi=6,
+        n_z=3,
+        center_parameterization="normal_offset",
+    )
+    assert len(psc._all_pucks) >= 1
+    assert psc._normal_offset_puck_indices == list(range(psc._n_base_pucks))
+    for i in range(psc._n_base_pucks):
+        assert np.isclose(float(psc.get(f"d{i}")), distance, atol=1e-8)
+    B = psc.B_at_points(eval_pts[:5])
+    assert np.all(np.isfinite(B))
+
+    # Unfixing a shadowed center DOF or calling local_unfix_all must raise.
+    with pytest.raises(ValueError):
+        psc.unfix("center_x0")
+    with pytest.raises(ValueError):
+        psc.local_unfix_all()
+
+    # Unfixing d0 and moving it should displace the puck exactly along
+    # its stored normal direction.
+    psc.unfix("d0")
+    c0 = np.array(psc._get_base_puck_geometry()[0][0])
+    normal0 = psc._normal_offset_normal[0]
+    psc.set("d0", distance + 0.01)
+    psc.recompute_currents()
+    c1 = np.array(psc._get_base_puck_geometry()[0][0])
+    np.testing.assert_allclose(c1 - c0, 0.01 * normal0, atol=1e-10)
+
+
+def _make_normal_offset_array(
+    n_base: int = 2,
+    *,
+    solver_mode: str = "energy",
+    eval_pts: "np.ndarray | None" = None,
+) -> "PSCBulkArray":
+    """Small 2-puck :class:`PSCBulkArray` with the normal-offset parameterization.
+
+    Mirrors :func:`_make_symmetry_validation_array` (single circular TF
+    coil, ``nfp=1``/``stellsym=False``) but every puck is built via the
+    ``normal_offset`` constructor argument: ``centers[i] = anchors[i] +
+    d0[i]*normals[i]`` exactly, by construction.
+    """
+    base_curve = CurveXYZFourier(32, 1)
+    base_curve.x = np.array([1.0, 0.0, 0.3, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0])
+    base_curve.local_fix_all()
+    current = Current(100.0)
+    current.local_fix_all()
+    tf_coils = [Coil(base_curve, current)]
+
+    anchors = np.array(
+        [[1.15 + 0.15 * i, 0.10 + 0.04 * i, 0.0] for i in range(n_base)],
+        dtype=float,
+    )
+    raw_normals = np.array(
+        [[0.2, 0.1, 1.0 + 0.1 * i] for i in range(n_base)], dtype=float
+    )
+    normals = raw_normals / np.linalg.norm(raw_normals, axis=1, keepdims=True)
+    d0 = np.array([0.05 + 0.01 * i for i in range(n_base)], dtype=float)
+    centers = anchors + d0[:, None] * normals
+    axes = np.tile(np.array([[0.0, 0.0, 1.0]]), (n_base, 1))
+    Rs = np.full(n_base, 0.12)
+    ts = np.full(n_base, 0.04)
+
+    if eval_pts is None:
+        eval_pts = np.array(
+            [
+                [1.0, 0.05, 0.35],
+                [0.90, 0.10, 0.08],
+            ],
+            dtype=float,
+        )
+
+    return PSCBulkArray(
+        centers,
+        axes,
+        Rs,
+        ts,
+        tf_coils,
+        eval_points=eval_pts,
+        m_fourier=2,
+        l_zernike=3,
+        k_chebyshev=1,
+        n_rho=5,
+        n_phi=6,
+        n_z=3,
+        nfp=1,
+        stellsym=False,
+        solver_mode=solver_mode,
+        normal_offset={
+            "mask": np.ones(n_base, dtype=bool),
+            "anchors": anchors,
+            "normals": normals,
+        },
+    )
+
+
+def test_normal_offset_constructor_basic():
+    """``d{i}`` DOFs are created with the correct value and shadow ``center_x/y/z{i}``."""
+    psc = _make_normal_offset_array(n_base=2)
+    assert psc._normal_offset_puck_indices == [0, 1]
+    assert psc.get("d0") == pytest.approx(0.05)
+    assert psc.get("d1") == pytest.approx(0.06)
+    assert psc._n_geom_dofs == psc._n_base_pucks * 9 + 2
+    assert len(psc.local_full_x) == psc._n_geom_dofs
+    B = psc.B_at_points(np.asarray(psc.eval_points))
+    assert np.all(np.isfinite(B))
+
+
+def test_normal_offset_unfix_shadowed_center_raises():
+    psc = _make_normal_offset_array(n_base=2)
+    for name in ("center_x0", "center_y1", "center_z0"):
+        with pytest.raises(ValueError):
+            psc.unfix(name)
+    # Non-shadowed DOFs (e.g. R{i}/t{i}) are unaffected by the guard.
+    psc.unfix("R0")
+    assert bool(psc.local_dofs_free_status[list(psc.local_full_dof_names).index("R0")])
+
+
+def test_normal_offset_local_unfix_all_raises():
+    psc = _make_normal_offset_array(n_base=2)
+    with pytest.raises(ValueError):
+        psc.local_unfix_all()
+
+
+def test_normal_offset_dipole_free_d_raises():
+    psc = _make_normal_offset_array(n_base=2, solver_mode="dipole")
+    psc.unfix("d0")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    v_B = np.ones_like(pts)
+    with pytest.raises(NotImplementedError):
+        psc.vjp_setup_B(v_B, pts)
+
+
+def test_normal_offset_mixed_with_free_center_raises():
+    """Free ``d0`` combined with a free raw center on another puck must raise."""
+    psc = _make_normal_offset_array(n_base=2)
+    psc.unfix("d0")
+    # puck 1 is also normal-offset in this fixture, and its center_x1 is
+    # shadowed (unfix() would raise), so directly flip the underlying
+    # free flag to exercise the defense-in-depth guard against any
+    # bypass of unfix()'s shadowed-name check.
+    names = list(psc.local_full_dof_names)
+    idx = names.index("center_x1")
+    psc._dofs._free[idx] = True
+    psc.update_free_dof_size_indices()
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    v_B = np.ones_like(pts)
+    with pytest.raises(NotImplementedError):
+        psc.vjp_setup_B(v_B, pts)
+
+
+def test_normal_offset_fd_gradient_matches_central_fd():
+    """``vjp_setup_B``'s ``d{i}`` gradient matches a central-FD reference."""
+    psc = _make_normal_offset_array(n_base=2)
+    psc.unfix("d0")
+    psc.unfix("d1")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    rng = np.random.default_rng(4242)
+    v_B = rng.standard_normal(pts.shape)
+
+    deriv = psc.vjp_setup_B(v_B, pts)
+    g = deriv(psc)
+    names = list(psc.local_full_dof_names)
+    free_names = [n for n, f in zip(names, psc.local_dofs_free_status) if f]
+    idx_d0 = free_names.index("d0")
+    idx_d1 = free_names.index("d1")
+
+    eps = 1e-4
+    g_ref = np.zeros(2)
+    for k, dof_name in enumerate(("d0", "d1")):
+        v0 = float(psc.get(dof_name))
+        psc.set(dof_name, v0 + eps)
+        psc.recompute_currents()
+        B_plus = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+        psc.set(dof_name, v0 - eps)
+        psc.recompute_currents()
+        B_minus = np.asarray(psc._B_at_points_tf_only(pts), dtype=np.float64)
+        psc.set(dof_name, v0)
+        psc.recompute_currents()
+        g_ref[k] = float(np.sum(v_B * (B_plus - B_minus))) / (2.0 * eps)
+
+    np.testing.assert_allclose(
+        [g[idx_d0], g[idx_d1]], g_ref, rtol=2e-3, atol=1e-6
+    )
+
+
 # ======================================================================
 # Analytic inductance benchmarks (closed-form limits)
 # ======================================================================

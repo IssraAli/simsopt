@@ -60,13 +60,12 @@ def _normalize_size_menu(
     return tuple(entries)
 
 
-def drop_overlapping_pucks(
+def _greedy_kept_indices(
     centers: np.ndarray,
-    axes: np.ndarray,
     radii: np.ndarray,
     thicknesses: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Greedy subset so sphere ``radius R + t/2`` around each centre is disjoint."""
+) -> np.ndarray:
+    """Indices of a greedy subset so sphere ``radius R + t/2`` around each centre is disjoint."""
     n = centers.shape[0]
     kept: list[int] = []
     for i in range(n):
@@ -81,8 +80,36 @@ def drop_overlapping_pucks(
                 break
         if ok:
             kept.append(i)
-    k = np.array(kept, dtype=int)
-    return centers[k], axes[k], radii[k], thicknesses[k]
+    return np.array(kept, dtype=int)
+
+
+def drop_overlapping_pucks(
+    centers: np.ndarray,
+    axes: np.ndarray,
+    radii: np.ndarray,
+    thicknesses: np.ndarray,
+    extra_arrays: Sequence[np.ndarray] = (),
+) -> Tuple[np.ndarray, ...]:
+    """Greedy subset so sphere ``radius R + t/2`` around each centre is disjoint.
+
+    Args:
+        extra_arrays: Additional per-puck arrays (first axis length ``n``,
+            e.g. anchor points / normals for a normal-offset
+            parameterization) to prune by the same kept-index set as
+            ``centers``/``axes``/``radii``/``thicknesses``.
+
+    Returns:
+        ``(centers, axes, radii, thicknesses, *extra_arrays)``, each pruned
+        to the kept subset.
+    """
+    k = _greedy_kept_indices(centers, radii, thicknesses)
+    return (
+        centers[k],
+        axes[k],
+        radii[k],
+        thicknesses[k],
+        *(arr[k] for arr in extra_arrays),
+    )
 
 
 def toroidal_shell_pucks(
@@ -377,7 +404,8 @@ def winding_surface_pucks(
     puck_R: Optional[Union[float, np.ndarray]] = None,
     puck_t: Optional[float] = None,
     default_thickness: float = 0.02,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    center_parameterization: str = "xyz",
+) -> Tuple[np.ndarray, ...]:
     """
     Pucks on a surface obtained by ``extend_via_normal(distance)`` from the plasma copy.
 
@@ -391,9 +419,21 @@ def winding_surface_pucks(
         puck_R: Optional scalar radius (m); if omitted, use local grid spacing.
         puck_t: Optional scalar thickness (m); default ``default_thickness``.
         default_thickness: Used when ``puck_t`` is ``None``.
+        center_parameterization: ``"xyz"`` (default) returns the usual
+            4-tuple. ``"normal_offset"`` additionally samples the *raw*
+            ``plasma_boundary`` (before ``extend_via_normal``) at the same
+            grid indices and returns ``(centers, axes, radii, thicknesses,
+            anchors, plasma_normals)``, where ``centers = anchors +
+            distance * plasma_normals`` exactly (a literal per-point normal
+            translation, rather than ``extend_via_normal``'s truncated-
+            Fourier LSQ refit of the offset surface -- the two differ,
+            more so at low ``mpol``/``ntor``). ``axes`` is set to
+            ``plasma_normals`` in this mode.
 
     Returns:
-        ``(centers, axes, radii, thicknesses)`` for **base** pucks (before ``nfp`` replication).
+        ``(centers, axes, radii, thicknesses)`` for **base** pucks (before
+        ``nfp`` replication); with two extra arrays appended when
+        ``center_parameterization="normal_offset"`` (see above).
 
     Notes:
         The temporary winding surface uses the same toroidal range as the plasma (half period
@@ -401,6 +441,11 @@ def winding_surface_pucks(
         span a full field period on a half-period plasma makes the LSQ fit in
         ``extend_via_normal`` ill-conditioned and can yield unphysical coordinates.
     """
+    if center_parameterization not in ("xyz", "normal_offset"):
+        raise ValueError(
+            "center_parameterization must be 'xyz' or 'normal_offset'; "
+            f"got {center_parameterization!r}"
+        )
     # ``extend_via_normal`` requires enough quadrature points (see SurfaceRZFourier) and
     # sufficient oversampling for the internal Fourier fit (see Notes above).
     ntor = int(getattr(plasma_boundary, "ntor", 1))
@@ -423,6 +468,23 @@ def winding_surface_pucks(
     centers = np.array([g[i, j] for i in ip for j in jt], dtype=float)
     axes = np.array([n_hat[i, j] for i in ip for j in jt], dtype=float)
 
+    anchors = None
+    plasma_normals = None
+    if center_parameterization == "normal_offset":
+        plasma_raw = plasma_boundary.copy(
+            nphi=n_phi_hi,
+            ntheta=n_theta_hi,
+            range=range_name,
+        )
+        g_raw = plasma_raw.gamma()
+        n_hat_raw = plasma_raw.unitnormal()
+        anchors = np.array([g_raw[i, j] for i in ip for j in jt], dtype=float)
+        plasma_normals = np.array(
+            [n_hat_raw[i, j] for i in ip for j in jt], dtype=float
+        )
+        centers = anchors + float(distance) * plasma_normals
+        axes = plasma_normals
+
     g1 = winding.gammadash1()
     g2 = winding.gammadash2()
     ds_phi = float(np.mean(np.linalg.norm(g1, axis=-1))) / float(n_phi_hi)
@@ -441,6 +503,17 @@ def winding_surface_pucks(
     n = centers.shape[0]
     radii = np.full(n, R_val)
     thicknesses = np.full(n, t_val)
+    if center_parameterization == "normal_offset":
+        centers, axes, radii, thicknesses, anchors, plasma_normals = (
+            drop_overlapping_pucks(
+                centers,
+                axes,
+                radii,
+                thicknesses,
+                extra_arrays=(anchors, plasma_normals),
+            )
+        )
+        return centers, axes, radii, thicknesses, anchors, plasma_normals
     centers, axes, radii, thicknesses = drop_overlapping_pucks(
         centers,
         axes,

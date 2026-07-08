@@ -3943,6 +3943,22 @@ class PSCBulkArray(Optimizable):
             :attr:`_mode_truncate_norm` and is intentionally constant
             after construction (changing the truncation requires a new
             instance).
+
+        normal_offset: Optional ``Mapping`` requesting the
+            normal-offset center parameterization for a subset of pucks
+            (typically built by
+            :meth:`from_winding_surface`'s ``center_parameterization=
+            "normal_offset"`` option rather than passed directly). Keys:
+            ``"mask"`` (``(N,) bool``, which base pucks use this
+            parameterization), ``"anchors"`` (``(N, 3)``, meaningful
+            where ``mask`` is ``True``), ``"normals"`` (``(N, 3)``,
+            likewise). For each puck ``i`` where ``mask[i]``, a new
+            scalar DOF ``d{i}`` is added with ``center_i = anchors[i] +
+            d{i} * normals[i]``; ``center_x{i}``/``center_y{i}``/
+            ``center_z{i}`` remain present but become permanently
+            unfixable (shadowed) for that puck. ``None`` (default)
+            leaves every puck on the ordinary independent
+            ``center_x/y/z`` parameterization.
     """
 
     def __init__(
@@ -3982,6 +3998,7 @@ class PSCBulkArray(Optimizable):
         bulk_far_pair_kappa: float = 0.0,
         bulk_far_pair_tol: float = 1.0e-2,
         fixed_field_matrix_dtype: str = "float64",
+        normal_offset: Optional[Mapping[str, np.ndarray]] = None,
     ):
         self.coils_TF = list(coils_TF)
         # Phase-J J1: ``eval_points`` is now a property whose setter
@@ -4186,6 +4203,70 @@ class PSCBulkArray(Optimizable):
                 ]
             )
 
+        # Normal-offset center parameterization (opt-in): for pucks with
+        # ``mask[i]`` set, replace the independent ``center_x/y/z{i}``
+        # DOFs with a single derived scalar ``d{i}`` s.t. ``center_i =
+        # anchor_i + d_i * normal_i``.  ``center_x/y/z{i}`` stay present
+        # (for layout uniformity with ordinary pucks) but become
+        # permanently unfixable for these pucks; see ``unfix``/
+        # ``local_unfix_all`` and ``_get_base_puck_geometry``.
+        self._normal_offset_anchor: Dict[int, np.ndarray] = {}
+        self._normal_offset_normal: Dict[int, np.ndarray] = {}
+        self._normal_offset_puck_indices: List[int] = []
+        self._normal_offset_dof_index: Dict[int, int] = {}
+        if normal_offset is not None:
+            mask = np.asarray(normal_offset["mask"], dtype=bool)
+            anchors_in = np.asarray(normal_offset["anchors"], dtype=float)
+            normals_in = np.asarray(normal_offset["normals"], dtype=float)
+            if mask.shape != (self._n_base_pucks,):
+                raise ValueError(
+                    "normal_offset['mask'] must have shape "
+                    f"({self._n_base_pucks},); got {mask.shape}"
+                )
+            if anchors_in.shape != (self._n_base_pucks, 3) or normals_in.shape != (
+                self._n_base_pucks,
+                3,
+            ):
+                raise ValueError(
+                    "normal_offset['anchors'] and ['normals'] must have "
+                    f"shape ({self._n_base_pucks}, 3); got "
+                    f"{anchors_in.shape} and {normals_in.shape}"
+                )
+            for i in np.flatnonzero(mask):
+                i = int(i)
+                normal_norm = float(np.linalg.norm(normals_in[i]))
+                if normal_norm < 1e-12:
+                    raise ValueError(
+                        f"normal_offset: puck {i}'s normal is degenerate "
+                        f"(norm={normal_norm:.3e})."
+                    )
+                normal_i = normals_in[i] / normal_norm
+                anchor_i = anchors_in[i]
+                d0_i = float(np.dot(centers[i] - anchor_i, normal_i))
+                residual = centers[i] - (anchor_i + d0_i * normal_i)
+                residual_norm = float(np.linalg.norm(residual))
+                if residual_norm > 1e-6:
+                    raise ValueError(
+                        f"normal_offset: puck {i}'s center does not lie "
+                        f"on its (anchor, normal) line -- off-axis "
+                        f"residual {residual_norm:.3e} m. centers[{i}] "
+                        "must equal anchors[i] + d*normals[i] for some "
+                        "d, else the projection would silently discard "
+                        "the off-axis component."
+                    )
+                self._normal_offset_anchor[i] = anchor_i
+                self._normal_offset_normal[i] = normal_i
+                self._normal_offset_puck_indices.append(i)
+                self._normal_offset_dof_index[i] = len(dof_values)
+                dof_values.append(d0_i)
+                dof_names.append(f"d{i}")
+        self._normal_offset_dof_names: frozenset = frozenset(
+            f"d{i}" for i in self._normal_offset_puck_indices
+        )
+        self._n_geom_dofs: int = (
+            self._n_base_pucks * _DOFS_PER_PUCK + len(self._normal_offset_puck_indices)
+        )
+
         fixed = [True] * len(dof_values)
         Optimizable.__init__(
             self,
@@ -4325,8 +4406,38 @@ class PSCBulkArray(Optimizable):
                 stacklevel=3,
             )
 
+    def _normal_offset_shadowed_names(self) -> frozenset:
+        """``center_x/y/z{i}`` names permanently shadowed by a ``d{i}`` DOF.
+
+        Unlike a zero-VJP DOF (see :meth:`_is_zero_vjp_dof`), these are not
+        merely gradient-less: :meth:`_get_base_puck_geometry` unconditionally
+        overwrites ``centers[i]`` from ``anchor_i + d_i*normal_i`` every
+        rebuild, so any value an optimizer wrote into these three DOFs
+        would be silently discarded. Unfixing them is therefore a hard
+        error rather than a warning.
+        """
+        names: set = set()
+        for i in self._normal_offset_puck_indices:
+            names.update((f"center_x{i}", f"center_y{i}", f"center_z{i}"))
+        return frozenset(names)
+
     def local_unfix_all(self) -> None:
-        """Unfix all local DOFs, warning about zero-VJP R/t DOFs."""
+        """Unfix all local DOFs, warning about zero-VJP R/t DOFs.
+
+        Raises ``ValueError`` if any puck uses the normal-offset
+        parameterization: there is no valid "unfix literally everything"
+        state once ``center_x/y/z{i}`` DOFs are permanently shadowed by a
+        ``d{i}`` DOF (see :meth:`_normal_offset_shadowed_names`); unfix the
+        desired DOFs individually via :meth:`unfix` instead.
+        """
+        if self._normal_offset_puck_indices:
+            raise ValueError(
+                "PSCBulkArray.local_unfix_all(): this array has "
+                f"{len(self._normal_offset_puck_indices)} normal-offset "
+                "puck(s) whose center_x/y/z DOFs are permanently shadowed "
+                "by a d{i} DOF and cannot be unfixed; call unfix() on the "
+                "individual DOFs you actually want to free instead."
+            )
         full_names = list(self.local_full_dof_names)
         free_flags = np.asarray(self._dofs._free, dtype=bool)
         currently_fixed = [n for n, f in zip(full_names, free_flags) if not bool(f)]
@@ -4334,7 +4445,12 @@ class PSCBulkArray(Optimizable):
         super().local_unfix_all()
 
     def unfix(self, key) -> None:
-        """Unfix a DOF by name or index, warning if its VJP is zero."""
+        """Unfix a DOF by name or index, warning if its VJP is zero.
+
+        Raises ``ValueError`` if ``key`` names a ``center_x/y/z{i}`` DOF
+        shadowed by a normal-offset ``d{i}`` DOF (see
+        :meth:`_normal_offset_shadowed_names`).
+        """
         if isinstance(key, str):
             name = key
         else:
@@ -4342,6 +4458,14 @@ class PSCBulkArray(Optimizable):
                 name = list(self.local_full_dof_names)[int(key)]
             except Exception:
                 name = None
+        if name is not None and name in self._normal_offset_shadowed_names():
+            raise ValueError(
+                f"PSCBulkArray.unfix({name!r}): this DOF is permanently "
+                "shadowed by a normal-offset d{i} DOF on the same puck "
+                "(center_i = anchor_i + d_i*normal_i is recomputed every "
+                "rebuild, discarding any value written here); unfix the "
+                "corresponding d{i} DOF instead."
+            )
         if name is not None:
             self._warn_zero_vjp([name])
         super().unfix(key)
@@ -4364,6 +4488,14 @@ class PSCBulkArray(Optimizable):
             quats[i] = x[off + 3 : off + 7]
             radii[i] = x[off + 7]
             thicknesses[i] = x[off + 8]
+        # Normal-offset pucks: override the raw (unused/shadowed)
+        # center_x/y/z storage with ``anchor + d * normal``, ``d`` being
+        # the puck's ``d{i}`` DOF value.  This is the single choke point
+        # every downstream consumer of puck geometry goes through, so
+        # patching it here propagates correctness everywhere.
+        for i in self._normal_offset_puck_indices:
+            d_val = x[self._normal_offset_dof_index[i]]
+            centers[i] = self._normal_offset_anchor[i] + d_val * self._normal_offset_normal[i]
         return centers, quats, radii, thicknesses
 
     def _base_geom_state_matrix(self) -> np.ndarray:
@@ -4377,10 +4509,32 @@ class PSCBulkArray(Optimizable):
         compare a live view against itself on the next call and report
         zero changed pucks, which silently disables the partial-L
         rebuild path.
+
+        Normal-offset pucks (see :meth:`_get_base_puck_geometry`) have
+        their ``center_x/y/z{i}`` columns overridden in-place from
+        ``anchor + d{i}*normal`` so that a ``d{i}``-only change is still
+        visible to row-wise change detection -- the raw stored
+        ``center_x/y/z{i}`` values never change for these pucks, only
+        the trailing ``d{i}`` DOF does.  Applied as a small local patch
+        (not via :meth:`_get_base_puck_geometry`) to keep this function's
+        existing O(1) reshape+copy cost for every array without
+        normal-offset pucks; this is called on essentially every
+        :meth:`recompute_currents`, including pure-TF-motion steps.
         """
-        return np.ascontiguousarray(
-            np.asarray(self.local_full_x, dtype=float).reshape(self._n_base_pucks, 9)
-        ).copy()
+        mat = np.ascontiguousarray(
+            np.asarray(self.local_full_x, dtype=float)[
+                : self._n_base_pucks * _DOFS_PER_PUCK
+            ]
+        ).reshape(self._n_base_pucks, 9).copy()
+        if self._normal_offset_puck_indices:
+            x = self.local_full_x
+            for i in self._normal_offset_puck_indices:
+                d_val = x[self._normal_offset_dof_index[i]]
+                mat[i, 0:3] = (
+                    self._normal_offset_anchor[i]
+                    + d_val * self._normal_offset_normal[i]
+                )
+        return mat
 
     def _replicate_pucks(self, centers, quats, radii, thicknesses):
         """Apply nfp + stellsym to base pucks.
@@ -7764,7 +7918,9 @@ class PSCBulkArray(Optimizable):
         ):
             if not is_free:
                 continue
-            if str(name).startswith("center_"):
+            if name in self._normal_offset_dof_names:
+                kinds.add("normal_offset")
+            elif str(name).startswith("center_"):
                 kinds.add("center")
             elif str(name).startswith("q"):
                 kinds.add("quaternion")
@@ -7789,10 +7945,10 @@ class PSCBulkArray(Optimizable):
         return bool(kinds & {"center", "quaternion"})
 
     def _hash_puck_local_dofs(self) -> int:
-        """Hash bytes of the first ``9 * n_base`` local DOFs (puck geometry)."""
+        """Hash bytes of the ``9 * n_base`` puck-geometry DOFs plus any
+        trailing normal-offset ``d{i}`` DOFs (see :attr:`_n_geom_dofs`)."""
         x = np.asarray(self.local_full_x, dtype=float)
-        n = self._n_base_pucks * _DOFS_PER_PUCK
-        return hash(x[:n].tobytes())
+        return hash(x[: self._n_geom_dofs].tobytes())
 
     def _puck_geometry_unchanged_since_rebuild(self) -> bool:
         """True iff base-puck center/quaternion/R/t values match last :meth:`_rebuild`."""
@@ -7933,6 +8089,7 @@ class PSCBulkArray(Optimizable):
     def vjp_setup_B(self, v_B, eval_pts=None):
         """VJP of ``sum(v_B * B)`` w.r.t. all DOFs (TF + puck geometry)."""
         _t_total = self._mark_phase_start()
+        self._check_normal_offset_vjp_support()
         v_B = np.asarray(v_B).reshape(-1, 3)
         pts = eval_pts if eval_pts is not None else self.eval_points
         if self.solver_mode == "dipole":
@@ -8178,7 +8335,12 @@ class PSCBulkArray(Optimizable):
         vgd_np = np.asarray(vgd)
         vI_np = np.asarray(vI)
 
-        grad_local = np.zeros(n_base * _DOFS_PER_PUCK)
+        # Sized to ``_n_geom_dofs`` (not just ``n_base*_DOFS_PER_PUCK``) so
+        # this doesn't crash via a ``Derivative`` length mismatch on an
+        # array with (currently-fixed) normal-offset DOFs configured;
+        # free normal-offset DOFs in dipole mode are rejected up front by
+        # ``_check_normal_offset_vjp_support`` (no FD term needed here).
+        grad_local = np.zeros(self._n_geom_dofs)
         for i in range(n_base):
             off = i * _DOFS_PER_PUCK
             grad_local[off : off + 3] = vc_np[i]
@@ -8368,6 +8530,45 @@ class PSCBulkArray(Optimizable):
                 return True
         return False
 
+    def _has_free_normal_offset_dofs(self) -> bool:
+        """Return ``True`` iff any normal-offset ``d{i}`` DOF is currently free."""
+        for name, is_free in zip(
+            self.local_full_dof_names, self.local_dofs_free_status
+        ):
+            if is_free and name in self._normal_offset_dof_names:
+                return True
+        return False
+
+    def _check_normal_offset_vjp_support(self) -> None:
+        """Raise if free normal-offset DOFs are combined with something the
+        FD gradient path (:meth:`_normal_offset_fd_gradient`) doesn't cover.
+
+        Two gaps: (1) mixing a free ``d{i}`` with a free raw
+        ``center_x/y/z``/``q*`` DOF on some *other* puck routes through
+        the full JAX free-DOF runner (:meth:`_vjp_puck_geometry`'s
+        ``center``/``quaternion`` branch), which has no ``d{i}`` handling
+        at all; (2) ``solver_mode == "dipole"``'s VJP
+        (:meth:`_vjp_dipole`) has no FD term for any reduced DOF.  Called
+        once from :meth:`vjp_setup_B` so it covers every solver mode.
+        """
+        if not self._has_free_normal_offset_dofs():
+            return
+        if self._has_free_center_or_quat_dofs():
+            raise NotImplementedError(
+                "PSCBulkArray: free normal-offset d{i} DOF(s) cannot "
+                "currently be combined with a free center_x/y/z or "
+                "quaternion DOF on another puck in the same array -- the "
+                "full JAX free-center/quat VJP path has no handling for "
+                "d{i} gradients. Fix all non-normal-offset center/"
+                "quaternion DOFs, or avoid mixing parameterizations."
+            )
+        if self.solver_mode == "dipole":
+            raise NotImplementedError(
+                "PSCBulkArray: free normal-offset d{i} DOF(s) are not "
+                "supported with solver_mode='dipole' (its VJP has no "
+                "finite-difference term for any reduced geometry DOF yet)."
+            )
+
     def _Rt_analytic_directional_combo(
         self, v_B: np.ndarray, pts: np.ndarray
     ) -> np.ndarray:
@@ -8494,6 +8695,86 @@ class PSCBulkArray(Optimizable):
                     if not np.isfinite(fd_entry):
                         return np.full((n_base, 2), np.nan, dtype=np.float64)
                     out[b, axis_idx] = fd_entry
+            return out
+        finally:
+            if _saved_partial_reuse is None:
+                os.environ.pop("SIMSOPT_PSC_PARTIAL_L_REUSE", None)
+            else:
+                os.environ["SIMSOPT_PSC_PARTIAL_L_REUSE"] = _saved_partial_reuse
+
+    def _normal_offset_fd_gradient(
+        self,
+        v_B: np.ndarray,
+        pts: np.ndarray,
+    ) -> np.ndarray:
+        """One-sided FD gradient of ``<v_B, B(pts)>`` w.r.t. free ``d{i}`` DOFs.
+
+        Mirrors :meth:`_Rt_fd_gradient` exactly (perturb the named DOF
+        directly, ``recompute_currents``, evaluate, restore) rather than
+        :meth:`_geometry_fd_gradient` (perturb ``center_x/y/z`` by a
+        caller-supplied direction): for a normal-offset puck,
+        ``center_x/y/z{i}`` are shadowed and unconditionally overwritten
+        from ``d{i}`` by :meth:`_get_base_puck_geometry` on every
+        rebuild, so perturbing them directly (as
+        :meth:`_geometry_fd_gradient` does) has zero effect on the
+        actual geometry -- only perturbing ``d{i}`` itself moves the puck.
+
+        Returns a ``(n_base,)`` float64 array, zero for pucks that are
+        not normal-offset or whose ``d{i}`` is currently fixed.
+        """
+        import warnings as _warnings
+
+        eps = _psc_rt_fd_eps_env()
+        v_B_arr = np.ascontiguousarray(v_B, dtype=np.float64)
+        pts_arr = np.ascontiguousarray(pts, dtype=np.float64)
+        n_base = int(self._n_base_pucks)
+        out = np.zeros(n_base, dtype=np.float64)
+        free_flags = np.asarray(self._dofs._free, dtype=bool)
+
+        _saved_partial_reuse = os.environ.get("SIMSOPT_PSC_PARTIAL_L_REUSE")
+        os.environ["SIMSOPT_PSC_PARTIAL_L_REUSE"] = "0"
+        try:
+            _t_b0 = self._mark_phase_start()
+            B0 = np.asarray(self._B_at_points_tf_only(pts_arr), dtype=np.float64)
+            self._mark_phase_end("vjp_free_normal_offset_fd_b0_capture", _t_b0)
+            if not np.all(np.isfinite(B0)):
+                return np.full(n_base, np.nan, dtype=np.float64)
+
+            for i in self._normal_offset_puck_indices:
+                dof_name = f"d{i}"
+                idx = self._normal_offset_dof_index[i]
+                if not bool(free_flags[idx]):
+                    continue
+                v0 = float(self.get(dof_name))
+                try:
+                    self.set(dof_name, v0 + eps)
+                    self.recompute_currents()
+                    B_p = np.asarray(
+                        self._B_at_points_tf_only(pts_arr), dtype=np.float64
+                    )
+                except (np.linalg.LinAlgError, RuntimeError, ValueError) as exc:
+                    _warnings.warn(
+                        "PSCBulkArray._normal_offset_fd_gradient: skipping "
+                        f"{dof_name!r} because the perturbed solve raised "
+                        f"{exc.__class__.__name__}: {exc}",
+                        category=RuntimeWarning,
+                        stacklevel=3,
+                    )
+                    out[i] = 0.0
+                    self.set(dof_name, v0)
+                    try:
+                        self.recompute_currents()
+                    except Exception:
+                        pass
+                    continue
+                self.set(dof_name, v0)
+                self.recompute_currents()
+                if not np.all(np.isfinite(B_p)):
+                    return np.full(n_base, np.nan, dtype=np.float64)
+                fd_entry = float(np.sum(v_B_arr * (B_p - B0))) / eps
+                if not np.isfinite(fd_entry):
+                    return np.full(n_base, np.nan, dtype=np.float64)
+                out[i] = fd_entry
             return out
         finally:
             if _saved_partial_reuse is None:
@@ -8711,13 +8992,13 @@ class PSCBulkArray(Optimizable):
                 _tf_failed = True
             if _tf_failed:
                 grad_local = np.full(
-                    self._n_base_pucks * _DOFS_PER_PUCK,
+                    self._n_geom_dofs,
                     np.nan,
                     dtype=float,
                 )
                 self._mark_phase_end("vjp_shape_only_total", _t_shape)
                 return Derivative({self: grad_local}) + tf_deriv
-            grad_local = np.zeros(self._n_base_pucks * _DOFS_PER_PUCK)
+            grad_local = np.zeros(self._n_geom_dofs)
             if self._has_free_Rt_dofs():
                 _t_Rt_fd = self._mark_phase_start()
                 rt_fn = (
@@ -8731,6 +9012,12 @@ class PSCBulkArray(Optimizable):
                     grad_local[off + 7] += g_Rt[i, 0]
                     grad_local[off + 8] += g_Rt[i, 1]
                 self._mark_phase_end("vjp_free_Rt_fd", _t_Rt_fd)
+            if self._has_free_normal_offset_dofs():
+                _t_d_fd = self._mark_phase_start()
+                g_d = self._normal_offset_fd_gradient(np.asarray(v_B), np.asarray(pts))
+                for i in self._normal_offset_puck_indices:
+                    grad_local[self._normal_offset_dof_index[i]] += g_d[i]
+                self._mark_phase_end("vjp_free_normal_offset_fd", _t_d_fd)
             self._mark_phase_end("vjp_shape_only_total", _t_shape)
             return Derivative({self: grad_local}) + tf_deriv
         _t_stacks = self._mark_phase_start()
@@ -8877,7 +9164,12 @@ class PSCBulkArray(Optimizable):
         vI = np.asarray(vI)
 
         _t_puck_pullback = self._mark_phase_start()
-        grad_local = np.zeros(self._n_base_pucks * _DOFS_PER_PUCK)
+        # Sized to ``_n_geom_dofs``: this branch only runs when a real
+        # center/quat DOF is free, a combination ``_check_normal_offset_
+        # vjp_support`` forbids alongside any free ``d{i}``, so no FD term
+        # is needed here -- but the array must still be long enough to
+        # cover any (fixed) normal-offset DOFs configured on this array.
+        grad_local = np.zeros(self._n_geom_dofs)
         if reduced_ok:
             for i in range(self._n_base_pucks):
                 off = i * _DOFS_PER_PUCK
@@ -9054,6 +9346,7 @@ class PSCBulkArray(Optimizable):
         adaptive_self_reg: bool = True,
         exact_disc_faces: bool = False,
         n_radial_disc: int = 32,
+        center_parameterization: str = "xyz",
     ) -> "PSCBulkArray":
         """Passive bulks on a winding surface ``extend_via_normal(distance)`` from the plasma.
 
@@ -9069,19 +9362,55 @@ class PSCBulkArray(Optimizable):
             n_radial_disc: Radial node count for the exact disc-face
                 assembler; ignored when ``exact_disc_faces`` is
                 ``False``.
+            center_parameterization: ``"xyz"`` (default) gives every puck
+                the usual independent ``center_x/y/z{i}`` DOFs. ``
+                "normal_offset"`` instead gives every puck a single scalar
+                DOF ``d{i}`` s.t. ``center_i = anchor_i + d_i * normal_i``,
+                where ``anchor_i``/``normal_i`` are that puck's point/unit
+                normal on the *raw* ``plasma_boundary`` (not the extended
+                winding surface); ``d_i`` starts at exactly ``distance``.
+                See :meth:`PSCBulkArray.unfix` and the ``normal_offset``
+                constructor argument for details, and
+                :func:`~simsopt.field.puck_init.winding_surface_pucks`
+                for the anchor/normal sampling.
 
         See :class:`PSCBulkArray` for the meaning of ``strict_rim_continuity``.
         """
         nfp_i = int(nfp if nfp is not None else plasma_boundary.nfp)
-        centers, axes, radii, thicknesses = winding_surface_pucks(
-            plasma_boundary,
-            distance=float(distance),
-            n_phi_pucks=int(n_phi_pucks),
-            n_theta_pucks=int(n_theta_pucks),
-            puck_R=puck_R,
-            puck_t=puck_t,
-            default_thickness=default_thickness,
-        )
+        normal_offset = None
+        if center_parameterization == "normal_offset":
+            centers, axes, radii, thicknesses, anchors, plasma_normals = (
+                winding_surface_pucks(
+                    plasma_boundary,
+                    distance=float(distance),
+                    n_phi_pucks=int(n_phi_pucks),
+                    n_theta_pucks=int(n_theta_pucks),
+                    puck_R=puck_R,
+                    puck_t=puck_t,
+                    default_thickness=default_thickness,
+                    center_parameterization="normal_offset",
+                )
+            )
+            normal_offset = {
+                "mask": np.ones(len(centers), dtype=bool),
+                "anchors": anchors,
+                "normals": plasma_normals,
+            }
+        elif center_parameterization == "xyz":
+            centers, axes, radii, thicknesses = winding_surface_pucks(
+                plasma_boundary,
+                distance=float(distance),
+                n_phi_pucks=int(n_phi_pucks),
+                n_theta_pucks=int(n_theta_pucks),
+                puck_R=puck_R,
+                puck_t=puck_t,
+                default_thickness=default_thickness,
+            )
+        else:
+            raise ValueError(
+                "center_parameterization must be 'xyz' or 'normal_offset'; "
+                f"got {center_parameterization!r}"
+            )
         psc = cls(
             centers,
             axes,
@@ -9103,6 +9432,7 @@ class PSCBulkArray(Optimizable):
             default_thickness=default_thickness,
             strict_rim_continuity=strict_rim_continuity,
             adaptive_self_reg=bool(adaptive_self_reg),
+            normal_offset=normal_offset,
         )
         if exact_disc_faces:
             psc.exact_disc_faces = True
@@ -9131,6 +9461,7 @@ class PSCBulkArray(Optimizable):
         default_thickness: float = 0.02,
         strict_rim_continuity: bool = False,
         adaptive_self_reg: bool = True,
+        center_parameterization: str = "xyz",
     ) -> "PSCBulkArray":
         """Passive bulk pucks placed directly from a list of planar coil curves.
 
@@ -9149,6 +9480,18 @@ class PSCBulkArray(Optimizable):
                 ``None`` (default) uses each curve's own area-equivalent radius.
             thickness: forwarded to :func:`~simsopt.field.puck_init.curves_to_pucks`;
                 ``None`` (default) uses ``default_thickness`` for every puck.
+            center_parameterization: ``"xyz"`` (default) gives every puck
+                the usual independent ``center_x/y/z{i}`` DOFs. ``
+                "normal_offset"`` instead gives every puck a single scalar
+                DOF ``d{i}`` s.t. ``center_i = anchor_i + d_i * normal_i``,
+                where ``anchor_i`` is that curve's own center and
+                ``normal_i`` is that curve's own axis (both from
+                :func:`~simsopt.field.puck_init.curves_to_pucks`, i.e. the
+                *initial* center/orientation baked in at construction
+                time -- moving ``d_i`` away from ``0`` slides the puck along
+                its own face-normal, off the curve's original plane).
+                ``d_i`` starts at exactly ``0``. See
+                :meth:`PSCBulkArray.unfix` for details.
 
         See :class:`PSCBulkArray` for the meaning of the remaining arguments.
         """
@@ -9158,6 +9501,18 @@ class PSCBulkArray(Optimizable):
             thickness=thickness,
             default_thickness=default_thickness,
         )
+        normal_offset = None
+        if center_parameterization == "normal_offset":
+            normal_offset = {
+                "mask": np.ones(len(centers), dtype=bool),
+                "anchors": centers.copy(),
+                "normals": axes.copy(),
+            }
+        elif center_parameterization != "xyz":
+            raise ValueError(
+                "center_parameterization must be 'xyz' or 'normal_offset'; "
+                f"got {center_parameterization!r}"
+            )
         return cls(
             centers,
             axes,
@@ -9177,6 +9532,7 @@ class PSCBulkArray(Optimizable):
             default_thickness=default_thickness,
             strict_rim_continuity=strict_rim_continuity,
             adaptive_self_reg=bool(adaptive_self_reg),
+            normal_offset=normal_offset,
         )
 
 
