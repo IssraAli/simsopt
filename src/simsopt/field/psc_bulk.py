@@ -9462,6 +9462,8 @@ class PSCBulkArray(Optimizable):
         strict_rim_continuity: bool = False,
         adaptive_self_reg: bool = True,
         center_parameterization: str = "xyz",
+        solver_mode: str = "energy",
+        **kwargs: Any,
     ) -> "PSCBulkArray":
         """Passive bulk pucks placed directly from a list of planar coil curves.
 
@@ -9492,6 +9494,28 @@ class PSCBulkArray(Optimizable):
                 its own face-normal, off the curve's original plane).
                 ``d_i`` starts at exactly ``0``. See
                 :meth:`PSCBulkArray.unfix` for details.
+            solver_mode: ``"energy"`` (default), ``"shell_l2"``, or
+                ``"dipole"`` -- forwarded verbatim to the
+                :class:`PSCBulkArray` constructor. ``"dipole"`` collapses
+                every base puck to a single point magnetic dipole moment
+                (reduced system size ``(3*n_base, 3*n_base)``); off-diagonal
+                puck-pair blocks use the closed-form dipole-dipole mutual
+                inductance (:func:`~simsopt.field.bulk_multipole.pair_inductance_dipole_block`)
+                instead of a quadrature-quadrature double integral, so it
+                avoids the large intermediate tensors the default
+                ``"energy"`` solver can hit at high puck counts. It's a
+                leading-order far-field truncation: a :class:`UserWarning`
+                is raised on the first rebuild if any puck pair is closer
+                than ``2 * (R_i + R_j)`` (configurable via
+                :envvar:`SIMSOPT_PSC_DIPOLE_WARN_R_CLOSE`), since truncation
+                error grows quickly at close packing. See :class:`PSCBulkArray`'s
+                ``solver_mode`` docs for ``"shell_l2"``.
+            **kwargs: Forwarded verbatim to the :class:`PSCBulkArray`
+                constructor -- e.g. ``bulk_far_pair_kappa``,
+                ``bulk_far_pair_tol``, ``mode_truncate``,
+                ``checkpoint_l_pairs``, ``full_L_band_size``, etc. Anything
+                not explicitly listed above as a named parameter of this
+                classmethod can still be reached this way.
 
         See :class:`PSCBulkArray` for the meaning of the remaining arguments.
         """
@@ -9533,6 +9557,8 @@ class PSCBulkArray(Optimizable):
             strict_rim_continuity=strict_rim_continuity,
             adaptive_self_reg=bool(adaptive_self_reg),
             normal_offset=normal_offset,
+            solver_mode=solver_mode,
+            **kwargs,
         )
 
 
