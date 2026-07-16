@@ -5435,24 +5435,6 @@ class PSCBulkArray(Optimizable):
                 # Fall through to the full rebuild path below if the
                 # ``changed_mask`` cannot be interpreted as a bool array.
                 pass
-        # Populate the geometry-introspection attributes (``_all_pucks``,
-        # ``_all_pucks_quats``, ``_all_puck_base_indices``) that VTK export
-        # (:func:`~simsopt.field.puck_vtk.pucks_to_vtk`,
-        # :func:`~simsopt.field.puck_vtk.puck_surface_mesh`), puck-overlap
-        # checks, and the equivalent-current fallback all read
-        # unconditionally.  The energy/shell_l2 rebuild path sets these as a
-        # side effect of its sheet-basis assembly, which dipole mode skips
-        # entirely (see the early-return dispatch in :meth:`_rebuild`), so
-        # they must be set explicitly here.  Skipped on the TF-only
-        # short-circuit above since puck geometry -- and hence these
-        # attributes -- did not change.
-        all_pucks, all_quats_list, base_indices, _, _, _ = self._replicate_pucks(
-            centers, quats, radii, thicknesses
-        )
-        self._all_pucks = all_pucks
-        self._all_pucks_quats = np.array(all_quats_list)
-        self._all_puck_base_indices = base_indices
-
         keys = tuple(
             (float(radii[i]), float(thicknesses[i])) for i in range(n_base)
         )
