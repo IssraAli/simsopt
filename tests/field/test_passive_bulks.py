@@ -3226,14 +3226,64 @@ def test_normal_offset_local_unfix_all_raises():
         psc.local_unfix_all()
 
 
-def test_normal_offset_dipole_free_d_raises():
+def test_normal_offset_dipole_d_gradient_matches_central_fd():
+    """``vjp_setup_B``'s ``d{i}`` gradient in dipole mode (analytic via
+    ``_vjp_dipole``'s ``dJ/dd_i = vc_np[i] . normal_i`` chain rule) matches
+    a central-FD reference."""
     psc = _make_normal_offset_array(n_base=2, solver_mode="dipole")
     psc.unfix("d0")
+    psc.unfix("d1")
+    psc.recompute_currents()
+    pts = np.asarray(psc.eval_points, dtype=float)
+    rng = np.random.default_rng(4242)
+    v_B = rng.standard_normal(pts.shape)
+
+    deriv = psc.vjp_setup_B(v_B, pts)
+    g = deriv(psc)
+    names = list(psc.local_full_dof_names)
+    free_names = [n for n, f in zip(names, psc.local_dofs_free_status) if f]
+    idx_d0 = free_names.index("d0")
+    idx_d1 = free_names.index("d1")
+
+    eps = 1e-4
+    g_ref = np.zeros(2)
+    for k, dof_name in enumerate(("d0", "d1")):
+        v0 = float(psc.get(dof_name))
+        psc.set(dof_name, v0 + eps)
+        psc.recompute_currents()
+        B_plus = np.asarray(psc.B_at_points(pts), dtype=np.float64)
+        psc.set(dof_name, v0 - eps)
+        psc.recompute_currents()
+        B_minus = np.asarray(psc.B_at_points(pts), dtype=np.float64)
+        psc.set(dof_name, v0)
+        psc.recompute_currents()
+        g_ref[k] = float(np.sum(v_B * (B_plus - B_minus))) / (2.0 * eps)
+
+    np.testing.assert_allclose(
+        [g[idx_d0], g[idx_d1]], g_ref, rtol=2e-3, atol=1e-6
+    )
+
+
+def test_normal_offset_dipole_mixed_with_free_center_works():
+    """Free ``d0`` combined with a free raw center on another puck no longer
+    raises in dipole mode: only ``_vjp_puck_geometry``'s energy/shell_l2 path
+    lacks ``d{i}`` handling -- ``_vjp_dipole`` computes the per-puck center
+    gradient densely over every base puck regardless of DOF-kind mix."""
+    psc = _make_normal_offset_array(n_base=2, solver_mode="dipole")
+    psc.unfix("d0")
+    # puck 1 is also normal-offset in this fixture, and its center_x1 is
+    # shadowed (unfix() would raise), so directly flip the underlying
+    # free flag, mirroring test_normal_offset_mixed_with_free_center_raises.
+    names = list(psc.local_full_dof_names)
+    idx = names.index("center_x1")
+    psc._dofs._free[idx] = True
+    psc.update_free_dof_size_indices()
     psc.recompute_currents()
     pts = np.asarray(psc.eval_points, dtype=float)
     v_B = np.ones_like(pts)
-    with pytest.raises(NotImplementedError):
-        psc.vjp_setup_B(v_B, pts)
+    deriv = psc.vjp_setup_B(v_B, pts)
+    g = np.asarray(deriv(psc))
+    assert np.all(np.isfinite(g))
 
 
 def test_normal_offset_mixed_with_free_center_raises():

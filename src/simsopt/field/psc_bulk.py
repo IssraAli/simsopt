@@ -8214,7 +8214,13 @@ class PSCBulkArray(Optimizable):
         assert self._dipole_jit_vjp_f is not None
         assert self._dipole_jit_vjp_fused_tf is not None
 
-        free_geom = self._has_free_center_or_quat_dofs()
+        # Free normal-offset (``d{i}``) DOFs also need the analytic per-puck
+        # center gradient below (``dJ/dd_i = vc_np[i] . normal_i``), so they
+        # take the split-kernel path too, not just raw free center/quat DOFs.
+        free_geom = (
+            self._has_free_center_or_quat_dofs()
+            or self._has_free_normal_offset_dofs()
+        )
 
         # Reuse device-resident puck geometry snapshots when valid;
         # otherwise wrap fresh NumPy arrays.
@@ -8337,14 +8343,21 @@ class PSCBulkArray(Optimizable):
 
         # Sized to ``_n_geom_dofs`` (not just ``n_base*_DOFS_PER_PUCK``) so
         # this doesn't crash via a ``Derivative`` length mismatch on an
-        # array with (currently-fixed) normal-offset DOFs configured;
-        # free normal-offset DOFs in dipole mode are rejected up front by
-        # ``_check_normal_offset_vjp_support`` (no FD term needed here).
+        # array with (currently-fixed) normal-offset DOFs configured.
         grad_local = np.zeros(self._n_geom_dofs)
         for i in range(n_base):
             off = i * _DOFS_PER_PUCK
             grad_local[off : off + 3] = vc_np[i]
             grad_local[off + 3 : off + 7] = vq_np[i]
+
+        # Normal-offset DOF chain rule: center_i = anchor_i + d_i * normal_i
+        # is linear in d_i, so dJ/dd_i = vc_np[i] . normal_i -- no separate
+        # FD term needed since vc_np is already the exact analytic
+        # dJ/dcenter_i computed above.
+        for i in self._normal_offset_puck_indices:
+            grad_local[self._normal_offset_dof_index[i]] += float(
+                np.dot(vc_np[i], self._normal_offset_normal[i])
+            )
 
         _t_tf_pullback = self._mark_phase_start()
         vjp_tf = self._merge_tf_coil_vjps(vg_np, vgd_np, vI_np)
@@ -8543,30 +8556,31 @@ class PSCBulkArray(Optimizable):
         """Raise if free normal-offset DOFs are combined with something the
         FD gradient path (:meth:`_normal_offset_fd_gradient`) doesn't cover.
 
-        Two gaps: (1) mixing a free ``d{i}`` with a free raw
-        ``center_x/y/z``/``q*`` DOF on some *other* puck routes through
-        the full JAX free-DOF runner (:meth:`_vjp_puck_geometry`'s
-        ``center``/``quaternion`` branch), which has no ``d{i}`` handling
-        at all; (2) ``solver_mode == "dipole"``'s VJP
-        (:meth:`_vjp_dipole`) has no FD term for any reduced DOF.  Called
-        once from :meth:`vjp_setup_B` so it covers every solver mode.
+        One remaining gap: mixing a free ``d{i}`` with a free raw
+        ``center_x/y/z``/``q*`` DOF on some *other* puck routes through the
+        full JAX free-DOF runner (:meth:`_vjp_puck_geometry`'s
+        ``center``/``quaternion`` branch), which has no ``d{i}`` handling at
+        all. This only applies to ``solver_mode in ("energy", "shell_l2")``:
+        :meth:`_vjp_dipole` computes an analytic per-puck center gradient
+        densely over every base puck once *any* center/quat/normal-offset DOF
+        is free, so mixing parameterizations across pucks is fine there (see
+        the ``dJ/dd_i = vc_np[i] . normal_i`` chain rule in
+        :meth:`_vjp_dipole`). Called once from :meth:`vjp_setup_B` so it
+        covers every solver mode.
         """
         if not self._has_free_normal_offset_dofs():
+            return
+        if self.solver_mode == "dipole":
             return
         if self._has_free_center_or_quat_dofs():
             raise NotImplementedError(
                 "PSCBulkArray: free normal-offset d{i} DOF(s) cannot "
                 "currently be combined with a free center_x/y/z or "
                 "quaternion DOF on another puck in the same array -- the "
-                "full JAX free-center/quat VJP path has no handling for "
-                "d{i} gradients. Fix all non-normal-offset center/"
-                "quaternion DOFs, or avoid mixing parameterizations."
-            )
-        if self.solver_mode == "dipole":
-            raise NotImplementedError(
-                "PSCBulkArray: free normal-offset d{i} DOF(s) are not "
-                "supported with solver_mode='dipole' (its VJP has no "
-                "finite-difference term for any reduced geometry DOF yet)."
+                "full JAX free-center/quat VJP path (solver_mode='energy'/"
+                "'shell_l2') has no handling for d{i} gradients. Fix all "
+                "non-normal-offset center/quaternion DOFs, or avoid mixing "
+                "parameterizations."
             )
 
     def _Rt_analytic_directional_combo(
