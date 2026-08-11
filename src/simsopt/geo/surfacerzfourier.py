@@ -1193,7 +1193,7 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
         method="SLSQP",
         mpol_new=None,
         ntor_new=None,
-        epsilon=1e-3,
+        epsilon=5e-3,
         Fourier_continuation=True,
         verbose=True,
     ):

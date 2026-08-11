@@ -18,6 +18,8 @@ from ..util.spline_helpers import (
     b_p_deriv2,
     chord_length_knots,
     double_reflection_rmf,
+    eval_periodic_curve,
+    lane_riesenfeld_double,
     uniform_knots,
 )
 from .curve import Curve
@@ -161,6 +163,17 @@ class CrossSectionFixedZeta(Optimizable):
                         dofs.update_bounds(
                             f"theta_{k}", (new_bounds[k - 1], new_bounds[k])
                         )
+                    # The loop above never reaches k = n_pts-1 (theta_{n_pts-1}
+                    # = pi itself, fixed just above) -- it's left with
+                    # whichever bounds the generic (non-z_sym-aware)
+                    # construction assigned earlier, which don't extend to
+                    # pi at all. Give it a bound that actually contains its
+                    # own (fixed) value, using the same neighbor-midpoint
+                    # convention as the rest of this loop.
+                    lower_for_last = new_bounds[-2] if len(new_bounds) >= 2 else 0.0
+                    dofs.update_bounds(
+                        f"theta_{n_pts - 1}", (lower_for_last, max_angle)
+                    )
 
     def set_dofs_impl(self, v):
         """
@@ -268,6 +281,192 @@ class CrossSectionFixedZeta(Optimizable):
                     flipped_cs.fix(name)
                     self.fix(name)
             return flipped_cs
+
+    def _remap_fixed_bounds(self, new_cs, index_map, old_n_pts=None):
+        """
+        Copy fixed/bounds status from self onto new_cs (a freshly-built,
+        refined CrossSectionFixedZeta), following index_map (a sequence
+        such that index_map[old_i] is the new point-index structurally
+        closest to old point old_i) for the r_i/theta_i/w_i dof triples.
+        Points with no close old counterpart are left free, matching how
+        other interior control points are normally free.
+        """
+        old_n_pts = self.n_pts if old_n_pts is None else old_n_pts
+        for old_i in range(old_n_pts):
+            new_i = index_map[old_i]
+            for prefix in ("r", "theta", "w"):
+                old_name = f"{prefix}_{old_i}"
+                new_name = f"{prefix}_{new_i}"
+                if self.is_fixed(old_name):
+                    new_cs.fix(new_name)
+                old_idx = self.local_full_dof_names.index(old_name)
+                lb = self.dofs.full_lower_bounds[old_idx]
+                ub = self.dofs.full_upper_bounds[old_idx]
+                new_cs.dofs.update_bounds(new_name, (lb, ub))
+
+    @staticmethod
+    def _nearest_angle_index_map(old_theta, new_theta, circular):
+        """
+        For each angle in old_theta, the index into new_theta of its
+        closest match -- used by _remap_fixed_bounds to carry
+        fixed/bounds metadata across a Lane-Riesenfeld doubling, which
+        blends every control point (so no exact old-index -> new-index
+        correspondence exists in general; nearest-angle is a robust,
+        symmetry-respecting stand-in). `circular` wraps the distance
+        around 2*pi -- use True for a full periodic (non-z_sym) angle
+        range, False for a z_sym half-array's bounded [0, pi] range.
+        """
+        diff = np.abs(old_theta[:, None] - new_theta[None, :])
+        if circular:
+            diff = np.minimum(diff, 2 * np.pi - diff)
+        return np.argmin(diff, axis=1)
+
+    @staticmethod
+    def _set_theta_neighbor_bounds(cs, periodic, domain=2 * np.pi):
+        """
+        Set every theta_i dof's bounds to the midpoint between it and its
+        immediate index-neighbors theta_{i-1}/theta_{i+1} (wrapping at
+        the domain boundary if `periodic`, clamped at the two ends
+        otherwise). This is the same "keep neighbors from ever crossing"
+        invariant CrossSectionFixedZeta.__init__ sets up for a *default*,
+        evenly-spaced theta -- reproduced here for the ACTUAL (generally
+        unevenly spaced, post-Lane-Riesenfeld-doubling) theta values.
+
+        Must run AFTER cs.x is set to its final values: unlike
+        _remap_fixed_bounds (which copies stale bounds from the nearest
+        OLD point -- fine for r/w, whose [0, 1] bounds don't depend on
+        position, but wrong for theta once doubling has moved every
+        point), this recomputes theta bounds fresh from where the new
+        points actually ended up, so every value is guaranteed to lie
+        strictly inside its own bounds.
+
+        For the periodic case, the array's 0/2*pi "seam" is NOT
+        necessarily between index -1 and 0 -- Lane-Riesenfeld doubling's
+        internal roll can leave the seam at any index -- so which
+        neighbor needs a +/-domain shift is detected from the actual
+        VALUES (whichever neighbor is on the wrong side of theta[i]),
+        not assumed from index position.
+        """
+        theta = cs.theta_ctrl
+        m = len(theta)
+        if periodic:
+            prev = np.roll(theta, 1)
+            nxt = np.roll(theta, -1)
+            prev = np.where(prev > theta, prev - domain, prev)
+            nxt = np.where(nxt < theta, nxt + domain, nxt)
+        else:
+            prev = np.concatenate([theta[:1], theta[:-1]])
+            nxt = np.concatenate([theta[1:], theta[-1:]])
+        lower = 0.5 * (prev + theta)
+        upper = 0.5 * (theta + nxt)
+        for i in range(m):
+            cs.dofs.update_bounds(f"theta_{i}", (lower[i], upper[i]))
+
+    def _rebuild_nonzsym_bisect_all(self, p):
+        """
+        Return a new (non-z_sym) CrossSectionFixedZeta with every gap
+        bisected via Lane-Riesenfeld doubling (exact for 'uniform'
+        knots; an approximation for 'chord', consistent with the other
+        approximations already accepted elsewhere in refine() -- see
+        spline_helpers.lane_riesenfeld_double).
+
+        Applying this same doubling rule to every cross section
+        (including z_sym ones -- see _rebuild_zsym_bisect_all) keeps
+        column indices aligned across the whole surface's tensor-product
+        structure: every row grows m -> 2m. Every control point,
+        including index 0, is blended by the corner-cutting averaging --
+        unlike z_sym, there is no pinned reference point to protect here.
+        """
+        xy = np.stack(
+            [self.r_ctrl * np.cos(self.theta_ctrl), self.r_ctrl * np.sin(self.theta_ctrl)],
+            axis=1,
+        )
+        new_xy, new_w = lane_riesenfeld_double(xy, self.w_ctrl, p)
+
+        new_r = np.hypot(new_xy[:, 0], new_xy[:, 1])
+        new_theta = np.mod(np.arctan2(new_xy[:, 1], new_xy[:, 0]), 2 * np.pi)
+
+        new_cs = CrossSectionFixedZeta(
+            zeta_index=self.zeta_index,
+            n_ctrl_pts=2 * self.n_ctrl_pts,
+            z_sym=False,
+            nurbs=self.nurbs,
+        )
+        new_cs.unfix_all()
+        new_cs.x = np.concatenate([new_r, new_theta, new_w])
+
+        index_map = self._nearest_angle_index_map(
+            self.theta_ctrl, new_theta, circular=True
+        )
+        self._remap_fixed_bounds(new_cs, index_map)
+        self._set_theta_neighbor_bounds(new_cs, periodic=True)
+        return new_cs
+
+    def _rebuild_zsym_bisect_all(self, p):
+        """
+        Return a new (z_sym) CrossSectionFixedZeta bisecting every gap,
+        matching _rebuild_nonzsym_bisect_all's growth exactly (m -> 2m
+        for every row, keeping the tensor-product surface's column
+        indices aligned) but working from the cross section's genuine,
+        full (mirrored) periodic curve rather than treating the stored
+        half-array as its own independent clamped curve (which has no
+        real geometric meaning -- see the class docstring discussion
+        this replaced).
+
+        Lane-Riesenfeld doubling blends every point, including the
+        theta=0/pi mirror-axis points -- their raw (r, w) values change,
+        but their THETA stays exactly 0/pi, by symmetry of the
+        construction alone (not because those dofs are held fixed during
+        the blend): doubling a mirror-symmetric periodic polygon with a
+        symmetric, shift-equivariant operation keeps it symmetric, and
+        the two axis vertices are exactly self-mirrored (verified
+        numerically to ~1e-15). So the sort-by-theta-then-slice
+        extraction below still exactly recovers the half array with the
+        axis points at its two ends.
+        """
+        m = self.n_ctrl_pts
+        full_theta = self.get_theta_ctrl_full()
+        full_r = self.get_r_ctrl_full()
+        full_w = self.get_w_ctrl_full()
+        xy = np.stack(
+            [full_r * np.cos(full_theta), full_r * np.sin(full_theta)], axis=1
+        )
+
+        new_xy, new_full_w = lane_riesenfeld_double(xy, full_w, p)
+
+        new_full_r = np.hypot(new_xy[:, 0], new_xy[:, 1])
+        new_full_theta = np.mod(np.arctan2(new_xy[:, 1], new_xy[:, 0]), 2 * np.pi)
+        # The theta=0 axis point can land bit-exactly at 2*pi rather than
+        # 0 (an infinitesimally-negative atan2 result rounds away when
+        # added to 2*pi) -- snap it back so the sort-by-theta extraction
+        # below puts it at the front of the half array, not the back.
+        new_full_theta = np.where(
+            np.isclose(new_full_theta, 2 * np.pi, atol=1e-9, rtol=0),
+            0.0,
+            new_full_theta,
+        )
+
+        new_cs = CrossSectionFixedZeta(
+            zeta_index=self.zeta_index,
+            n_ctrl_pts=2 * m,
+            z_sym=True,
+            nurbs=self.nurbs,
+        )
+        new_cs.unfix_all()
+        n_new_half = new_cs.n_pts
+
+        order = np.argsort(new_full_theta)
+        new_r = new_full_r[order][:n_new_half]
+        new_theta = np.clip(new_full_theta[order][:n_new_half], 0.0, np.pi)
+        new_w = new_full_w[order][:n_new_half]
+        new_cs.x = np.concatenate([new_r, new_theta, new_w])
+
+        index_map = self._nearest_angle_index_map(
+            self.theta_ctrl, new_theta, circular=False
+        )
+        self._remap_fixed_bounds(new_cs, index_map)
+        self._set_theta_neighbor_bounds(new_cs, periodic=False)
+        return new_cs
 
 
 class PseudoAxis(sopp.Curve, Curve):
@@ -1019,6 +1218,160 @@ class SurfaceBSpline(sopp.Surface, Surface):
             [self.get(f"cs_angle{i}") for i in range(self.n_cs)]
         )
         return zeta_list, cs_angle_list
+
+    def refine_poloidal(self):
+        """
+        Insert a new poloidal control point at the midpoint of every gap
+        in every cross section, via Lane-Riesenfeld doubling (exact for
+        'uniform' knots; an approximation for 'chord', consistent with
+        the other approximations already accepted there -- see
+        CrossSectionFixedZeta._rebuild_nonzsym_bisect_all /
+        _rebuild_zsym_bisect_all, spline_helpers.lane_riesenfeld_double).
+
+        This uniform, uniformly-applied-to-every-row doubling (rather
+        than picking a single "smallest gap" per row) is what keeps the
+        tensor-product surface's column indices aligned across cross
+        sections after refinement: every row grows m -> 2m, at the same
+        relative index positions, even though the actual angles inserted
+        generally differ row to row. An earlier, adaptive "insert at the
+        smallest gap(s)" version of this method did not have this
+        property and was replaced.
+
+        Raises ValueError if any cross section is z_sym and p_u is even:
+        the mirror axis (theta=0/pi) of an even-degree uniform B-spline
+        always falls exactly on a *knot*, never on a control point, at
+        every level of dyadic refinement -- so there is no way to keep
+        z_sym's theta_0=0/theta_{n_pts-1}=pi pinned to an actual control
+        point after doubling (verified numerically: the axis survives
+        exactly as a control point for odd p_u, never for even p_u,
+        regardless of point count or which of the 2m post-doubling
+        points is checked). This is a property of uniform B-splines, not
+        a limitation of this implementation.
+        """
+        p = self.p_u
+        if p % 2 == 0 and any(cs.z_sym for cs in self.cs_list):
+            raise ValueError(
+                f"refine_poloidal: p_u={p} is even, but this surface has "
+                "z_sym cross sections -- the mirror axis of an even-degree "
+                "uniform B-spline can never land exactly on a control "
+                "point after doubling (see docstring), so z_sym's pinned "
+                "theta_0=0 boundary cannot be preserved. Use an odd p_u."
+            )
+
+        new_cs_list = [
+            cs._rebuild_zsym_bisect_all(p)
+            if cs.z_sym
+            else cs._rebuild_nonzsym_bisect_all(p)
+            for cs in self.cs_list
+        ]
+
+        for idx, new_cs in enumerate(new_cs_list):
+            self.pop_parent(idx + 1)
+            self.add_parent(idx + 1, new_cs)
+            self.cs_list[idx] = new_cs
+
+        self.points_per_cs = self.cs_list[0].n_ctrl_pts
+        self._invalidate_control_net_cache()
+
+    def _invalidate_control_net_cache(self):
+        self.new_x = True
+        self._knots_u = None
+        self._knots_v = None
+        self._control_points_jim = None
+        self._w_list_jim = None
+
+    def cross_section_xy(self, cs, n_samples=200):
+        """
+        A single cross section's own (curve, control-polygon) in its
+        local (x, y) cross-sectional plane, evaluated directly from
+        cs's own control points via its periodic B-spline (using this
+        surface's p_u/knot_parametrization).
+
+        cs need not be a member of self.cs_list right now -- e.g. a
+        cs saved before a refine_poloidal() call works just as well, as
+        long as its degree is consistent with self.p_u (refine_poloidal
+        doesn't change p_u, only point counts).
+
+        Returns (curve_xy, ctrl_xy), each an (N, 2) array; ctrl_xy is
+        cs's own full (mirrored, for z_sym) control polygon.
+        """
+        full_r = cs.get_r_ctrl_full()
+        full_theta = cs.get_theta_ctrl_full()
+        full_w = cs.get_w_ctrl_full()
+        ctrl_xy = np.stack(
+            [full_r * np.cos(full_theta), full_r * np.sin(full_theta)], axis=1
+        )
+        curve_xy = eval_periodic_curve(
+            ctrl_xy, full_w, self.p_u, self.knot_parametrization,
+            n_samples=n_samples,
+        )
+        return curve_xy, ctrl_xy
+
+    def plot_cross_sections(
+        self,
+        cs_lists,
+        zeta_indices=None,
+        labels=None,
+        n_samples=200,
+        curve_kwargs_list=None,
+        ctrl_kwargs_list=None,
+    ):
+        """
+        Compare one or more snapshots of this surface's cross sections
+        (e.g. before/after a refine_poloidal() call) side by side: one
+        2D subplot per selected zeta_index, with every snapshot's curve
+        + control polygon overlaid on it. Useful for visually confirming
+        that refine_poloidal() leaves the curve unchanged (only adds
+        control points).
+
+        cs_lists : sequence of cs_list-like sequences, each the same
+            length/order as self.cs_list -- typically [old_cs_list,
+            self.cs_list], where old_cs_list = list(self.cs_list) was
+            saved before calling refine_poloidal(). Only each snapshot's
+            own r/theta/w values are used; p_u/knot_parametrization
+            always come from self (refine_poloidal doesn't change
+            either).
+        zeta_indices : which cross-section indices to plot (default:
+            every index in self.cs_list).
+        labels : one legend label per snapshot (default: "snapshot 0",
+            "snapshot 1", ...).
+
+        Returns (fig, axs).
+        """
+        if zeta_indices is None:
+            zeta_indices = range(self.n_cs)
+        if labels is None:
+            labels = [f"snapshot {i}" for i in range(len(cs_lists))]
+        if curve_kwargs_list is None:
+            curve_kwargs_list = [{} for _ in cs_lists]
+        if ctrl_kwargs_list is None:
+            ctrl_kwargs_list = [
+                {"ls": "--", "marker": "o", "alpha": 0.5} for _ in cs_lists
+            ]
+
+        fig, axs = plt.subplots(
+            1, len(zeta_indices), squeeze=False,
+            figsize=(4 * len(zeta_indices), 4),
+        )
+        axs = axs[0]
+        for ax, zeta_index in zip(axs, zeta_indices):
+            for cs_list, label, curve_kwargs, ctrl_kwargs in zip(
+                cs_lists, labels, curve_kwargs_list, ctrl_kwargs_list
+            ):
+                cs = cs_list[zeta_index]
+                curve_xy, ctrl_xy = self.cross_section_xy(cs, n_samples=n_samples)
+                curve_closed = np.vstack([curve_xy, curve_xy[:1]])
+                ctrl_closed = np.vstack([ctrl_xy, ctrl_xy[:1]])
+                ax.plot(
+                    curve_closed[:, 0], curve_closed[:, 1],
+                    label=label, **curve_kwargs,
+                )
+                ax.plot(ctrl_closed[:, 0], ctrl_closed[:, 1], **ctrl_kwargs)
+            ax.set_aspect("equal")
+            ax.set_title(f"cross section {zeta_index}")
+            ax.legend()
+        fig.tight_layout()
+        return fig, axs
 
     def _axis_rz(self, zeta):
         """
@@ -2277,63 +2630,81 @@ class SurfaceBSpline(sopp.Surface, Surface):
         rbc, zbs = rbc_in, zbs_in
 
         if plot_ft:
-
-            def boundary_poincare_plot(
-                rbc,
-                zbs,
-                phi,
-                N,
-                M,
-                nfp,
-                ntheta=200,
-            ):
-                xn = np.arange(-N, N + 1, 1)
-                xm = np.arange(0, M + 1, 1)
-
-                ntheta = 200
-                theta = np.linspace(0, 2 * np.pi, num=ntheta)
-
-                R = np.zeros((ntheta, 1))
-                Z = np.zeros((ntheta, 1))
-
-                for i in range(rbc.shape[0]):
-                    for j in range(rbc.shape[1]):
-                        if rbc[i, j] != 0 or zbs[i, j] != 0:
-                            angle = xm[j] * theta - xn[i] * phi * nfp
-                            R = R + rbc[i, j] * np.cos(
-                                angle
-                            )  # /(np.abs(i) + np.abs(j))
-                            Z = Z + zbs[i, j] * np.sin(
-                                angle
-                            )  # /(np.abs(i) + np.abs(j))
-                return R.flatten(), Z.flatten()
-
-            n_rows = 2
-            n_cols = 4
-            figsize = (14.5, 8.1)
-            fig_poincare, axes = plt.subplots(
-                n_rows, n_cols, figsize=figsize, subplot_kw={"aspect": "equal"}
-            )
-            axes = axes.flatten()
-            phi_array = np.linspace(0, np.pi / 2, 5)
-            for k, phi in enumerate(phi_array):
-                cs_xyz = self.cross_section(phi / (2 * np.pi), thetas=200)
-                R_spline_plot = np.sqrt(cs_xyz[:, 0] ** 2 + cs_xyz[:, 1] ** 2)
-                Z_spline_plot = cs_xyz[:, 2]
-                axes[k].plot(
-                    R_spline_plot,
-                    Z_spline_plot,
-                    "k--",
-                    lw=1,
-                    label="Spline (ground truth)",
-                )
-                R_ft, Z_ft = boundary_poincare_plot(
-                    rbc, zbs, phi, self.N, self.M, self.nfp
-                )
-                axes[k].plot(R_ft, Z_ft, lw=1, label="FT")
-                axes[k].legend()
+            self.plot_ft_vs_ground_truth(rbc, zbs, ax=ft_ax)
 
         return rbc, zbs
+
+    def plot_ft_vs_ground_truth(self, rbc, zbs, phi_array=None, ax=None):
+        """
+        Plot this spline's own cross-section ("Spline (ground truth)")
+        against a VMEC Fourier-coefficient reconstruction ("FT") at
+        several toroidal angles, one subplot per angle. Shared by
+        ft()'s plot_ft option and to_RZFourier()'s on-error diagnostic
+        (variational_spec_cond's shapetol RuntimeError -- see
+        to_RZFourier's docstring) so both show the same comparison.
+
+        rbc, zbs : VMEC Fourier coefficients to compare against this
+            spline (e.g. this method's own return value).
+        phi_array : toroidal angles (radians) to plot, one subplot each
+            (default: 5 values evenly spaced over [0, pi/2]).
+        ax : optional flat array/list of Axes, one per phi_array entry
+            (default: a fresh 2x4 grid of subplots).
+
+        Returns the Axes used.
+        """
+        def boundary_poincare_plot(
+            rbc,
+            zbs,
+            phi,
+            N,
+            M,
+            nfp,
+            ntheta=200,
+        ):
+            xn = np.arange(-N, N + 1, 1)
+            xm = np.arange(0, M + 1, 1)
+
+            theta = np.linspace(0, 2 * np.pi, num=ntheta)
+
+            R = np.zeros((ntheta, 1))
+            Z = np.zeros((ntheta, 1))
+
+            for i in range(rbc.shape[0]):
+                for j in range(rbc.shape[1]):
+                    if rbc[i, j] != 0 or zbs[i, j] != 0:
+                        angle = xm[j] * theta - xn[i] * phi * nfp
+                        R = R + rbc[i, j] * np.cos(angle)
+                        Z = Z + zbs[i, j] * np.sin(angle)
+            return R.flatten(), Z.flatten()
+
+        if phi_array is None:
+            phi_array = np.linspace(0, np.pi / 2, 5)
+        if ax is None:
+            _, axes = plt.subplots(
+                2, 4, figsize=(14.5, 8.1), subplot_kw={"aspect": "equal"}
+            )
+            axes = axes.flatten()
+        else:
+            axes = ax
+
+        for k, phi in enumerate(phi_array):
+            cs_xyz = self.cross_section(phi / (2 * np.pi), thetas=200)
+            R_spline_plot = np.sqrt(cs_xyz[:, 0] ** 2 + cs_xyz[:, 1] ** 2)
+            Z_spline_plot = cs_xyz[:, 2]
+            axes[k].plot(
+                R_spline_plot,
+                Z_spline_plot,
+                "k--",
+                lw=1,
+                label="Spline (ground truth)",
+            )
+            R_ft, Z_ft = boundary_poincare_plot(
+                rbc, zbs, phi, self.N, self.M, self.nfp
+            )
+            axes[k].plot(R_ft, Z_ft, lw=1, label="FT")
+            axes[k].legend()
+
+        return axes
 
     def centroid_axis_fourier_coeffs(self, N=6, nv=300, plot=False):
         """
@@ -2426,6 +2797,19 @@ class SurfaceBSpline(sopp.Surface, Surface):
         spec_cond="variational",
         spec_cond_options=None,
     ):
+        """
+        Fourier-transform this spline (ft()) into VMEC coefficients, then
+        (spec_cond="variational", the default) spectrally condense them
+        via SurfaceRZFourier.variational_spec_cond.
+
+        If variational_spec_cond raises a shapetol RuntimeError (its
+        shape_reference already diverged from the pre-condensation FT
+        within the first iteration -- see that method's docstring),
+        plot_ft_vs_ground_truth is called on the pre-condensation
+        rbc/zbs before the error propagates, since that failure mode is
+        usually a shapetol/max_alpha tuning problem that's much easier
+        to diagnose visually than from the exception message alone.
+        """
         # print('to_RZFourier called')
         if M is None and N is None:
             M, N = self.M, self.N
@@ -2461,7 +2845,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
                 "plot": False,
                 "ftol": 1e-4,
                 "Mtol": 1.1,
-                "shapetol": 1e-3,
+                "shapetol": 5e-3,
                 "niters": 400,
                 "verbose": False,
                 "cutoff": 1e-8,
@@ -2471,7 +2855,18 @@ class SurfaceBSpline(sopp.Surface, Surface):
                 if spec_cond_options is not None
                 else default_options
             )
-            surf = surf.variational_spec_cond(**options)
+            try:
+                surf = surf.variational_spec_cond(**options)
+            except RuntimeError:
+                # e.g. "shape error already exceeds shapetol after just
+                # the first iteration" -- show what the (pre-condensation)
+                # FT actually looked like against the spline's own ground
+                # truth before propagating the error, since this class of
+                # failure is usually a shapetol/max_alpha tuning problem
+                # that's much easier to diagnose visually.
+                self.plot_ft_vs_ground_truth(rbc, zbs)
+                plt.show()
+                raise
         elif spec_cond == "direct":
             default_options = {
                 "verbose": False,

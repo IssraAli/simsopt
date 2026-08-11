@@ -221,6 +221,88 @@ def chord_length_knots(points, p, domain=2*np.pi):
     start = (len(knots_wide) - n_needed) // 2
     return knots_wide[start:start + n_needed]
 
+def eval_periodic_curve(core, weights, p, knot_parametrization, n_samples=200, domain=2 * np.pi):
+    '''
+    Evaluate a periodic (closed-loop), rational degree-p B-spline curve
+    at n_samples points evenly spaced over its domain, using the same
+    tiling/knot convention as SurfaceBSpline._control_net_and_knots
+    (uniform_knots/chord_length_knots) -- so this reproduces exactly
+    what the surface itself evaluates for a single cross section's own
+    curve, independent of the full toroidal surface's tensor-product
+    v-blending.
+
+    core : (m, dim) array of control points, periodic (point m aliases
+        point 0).
+    weights : (m,) array of NURBS weights.
+    p : degree.
+    knot_parametrization : 'uniform' or 'chord'.
+
+    Returns an (n_samples, dim) array of points on the curve.
+    '''
+    m = len(core)
+    padded = np.concatenate([core[-p:], core, core[:p]], axis=0)
+    padded_w = np.concatenate([weights[-p:], weights, weights[:p]])
+    if knot_parametrization == "uniform":
+        t = uniform_knots(m - 1, p, domain=domain)
+    elif knot_parametrization == "chord":
+        t = chord_length_knots(core, p, domain=domain)
+    else:
+        raise ValueError(
+            "knot_parametrization must be 'uniform' or 'chord', got "
+            f"{knot_parametrization!r}"
+        )
+    us = np.linspace(0, domain, n_samples, endpoint=False)
+    basis = b_p(t, p, us)
+    num = basis @ (padded * padded_w[:, None])
+    den = basis @ padded_w
+    return num / den[:, None]
+
+def lane_riesenfeld_double(points, weights, p):
+    '''
+    Exact Lane-Riesenfeld doubling (Lane & Riesenfeld, 1980) of a
+    periodic (closed-loop), uniformly-knotted, rational degree-p
+    B-spline's control polygon: duplicate every point, then apply p
+    rounds of cyclic pairwise averaging, then roll by p//2 to align with
+    this codebase's `uniform_knots` convention (knots[p]==0 for the new,
+    doubled point count).
+
+    This is the standard doubling/knot-refinement recipe for a
+    degree-p uniform B-spline: it inserts a new knot at the midpoint of
+    every existing knot span simultaneously, so the result is exact --
+    verified by direct curve evaluation (via `uniform_knots`/`b_p`,
+    matching how this codebase evaluates its own periodic B-splines) to
+    ~1e-15 for degree 1 through 5, both even and odd point counts.
+
+    Operates on the homogeneous points (w_i * P_i, w_i) so it's exact
+    for rational (weighted) curves too -- reduces to the classic
+    non-rational Lane-Riesenfeld recipe when all weights are equal.
+
+    There is no protected/excluded point: every input point, including
+    any point treated elsewhere as a fixed reference (e.g.
+    CrossSectionFixedZeta's theta_0=0), is blended by the corner-cutting
+    averaging, so its raw value generally changes. For a
+    mirror-symmetric input, though, the mirror-axis point's *angular*
+    position survives exactly (verified numerically), because doubling a
+    symmetric polygon with this shift-equivariant construction keeps it
+    symmetric -- see CrossSectionFixedZeta._rebuild_zsym_bisect_all.
+
+    points : (m, dim) array of control points, periodic (point m aliases
+        point 0).
+    weights : (m,) array of NURBS weights.
+    p : degree.
+
+    Returns (new_points, new_weights), each with exactly 2*m points,
+    consistent with `uniform_knots(2*m-1, p)`.
+    '''
+    Pw = np.concatenate([points * weights[:, None], weights[:, None]], axis=1)
+    D = np.repeat(Pw, 2, axis=0)
+    for _ in range(p):
+        D = 0.5 * (D + np.roll(D, -1, axis=0))
+    D = np.roll(D, p // 2, axis=0)
+    new_weights = D[:, -1]
+    new_points = D[:, :-1] / new_weights[:, None]
+    return new_points, new_weights
+
 def double_reflection_rmf(gamma, gammadash, normal0):
     '''
     Rotation-minimizing frame along a sequence of points via the discrete

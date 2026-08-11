@@ -81,7 +81,7 @@ if __name__ == "__main__":
     spline_kwargs = {
         "axis_points": 3,
         "points_per_cs": 4,
-        "n_cs": 3,
+        "n_cs": 5,
         "nfp": 2,
         "M": 8,
         "N": 4,
@@ -94,6 +94,7 @@ if __name__ == "__main__":
         "cs_basis": "polar",
         "nurbs": False,
         "use_bishop_frame": True,
+        "knot_parametrization": "uniform",
     }
 
     dof_list, ub, lb = write_doflist_maxlist_minlist(spline_kwargs)
@@ -102,6 +103,7 @@ if __name__ == "__main__":
         default_r=0.3,
         **spline_kwargs,
     )
+    spline_surf.axis.fix("r_axis_0")
     # spline_surf.axis.fix("r_axis_0")
     # new_x = np.array(
     #     [
@@ -146,27 +148,39 @@ if __name__ == "__main__":
     # )
     new_x = np.array(
         [
-            1.2306775093840139e-01,
-            3.4624555060122159e-01,
-            7.8049928835517257e-02,
-            1.5505118933976567e00,
-            1.4641788790891058e-01,
-            2.7820786982997625e-01,
-            3.7846737960574922e-01,
-            2.9339596627430459e-01,
-            9.1988817100297438e-01,
-            3.9091343402339822e00,
-            4.4984178981295955e00,
-            3.5495862708798537e-01,
-            9.2394453980116503e-02,
-            3.4796465522872194e-01,
-            9.6472151937407247e-01,
-            1.4202247155844985e00,
-            8.1956617160011902e-01,
-            7.8186954263776698e-01,
-            4.6903099960654843e-01,
-            8.7585114826962540e-01,
-            5.6487693368321734e-01,
+            7.5201273052623300e-06,
+            4.2501631406549062e-01,
+            1.3789545468136427e-01,
+            1.3105015477699220e00,
+            2.1246033886416580e-02,
+            3.6328529493187850e-01,
+            1.2818811782170014e-01,
+            3.8943918345599199e-01,
+            1.0694883206553649e00,
+            3.2405748878384344e00,
+            4.6539785945862961e00,
+            1.1001511421235184e-01,
+            2.5965822664705596e-01,
+            1.2801936062875557e-01,
+            3.1951585968736973e-01,
+            7.9623244052944575e-01,
+            3.5832690095641251e00,
+            4.4201185993943746e00,
+            1.6583920792183407e-01,
+            1.6349040489652469e-01,
+            2.0944161298573122e-01,
+            2.0661100786519029e-01,
+            7.8544529603976498e-01,
+            3.4575321265156798e00,
+            4.2632018765042359e00,
+            1.8738734035077514e-01,
+            1.1221864515467743e-01,
+            2.4601657859914894e-01,
+            1.5985464601264134e00,
+            7.2302277317421226e-01,
+            5.2938320909160241e-01,
+            2.3054354773013225e-01,
+            8.0640415675395638e-01,
         ]
     )
     print(len(new_x))
@@ -176,6 +190,14 @@ if __name__ == "__main__":
 
     spline_surf.plot()
     plt.show()
+
+    data_init = np.zeros((64, 64, 3))
+    u = np.linspace(0, 2 * np.pi, 64, endpoint=True)
+    v = np.linspace(0, 2 * np.pi, 64, endpoint=True)
+
+    initial = spline_surf.gamma_impl(
+        data_init, v / (2 * np.pi), u / (2 * np.pi)
+    )
 
     rz_surf = spline_surf.to_RZFourier(
         # nu=64,
@@ -199,6 +221,31 @@ if __name__ == "__main__":
     # condensed, data = rz_surf.condense_spectrum(method='trf', Fourier_continuation=True)
     # plot_spectral_condensation(rz_surf, condensed, data)
 
+    plt.show()
+
+    # refine_poloidal() (Lane-Riesenfeld/Boehm knot insertion) is exact --
+    # the max abs deviation below should be ~1e-14. A plain mean of the
+    # signed before/after difference would hide a real error: it lets
+    # positive and negative deviations across the grid cancel, so it can
+    # look reassuringly close to zero even when the max deviation is not
+    # small at all -- max abs is the meaningful check. (Toroidal, i.e.
+    # cross-section-count, refinement isn't implemented -- see
+    # SurfaceBSpline.refine_poloidal's docstring.)
+    cs_list_before = list(spline_surf.cs_list)
+    spline_surf.refine_poloidal()
+    data_fin = np.zeros((64, 64, 3))
+    spline_surf.gamma_impl(data_fin, v / (2 * np.pi), u / (2 * np.pi))
+    print(
+        "max |gamma diff| after refine_poloidal() (expect ~machine precision):",
+        np.max(np.abs(data_init - data_fin)),
+    )
+    spline_surf.plot_cross_sections(
+        [cs_list_before, spline_surf.cs_list],
+        labels=["before refine_poloidal", "after refine_poloidal"],
+    )
+    plt.show()
+
+    spline_surf.plot()
     plt.show()
 
     vmec = Vmec.vmec_from_surf(
