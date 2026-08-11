@@ -170,7 +170,9 @@ class CrossSectionFixedZeta(Optimizable):
                     # pi at all. Give it a bound that actually contains its
                     # own (fixed) value, using the same neighbor-midpoint
                     # convention as the rest of this loop.
-                    lower_for_last = new_bounds[-2] if len(new_bounds) >= 2 else 0.0
+                    lower_for_last = (
+                        new_bounds[-2] if len(new_bounds) >= 2 else 0.0
+                    )
                     dofs.update_bounds(
                         f"theta_{n_pts - 1}", (lower_for_last, max_angle)
                     )
@@ -396,7 +398,10 @@ class CrossSectionFixedZeta(Optimizable):
         unlike z_sym, there is no pinned reference point to protect here.
         """
         xy = np.stack(
-            [self.r_ctrl * np.cos(self.theta_ctrl), self.r_ctrl * np.sin(self.theta_ctrl)],
+            [
+                self.r_ctrl * np.cos(self.theta_ctrl),
+                self.r_ctrl * np.sin(self.theta_ctrl),
+            ],
             axis=1,
         )
         new_xy, new_w = lane_riesenfeld_double(xy, self.w_ctrl, p)
@@ -453,7 +458,9 @@ class CrossSectionFixedZeta(Optimizable):
         new_xy, new_full_w = lane_riesenfeld_double(xy, full_w, p)
 
         new_full_r = np.hypot(new_xy[:, 0], new_xy[:, 1])
-        new_full_theta = np.mod(np.arctan2(new_xy[:, 1], new_xy[:, 0]), 2 * np.pi)
+        new_full_theta = np.mod(
+            np.arctan2(new_xy[:, 1], new_xy[:, 0]), 2 * np.pi
+        )
         # The theta=0 axis point can land bit-exactly at 2*pi rather than
         # 0 (an infinitesimally-negative atan2 result rounds away when
         # added to 2*pi) -- snap it back so the sort-by-theta extraction
@@ -1320,7 +1327,10 @@ class SurfaceBSpline(sopp.Surface, Surface):
             [full_r * np.cos(full_theta), full_r * np.sin(full_theta)], axis=1
         )
         curve_xy = eval_periodic_curve(
-            ctrl_xy, full_w, self.p_u, self.knot_parametrization,
+            ctrl_xy,
+            full_w,
+            self.p_u,
+            self.knot_parametrization,
             n_samples=n_samples,
         )
         return curve_xy, ctrl_xy
@@ -1368,7 +1378,9 @@ class SurfaceBSpline(sopp.Surface, Surface):
             ]
 
         fig, axs = plt.subplots(
-            1, len(zeta_indices), squeeze=False,
+            1,
+            len(zeta_indices),
+            squeeze=False,
             figsize=(4 * len(zeta_indices), 4),
         )
         axs = axs[0]
@@ -1377,12 +1389,16 @@ class SurfaceBSpline(sopp.Surface, Surface):
                 cs_lists, labels, curve_kwargs_list, ctrl_kwargs_list
             ):
                 cs = cs_list[zeta_index]
-                curve_xy, ctrl_xy = self.cross_section_xy(cs, n_samples=n_samples)
+                curve_xy, ctrl_xy = self.cross_section_xy(
+                    cs, n_samples=n_samples
+                )
                 curve_closed = np.vstack([curve_xy, curve_xy[:1]])
                 ctrl_closed = np.vstack([ctrl_xy, ctrl_xy[:1]])
                 ax.plot(
-                    curve_closed[:, 0], curve_closed[:, 1],
-                    label=label, **curve_kwargs,
+                    curve_closed[:, 0],
+                    curve_closed[:, 1],
+                    label=label,
+                    **curve_kwargs,
                 )
                 ax.plot(ctrl_closed[:, 0], ctrl_closed[:, 1], **ctrl_kwargs)
             ax.set_aspect("equal")
@@ -2003,8 +2019,8 @@ class SurfaceBSpline(sopp.Surface, Surface):
         Gamma_u = np.stack([X_u, Y_u, Z_u], axis=1)
 
         gammadash1 = Gamma_v * (2 * np.pi / zeta_v)[:, None]
-        gammadash2 = 2 * np.pi * (
-            Gamma_u - (zeta_u / zeta_v)[:, None] * Gamma_v
+        gammadash2 = (
+            2 * np.pi * (Gamma_u - (zeta_u / zeta_v)[:, None] * Gamma_v)
         )
 
         out = (out, gammadash1, gammadash2)
@@ -2053,13 +2069,19 @@ class SurfaceBSpline(sopp.Surface, Surface):
         v_phi = 2 * np.pi / zeta_v
         v_theta = -2 * np.pi * zeta_u / zeta_v
         v_phiphi = -4 * np.pi**2 * zeta_vv / zeta_v**3
-        v_thetatheta = -4 * np.pi**2 * (
-            zeta_uu * zeta_v**2 - 2 * zeta_uv * zeta_u * zeta_v
-            + zeta_vv * zeta_u**2
-        ) / zeta_v**3
-        v_phitheta = -4 * np.pi**2 * (
-            zeta_v * zeta_uv - zeta_u * zeta_vv
-        ) / zeta_v**3
+        v_thetatheta = (
+            -4
+            * np.pi**2
+            * (
+                zeta_uu * zeta_v**2
+                - 2 * zeta_uv * zeta_u * zeta_v
+                + zeta_vv * zeta_u**2
+            )
+            / zeta_v**3
+        )
+        v_phitheta = (
+            -4 * np.pi**2 * (zeta_v * zeta_uv - zeta_u * zeta_vv) / zeta_v**3
+        )
 
         Gamma_uu = np.stack([X_uu, Y_uu, Z_uu], axis=1)
         Gamma_uv = np.stack([X_uv, Y_uv, Z_uv], axis=1)
@@ -2075,10 +2097,8 @@ class SurfaceBSpline(sopp.Surface, Surface):
             + Gamma_v * v_thetatheta[:, None]
         )
         gammadash1dash2 = (
-            (2 * np.pi * Gamma_uv + Gamma_vv * v_theta[:, None])
-            * v_phi[:, None]
-            + Gamma_v * v_phitheta[:, None]
-        )
+            2 * np.pi * Gamma_uv + Gamma_vv * v_theta[:, None]
+        ) * v_phi[:, None] + Gamma_v * v_phitheta[:, None]
 
         out = out + (gammadash1dash1, gammadash1dash2, gammadash2dash2)
         return out
@@ -2931,6 +2951,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
 
         Returns the Axes used.
         """
+
         def boundary_poincare_plot(
             rbc,
             zbs,

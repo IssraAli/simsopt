@@ -104,6 +104,7 @@ if __name__ == "__main__":
         **spline_kwargs,
     )
     spline_surf.axis.fix("r_axis_0")
+    # spline_surf.axis.fix("r_axis_0")
     # new_x = np.array(
     #     [
     #         0.3016216,
