@@ -18,10 +18,10 @@ proc0_print("==================================================")
 
 spline_kwargs = {
     "axis_points": 3,
-    "points_per_cs": 4,
+    "points_per_cs": 6,
     "n_cs": 5,
     "nfp": 2,
-    "M": 5,
+    "M": 8,
     "N": 4,
     "p_u": 3,
     "p_v": 3,
@@ -31,7 +31,7 @@ spline_kwargs = {
     "axis_angles_fixed": False,
     "cs_basis": "polar",
     "nurbs": False,
-    "use_bishop_frame": True,
+    "use_bishop_frame": False,
 }
 
 spline_surf = SurfaceBSpline(**spline_kwargs, default_r=0.2)
@@ -226,135 +226,89 @@ proc0_print("=================================================")
 # End of 2_Intermediate/stage_one_splines.py
 # =================================================
 
+###
 
 # Running 2_Intermediate/stage_one_splines.py
 # ==================================================
 # spline_surf.dof_names: ['CrossSectionFixedZeta1:r_0', 'CrossSectionFixedZeta1:r_1', 'CrossSectionFixedZeta1:r_2', 'CrossSectionFixedZeta1:theta_1', 'CrossSectionFixedZeta2:r_0', 'CrossSectionFixedZeta2:r_1', 'CrossSectionFixedZeta2:r_2', 'CrossSectionFixedZeta2:r_3', 'CrossSectionFixedZeta2:theta_1', 'CrossSectionFixedZeta2:theta_2', 'CrossSectionFixedZeta2:theta_3', 'CrossSectionFixedZeta3:r_0', 'CrossSectionFixedZeta3:r_1', 'CrossSectionFixedZeta3:r_2', 'CrossSectionFixedZeta3:r_3', 'CrossSectionFixedZeta3:theta_1', 'CrossSectionFixedZeta3:theta_2', 'CrossSectionFixedZeta3:theta_3', 'CrossSectionFixedZeta4:r_0', 'CrossSectionFixedZeta4:r_1', 'CrossSectionFixedZeta4:r_2', 'CrossSectionFixedZeta4:r_3', 'CrossSectionFixedZeta4:theta_1', 'CrossSectionFixedZeta4:theta_2', 'CrossSectionFixedZeta4:theta_3', 'CrossSectionFixedZeta5:r_0', 'CrossSectionFixedZeta5:r_1', 'CrossSectionFixedZeta5:r_2', 'CrossSectionFixedZeta5:theta_1', 'PseudoAxis1:r_axis_1', 'PseudoAxis1:r_axis_2', 'PseudoAxis1:z_axis_1', 'PseudoAxis1:zeta_axis_1', 'SurfaceBSpline1:cs_zeta1', 'SurfaceBSpline1:cs_zeta2', 'SurfaceBSpline1:cs_zeta3']
-# Initial Quasisymmetry: 0.00017188462825497205
-# Initial aspect ratio: 6.776912874936196
-# Initial rotational transform: 1.4133509666956468e-19
+# Initial Quasisymmetry: 0.00017188472681977897
+# Initial aspect ratio: 6.776908509959019
+# Initial rotational transform: -5.420544061956038e-19
 # Beginning optimization
 # ndofs: 36
 # dofs names: ['CrossSectionFixedZeta1:r_0', 'CrossSectionFixedZeta1:r_1', 'CrossSectionFixedZeta1:r_2', 'CrossSectionFixedZeta1:theta_1', 'CrossSectionFixedZeta2:r_0', 'CrossSectionFixedZeta2:r_1', 'CrossSectionFixedZeta2:r_2', 'CrossSectionFixedZeta2:r_3', 'CrossSectionFixedZeta2:theta_1', 'CrossSectionFixedZeta2:theta_2', 'CrossSectionFixedZeta2:theta_3', 'CrossSectionFixedZeta3:r_0', 'CrossSectionFixedZeta3:r_1', 'CrossSectionFixedZeta3:r_2', 'CrossSectionFixedZeta3:r_3', 'CrossSectionFixedZeta3:theta_1', 'CrossSectionFixedZeta3:theta_2', 'CrossSectionFixedZeta3:theta_3', 'CrossSectionFixedZeta4:r_0', 'CrossSectionFixedZeta4:r_1', 'CrossSectionFixedZeta4:r_2', 'CrossSectionFixedZeta4:r_3', 'CrossSectionFixedZeta4:theta_1', 'CrossSectionFixedZeta4:theta_2', 'CrossSectionFixedZeta4:theta_3', 'CrossSectionFixedZeta5:r_0', 'CrossSectionFixedZeta5:r_1', 'CrossSectionFixedZeta5:r_2', 'CrossSectionFixedZeta5:theta_1', 'PseudoAxis1:r_axis_1', 'PseudoAxis1:r_axis_2', 'PseudoAxis1:z_axis_1', 'PseudoAxis1:zeta_axis_1', 'SurfaceBSpline1:cs_zeta1', 'SurfaceBSpline1:cs_zeta2', 'SurfaceBSpline1:cs_zeta3']
 #    Iteration     Total nfev        Cost      Cost reduction    Step norm     Optimality
-#        0              1         3.9001e+00                                    1.84e+01
-#        1              2         9.1821e-01      2.98e+00       1.18e-01       1.78e+00
-#        2              3         8.8214e-01      3.61e-02       5.44e-02       6.65e-02
-#        3              6         8.7791e-01      4.23e-03       8.94e-02       1.18e-01
-#        4              7         8.1261e-01      6.53e-02       3.26e-01       3.42e-01
-#        5              8         5.7322e-01      2.39e-01       3.67e-01       7.24e-01
-#        6              9         1.7782e-01      3.95e-01       5.48e-01       1.23e+00
-#        7             11         8.2505e-02      9.53e-02       1.19e-01       3.84e-01
-#        8             12         3.4581e-02      4.79e-02       1.93e-01       5.89e-01
-#        9             14         2.1001e-02      1.36e-02       1.27e-01       4.46e-01
-#       10             16         1.5965e-02      5.04e-03       7.69e-02       1.01e-01
-#       11             17         9.7372e-03      6.23e-03       1.63e-01       3.74e-01
-#       12             19         6.4129e-03      3.32e-03       7.96e-02       9.76e-02
-#       13             20         3.6861e-03      2.73e-03       1.78e-01       4.11e-01
-#       14             21         3.5748e-03      1.11e-04       3.01e-01       8.84e-01
-#       15             22         1.1437e-03      2.43e-03       5.72e-02       3.05e-02
-#       16             23         9.2619e-04      2.18e-04       1.23e-01       1.20e-01
-#       17             24         7.5617e-04      1.70e-04       9.89e-02       7.18e-02
-#       18             25         7.4366e-04      1.25e-05       2.07e-04       1.38e-02
-#       19             26         7.3914e-04      4.53e-06       5.08e-03       1.50e-02
-#       20             28         6.9205e-04      4.71e-05       4.89e-02       1.66e-02
-#       21             29         6.9104e-04      1.00e-06       1.42e-03       1.32e-02
-#       22             30         6.3307e-04      5.80e-05       8.79e-02       8.02e-02
-#       23             31         6.1892e-04      1.42e-05       2.68e-04       3.14e-02
-#       24             33         5.8577e-04      3.31e-05       4.29e-02       2.61e-02
-#       25             34         5.8439e-04      1.38e-06       7.36e-05       4.80e-03
-#       26             35         5.4518e-04      3.92e-05       7.33e-02       7.03e-02
-#       27             36         5.3502e-04      1.02e-05       2.02e-04       2.09e-01
-#       28             37         5.2624e-04      8.77e-06       1.20e-02       1.17e-02
-#       29             39         4.9923e-04      2.70e-05       3.48e-02       1.52e-02
-#       30             40         4.9700e-04      2.23e-06       5.37e-03       7.27e-03
-#       31             41         4.4787e-04      4.91e-05       9.14e-02       6.99e-02
-#       32             42         4.3531e-04      1.26e-05       2.48e-04       8.43e-03
-#       33             43         4.3285e-04      2.46e-06       3.86e-03       1.03e-02
-#       34             45         4.0627e-04      2.66e-05       3.56e-02       1.65e-02
-#       35             46         4.0409e-04      2.17e-06       4.54e-03       1.12e-02
-#       36             47         3.7842e-04      2.57e-05       4.85e-02       2.46e-02
-#       37             48         3.7678e-04      1.63e-06       9.66e-05       4.97e-03
-#       38             49         3.6233e-04      1.45e-05       6.90e-02       7.38e-02
-#       39             50         3.4941e-04      1.29e-05       2.51e-04       1.52e-02
-#       40             51         3.2905e-04      2.04e-05       6.23e-02       6.62e-02
-#       41             52         3.1931e-04      9.75e-06       1.99e-04       7.84e-03
-#       42             54         3.0495e-04      1.44e-05       3.14e-02       1.98e-02
-#       43             55         3.0409e-04      8.59e-07       5.84e-05       2.68e-03
-#       44             56         2.9103e-04      1.31e-05       5.88e-02       7.28e-02
-#       45             57         2.7792e-04      1.31e-05       2.35e-04       8.72e-03
-#       46             58         2.6899e-04      8.93e-06       5.87e-02       7.95e-02
-#       47             59         2.5557e-04      1.34e-05       2.37e-04       1.23e-02
-#       48             61         2.4965e-04      5.93e-06       1.67e-02       6.86e-03
-#       49             62         2.3733e-04      1.23e-05       3.49e-02       2.15e-02
-#       50             63         2.3528e-04      2.05e-06       9.87e-05       1.72e-03
-#       51             64         2.3508e-04      2.02e-07       5.01e-04       2.48e-03
-#       52             65         2.1899e-04      1.61e-05       4.22e-02       2.55e-02
-#       53             66         2.1717e-04      1.82e-06       8.33e-05       3.77e-03
-#       54             67         2.1699e-04      1.75e-07       7.67e-05       3.48e-03
-#       55             69         2.0731e-04      9.68e-06       2.22e-02       8.73e-03
-#       56             70         2.0716e-04      1.51e-07       3.85e-04       9.16e-03
-#       57             71         1.9555e-04      1.16e-05       5.86e-02       4.20e-02
-#       58             72         1.8825e-04      7.30e-06       1.89e-04       2.77e-03
-#       59             73         1.8792e-04      3.38e-07       1.25e-04       6.07e-03
-#       60             74         1.7832e-04      9.59e-06       4.33e-02       3.78e-02
-#       61             75         1.7636e-04      1.96e-06       9.55e-05       8.95e-03
-#       62             77         1.6967e-04      6.69e-06       3.10e-02       2.16e-02
-#       63             78         1.6929e-04      3.82e-07       4.59e-05       4.68e-03
-#       64             79         1.6668e-04      2.61e-06       5.91e-02       8.59e-02
-#       65             80         1.5997e-04      6.72e-06       1.97e-04       1.88e-02
-#       66             81         1.5296e-04      7.01e-06       4.29e-02       5.59e-02
-#       67             82         1.4993e-04      3.02e-06       1.36e-04       1.24e-02
-#       68             84         1.4235e-04      7.58e-06       2.37e-02       1.53e-02
-#       69             85         1.4206e-04      2.92e-07       3.94e-05       3.64e-03
-#       70             86         1.3629e-04      5.77e-06       4.66e-02       7.22e-02
-#       71             87         1.2927e-04      7.02e-06       1.98e-04       1.74e-02
-#       72             88         1.2302e-04      6.25e-06       1.67e-02       1.84e-02
-#       73             89         1.2263e-04      3.90e-07       6.52e-05       4.70e-03
-#       74             90         1.1577e-04      6.87e-06       3.57e-02       4.21e-02
-#       75             91         1.1212e-04      3.65e-06       1.39e-04       1.07e-02
-#       76             92         1.1180e-04      3.19e-07       7.25e-04       8.33e-03
-#       77             93         1.1098e-04      8.20e-07       3.41e-02       4.65e-02
-#       78             94         1.0295e-04      8.03e-06       1.95e-04       1.39e-02
-#       79             95         1.0248e-04      4.68e-07       1.36e-04       7.67e-03
-#       80             96         1.0227e-04      2.04e-07       4.81e-04       8.87e-03
-#       81             97         9.9574e-05      2.70e-06       9.67e-03       3.07e-03
-#       82             98         9.9531e-05      4.30e-08       1.97e-04       3.05e-03
-#       83             99         9.9493e-05      3.76e-08       1.41e-05       7.18e-04
-#       84             100        9.9483e-05      9.92e-09       7.21e-05       8.79e-04
-#       85             101        9.6743e-05      2.74e-06       4.46e-02       1.22e-02
-#       86             102        9.6273e-05      4.70e-07       4.61e-05       2.50e-03
-#       87             103        9.6240e-05      3.28e-08       2.56e-05       2.05e-03
-#       88             104        9.6223e-05      1.66e-08       1.72e-05       1.12e-03
-#       89             105        9.6210e-05      1.31e-08       6.66e-05       1.02e-03
-#       90             106        9.5962e-05      2.48e-07       3.10e-02       2.11e-02
-#       91             107        9.4789e-05      1.17e-06       7.01e-05       3.77e-03
-#       92             108        9.4699e-05      8.98e-08       8.48e-05       4.01e-03
-#       93             109        9.4674e-05      2.46e-08       1.36e-05       1.70e-03
-#       94             110        9.4653e-05      2.15e-08       9.05e-05       6.23e-04
-#       95             111        9.3834e-05      8.19e-07       9.49e-03       3.50e-04
-#       96             112        9.3828e-05      6.01e-09       1.13e-04       3.87e-04
-#       97             113        9.0969e-05      2.86e-06       1.60e-02       1.42e-03
-#       98             114        9.0958e-05      1.11e-08       8.16e-05       1.30e-03
-#       99             116        9.0442e-05      5.16e-07       1.06e-02       2.72e-03
-#       100            117        9.0424e-05      1.77e-08       8.20e-06       3.12e-04
-#       101            118        9.0420e-05      4.14e-09       3.46e-05       2.01e-04
-#       102            120        9.0278e-05      1.42e-07       2.39e-03       7.46e-05
-#       103            123        9.0261e-05      1.65e-08       4.98e-04       8.53e-05
-#       104            127        9.0261e-05      4.90e-10       1.49e-05       8.57e-05
-#       105            130        9.0261e-05      6.07e-11       1.83e-06       1.82e+00
-#       106            132        9.0261e-05      0.00e+00       0.00e+00       1.82e+00
+#        0              1         3.9008e-01                                    1.84e+00
+#        1              2         9.1784e-02      2.98e-01       1.13e-01       1.77e-01
+#        2              3         8.8200e-02      3.58e-03       2.19e-02       3.57e-03
+#        3              5         8.7704e-02      4.96e-04       1.39e-01       2.31e-01
+#        4              7         8.2445e-02      5.26e-03       1.72e-01       1.29e-01
+#        5              8         7.2522e-02      9.92e-03       2.86e-01       2.89e-01
+#        6              9         5.1838e-02      2.07e-02       4.83e-01       7.57e-01
+#        7             10         1.8816e-02      3.30e-02       3.69e-01       1.77e-01
+#        8             12         1.0805e-02      8.01e-03       9.58e-02       9.55e-02
+#        9             13         5.2590e-03      5.55e-03       1.58e-01       4.00e-01
+#       10             14         2.2429e-03      3.02e-03       1.73e-01       5.67e-01
+#       11             15         9.5174e-04      1.29e-03       1.32e-01       1.58e-01
+#       12             16         5.8761e-04      3.64e-04       1.01e-01       6.22e-02
+#       13             17         4.6940e-04      1.18e-04       6.70e-02       3.69e-02
+#       14             18         4.5895e-04      1.04e-05       3.02e-04       4.55e-03
+#       15             19         4.4861e-04      1.03e-05       1.17e-02       4.30e-03
+#       16             21         3.8238e-04      6.62e-05       7.30e-02       2.08e-02
+#       17             22         3.4446e-04      3.79e-05       1.11e-01       6.37e-02
+#       18             23         2.7683e-04      6.76e-05       6.19e-02       2.30e-02
+#       19             24         2.6766e-04      9.16e-06       9.02e-02       6.81e-02
+#       20             25         2.1190e-04      5.58e-05       3.66e-02       9.15e-03
+#       21             26         1.9288e-04      1.90e-05       6.05e-02       2.19e-02
+#       22             27         1.8712e-04      5.76e-06       3.04e-04       5.67e-03
+#       23             28         1.8661e-04      5.02e-07       1.04e-04       3.64e-03
+#       24             30         1.7049e-04      1.61e-05       3.69e-02       6.39e-03
+#       25             31         1.5158e-04      1.89e-05       6.55e-02       1.89e-02
+#       26             32         1.5089e-04      6.83e-07       8.67e-05       4.35e-03
+#       27             33         1.5060e-04      2.91e-07       1.15e-03       5.40e-03
+#       28             35         1.4093e-04      9.67e-06       4.05e-02       1.68e-02
+#       29             36         1.2971e-04      1.12e-05       6.28e-02       2.24e-02
+#       30             38         1.2122e-04      8.48e-06       1.59e-02       1.64e-03
+#       31             39         1.1622e-04      5.01e-06       2.24e-02       5.78e-03
+#       32             41         1.1499e-04      1.22e-06       1.60e-02       4.16e-03
+#       33             42         1.1162e-04      3.37e-06       1.35e-02       3.32e-03
+#       34             43         1.1158e-04      3.36e-08       2.06e-04       3.27e-03
+#       35             44         1.0799e-04      3.59e-06       2.83e-02       1.59e-02
+#       36             45         1.0258e-04      5.40e-06       5.19e-02       5.35e-02
+#       37             46         9.8871e-05      3.71e-06       1.25e-04       1.91e-03
+#       38             48         9.7332e-05      1.54e-06       1.15e-02       3.78e-04
+#       39             49         9.5908e-05      1.42e-06       9.54e-03       1.98e-02
+#       40             53         9.5691e-05      2.17e-07       2.10e-04       3.07e-03
+#       41             54         9.5485e-05      2.06e-07       7.72e-05       8.00e-04
+#       42             55         9.5390e-05      9.50e-08       1.65e-04       1.21e-04
+#       43             56         9.5361e-05      2.93e-08       2.39e-04       1.96e-02
+#       44             58         9.5304e-05      5.70e-08       4.12e-05       1.32e-03
+#       45             59         9.5298e-05      6.45e-09       8.36e-06       9.33e-04
+#       46             60         9.5296e-05      2.02e-09       5.76e-06       9.31e-04
+#       47             61         9.5296e-05      2.57e-10       1.12e-06       9.28e-04
+#       48             62         9.5295e-05      5.47e-11       2.66e-07       9.27e-04
+#       49             63         9.5295e-05      1.31e-11       6.56e-08       9.27e-04
 # `xtol` termination condition is satisfied.
-# Function evaluations 132, initial cost 3.9001e+00, final cost 9.0261e-05, first-order optimality 1.82e+00.
+# Function evaluations 63, initial cost 3.9008e-01, final cost 9.5295e-05, first-order optimality 9.27e-04.
 # /Users/issraali/envs/simsopt_e/lib/python3.10/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
 #   shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
 # /Users/issraali/envs/simsopt_e/lib/python3.10/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
 #   shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
 
-# Final vmec iteration = 558
-# Quasisymmetry: 0.00018048450748623903
-# aspect ratio: 6.000005235178616
-# rotational transform: 0.4199392268024837
+# Final vmec iteration = 265
+# Quasisymmetry: 0.00019010865750514314
+# aspect ratio: 6.0000534668329735
+# rotational transform: 0.4193076400157887
+# spline_surf.x: array([3.49151814e-05, 4.08858863e-01, 1.56187918e-01, 1.35325832e+00,
+#        3.03304348e-02, 3.29309487e-01, 1.48040786e-01, 4.07487352e-01,
+#        1.12945811e+00, 3.45660993e+00, 4.70892314e+00, 1.15714960e-01,
+#        2.23743388e-01, 1.71422619e-01, 3.38760347e-01, 7.89176573e-01,
+#        3.72275569e+00, 4.44881220e+00, 1.68678313e-01, 1.41421904e-01,
+#        2.44246896e-01, 2.07282078e-01, 7.96088440e-01, 3.44958011e+00,
+#        4.29717483e+00, 1.91544620e-01, 1.15674640e-01, 2.65035209e-01,
+#        1.61074550e+00, 7.37716609e-01, 5.62288940e-01, 2.69764752e-01,
+#        7.31087514e-01, 3.67273919e-01, 7.79087610e-01, 1.20291494e+00])
 
 # End of 2_Intermediate/stage_one_splines.py
 # =================================================
+# # =================================================
