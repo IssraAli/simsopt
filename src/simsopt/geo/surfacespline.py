@@ -1873,6 +1873,266 @@ class SurfaceBSpline(sopp.Surface, Surface):
         for xyz in range(3):
             data[:, :, xyz] = np.reshape(data1d[:, xyz], (ntheta, nphi)).T
 
+    def _gamma_and_derivs(self, quadpoints_phi, quadpoints_theta, max_deriv=2):
+        r"""
+        Shared core for gammadash1/gammadash2/gammadash1dash1/
+        gammadash1dash2/gammadash2dash2, evaluated at explicit paired
+        (phi, theta) fractions (same paired-points convention as
+        gamma_lin). Full derivation in "SurfaceBSpline gammadash1 and
+        gammadash2 derivation.md" in the Obsidian vault -- this is close
+        to a direct transcription of that note's Parts 1-3.
+
+        u = 2*pi*theta is set directly (no solve, matching gamma_lin);
+        v = v(theta, phi) is pinned by the same toroidal-angle-matching
+        Newton solve gamma_lin already does. Implicit differentiation of
+        that solve gives dv/dphi, dv/dtheta and their second
+        derivatives, which combine via the chain rule with the ordinary
+        (non-implicit) u,v-partials of the rational surface Gamma(u,v)
+        to give gammadash1/gammadash2 and, at max_deriv=2, also
+        gammadash1dash1/gammadash1dash2/gammadash2dash2.
+
+        Returns (X, Y, Z) stacked as an (N, 3) array. If max_deriv >= 1,
+        also returns (gammadash1, gammadash2), each (N, 3). If
+        max_deriv >= 2, also returns (gammadash1dash1, gammadash1dash2,
+        gammadash2dash2), each (N, 3).
+        """
+        trimmed_ctrl_pts_jim, trimmed_weights_ji, knots_u, knots_v = (
+            self._control_net_and_knots()
+        )
+        p_u = self.p_u
+        p_v = self.p_v
+
+        theta = np.asarray(quadpoints_theta) * 2 * np.pi
+        phi = np.asarray(quadpoints_phi) * 2 * np.pi
+
+        wp = trimmed_weights_ji[:, :, None] * trimmed_ctrl_pts_jim
+        ww = trimmed_weights_ji
+
+        if max_deriv >= 2:
+            basis_u, dbasis_u, d2basis_u = b_p_deriv2(knots_u, p_u, theta)
+        elif max_deriv == 1:
+            basis_u, dbasis_u = b_p_deriv(knots_u, p_u, theta)
+        else:
+            basis_u = b_p(knots_u, p_u, theta)
+
+        # u-collapse: same construction as gamma_lin's Q_pos/Q_w, built
+        # from the u-basis's derivative(s) too when needed -- collapses
+        # the poloidal index at the fixed query-point theta into a
+        # v-indexed (rational) curve.
+        Q = np.einsum("ki,jim->kjm", basis_u, wp)
+        Q_w = np.einsum("ki,ji->kj", basis_u, ww)
+        if max_deriv >= 1:
+            Q_du = np.einsum("ki,jim->kjm", dbasis_u, wp)
+            Q_w_du = np.einsum("ki,ji->kj", dbasis_u, ww)
+        if max_deriv >= 2:
+            Q_duu = np.einsum("ki,jim->kjm", d2basis_u, wp)
+            Q_w_duu = np.einsum("ki,ji->kj", d2basis_u, ww)
+
+        def _xy_and_dv(v):
+            # Exactly gamma_lin's own _xyz_and_derivs (X, Y only -- all
+            # the Newton solve needs).
+            v_wrapped = v % (2 * np.pi)
+            basis_v, dbasis_v = b_p_deriv(knots_v, p_v, v_wrapped)
+            Nx = np.einsum("mj,mj->m", basis_v, Q[:, :, 0])
+            Ny = np.einsum("mj,mj->m", basis_v, Q[:, :, 1])
+            D = np.einsum("mj,mj->m", basis_v, Q_w)
+            dNx = np.einsum("mj,mj->m", dbasis_v, Q[:, :, 0])
+            dNy = np.einsum("mj,mj->m", dbasis_v, Q[:, :, 1])
+            dD = np.einsum("mj,mj->m", dbasis_v, Q_w)
+            return Nx, Ny, D, dNx, dNy, dD
+
+        def func(v):
+            Nx, Ny, D, *_ = _xy_and_dv(v)
+            X, Y = Nx / D, Ny / D
+            zeta_cur = np.arctan2(Y, X) % (2 * np.pi)
+            return ((zeta_cur - phi + np.pi) % (2 * np.pi)) - np.pi
+
+        def fprime(v):
+            Nx, Ny, D, dNx, dNy, dD = _xy_and_dv(v)
+            X, Y = Nx / D, Ny / D
+            dX = (dNx * D - Nx * dD) / D**2
+            dY = (dNy * D - Ny * dD) / D**2
+            return (X * dY - Y * dX) / (X**2 + Y**2)
+
+        v_sol = newton(
+            func, x0=phi.copy(), fprime=fprime, tol=1e-12, maxiter=50
+        )
+        v_wrapped = v_sol % (2 * np.pi)
+
+        if max_deriv >= 2:
+            basis_v, dbasis_v, d2basis_v = b_p_deriv2(knots_v, p_v, v_wrapped)
+        elif max_deriv == 1:
+            basis_v, dbasis_v = b_p_deriv(knots_v, p_v, v_wrapped)
+        else:
+            basis_v = b_p(knots_v, p_v, v_wrapped)
+
+        Nx = np.einsum("mj,mj->m", basis_v, Q[:, :, 0])
+        Ny = np.einsum("mj,mj->m", basis_v, Q[:, :, 1])
+        Nz = np.einsum("mj,mj->m", basis_v, Q[:, :, 2])
+        D = np.einsum("mj,mj->m", basis_v, Q_w)
+
+        X, Y, Z = Nx / D, Ny / D, Nz / D
+        out = np.stack([X, Y, Z], axis=1)
+        if max_deriv == 0:
+            return out
+
+        # First u,v-partials of the (rational) surface itself -- plain
+        # quotient rule, at fixed u=theta / the already-solved v.
+        Nx_v = np.einsum("mj,mj->m", dbasis_v, Q[:, :, 0])
+        Ny_v = np.einsum("mj,mj->m", dbasis_v, Q[:, :, 1])
+        Nz_v = np.einsum("mj,mj->m", dbasis_v, Q[:, :, 2])
+        D_v = np.einsum("mj,mj->m", dbasis_v, Q_w)
+        X_v = (Nx_v - X * D_v) / D
+        Y_v = (Ny_v - Y * D_v) / D
+        Z_v = (Nz_v - Z * D_v) / D
+
+        Nx_u = np.einsum("mj,mj->m", basis_v, Q_du[:, :, 0])
+        Ny_u = np.einsum("mj,mj->m", basis_v, Q_du[:, :, 1])
+        Nz_u = np.einsum("mj,mj->m", basis_v, Q_du[:, :, 2])
+        D_u = np.einsum("mj,mj->m", basis_v, Q_w_du)
+        X_u = (Nx_u - X * D_u) / D
+        Y_u = (Ny_u - Y * D_u) / D
+        Z_u = (Nz_u - Z * D_u) / D
+
+        # zeta = atan2(Y, X) and its u,v-partials, from X, Y alone.
+        rho2 = X**2 + Y**2
+        zeta_v = (X * Y_v - Y * X_v) / rho2  # matches gamma_lin's fprime
+        zeta_u = (X * Y_u - Y * X_u) / rho2
+
+        Gamma_v = np.stack([X_v, Y_v, Z_v], axis=1)
+        Gamma_u = np.stack([X_u, Y_u, Z_u], axis=1)
+
+        gammadash1 = Gamma_v * (2 * np.pi / zeta_v)[:, None]
+        gammadash2 = 2 * np.pi * (
+            Gamma_u - (zeta_u / zeta_v)[:, None] * Gamma_v
+        )
+
+        out = (out, gammadash1, gammadash2)
+        if max_deriv == 1:
+            return out
+
+        # Second u,v-partials -- same recursive rational-derivative
+        # recursion (Piegl & Tiller) one order up, reusing X,Y,Z and the
+        # first partials just computed.
+        Nx_vv = np.einsum("mj,mj->m", d2basis_v, Q[:, :, 0])
+        Ny_vv = np.einsum("mj,mj->m", d2basis_v, Q[:, :, 1])
+        Nz_vv = np.einsum("mj,mj->m", d2basis_v, Q[:, :, 2])
+        D_vv = np.einsum("mj,mj->m", d2basis_v, Q_w)
+        X_vv = (Nx_vv - 2 * X_v * D_v - X * D_vv) / D
+        Y_vv = (Ny_vv - 2 * Y_v * D_v - Y * D_vv) / D
+        Z_vv = (Nz_vv - 2 * Z_v * D_v - Z * D_vv) / D
+
+        Nx_uu = np.einsum("mj,mj->m", basis_v, Q_duu[:, :, 0])
+        Ny_uu = np.einsum("mj,mj->m", basis_v, Q_duu[:, :, 1])
+        Nz_uu = np.einsum("mj,mj->m", basis_v, Q_duu[:, :, 2])
+        D_uu = np.einsum("mj,mj->m", basis_v, Q_w_duu)
+        X_uu = (Nx_uu - 2 * X_u * D_u - X * D_uu) / D
+        Y_uu = (Ny_uu - 2 * Y_u * D_u - Y * D_uu) / D
+        Z_uu = (Nz_uu - 2 * Z_u * D_u - Z * D_uu) / D
+
+        Nx_uv = np.einsum("mj,mj->m", dbasis_v, Q_du[:, :, 0])
+        Ny_uv = np.einsum("mj,mj->m", dbasis_v, Q_du[:, :, 1])
+        Nz_uv = np.einsum("mj,mj->m", dbasis_v, Q_du[:, :, 2])
+        D_uv = np.einsum("mj,mj->m", dbasis_v, Q_w_du)
+        X_uv = (Nx_uv - X_u * D_v - X_v * D_u - X * D_uv) / D
+        Y_uv = (Ny_uv - Y_u * D_v - Y_v * D_u - Y * D_uv) / D
+        Z_uv = (Nz_uv - Z_u * D_v - Z_v * D_u - Z * D_uv) / D
+
+        # zeta's second partials -- Im(d^2 log(X+iY)) closed form (see
+        # vault note Part 2), from X, Y and their partials alone.
+        rho2_u = 2 * (X * X_u + Y * Y_u)
+        rho2_v = 2 * (X * X_v + Y * Y_v)
+        zeta_uu = (X * Y_uu - Y * X_uu) / rho2 - (rho2_u * zeta_u) / rho2
+        zeta_vv = (X * Y_vv - Y * X_vv) / rho2 - (rho2_v * zeta_v) / rho2
+        zeta_uv = (X * Y_uv - Y * X_uv) / rho2 - (
+            rho2_u * zeta_v + rho2_v * zeta_u
+        ) / (2 * rho2)
+
+        # Second-order implicit derivatives of v(theta, phi) -- see
+        # vault note Part 1.
+        v_phi = 2 * np.pi / zeta_v
+        v_theta = -2 * np.pi * zeta_u / zeta_v
+        v_phiphi = -4 * np.pi**2 * zeta_vv / zeta_v**3
+        v_thetatheta = -4 * np.pi**2 * (
+            zeta_uu * zeta_v**2 - 2 * zeta_uv * zeta_u * zeta_v
+            + zeta_vv * zeta_u**2
+        ) / zeta_v**3
+        v_phitheta = -4 * np.pi**2 * (
+            zeta_v * zeta_uv - zeta_u * zeta_vv
+        ) / zeta_v**3
+
+        Gamma_uu = np.stack([X_uu, Y_uu, Z_uu], axis=1)
+        Gamma_uv = np.stack([X_uv, Y_uv, Z_uv], axis=1)
+        Gamma_vv = np.stack([X_vv, Y_vv, Z_vv], axis=1)
+
+        gammadash1dash1 = (
+            Gamma_vv * (v_phi**2)[:, None] + Gamma_v * v_phiphi[:, None]
+        )
+        gammadash2dash2 = (
+            4 * np.pi**2 * Gamma_uu
+            + (4 * np.pi * v_theta)[:, None] * Gamma_uv
+            + Gamma_vv * (v_theta**2)[:, None]
+            + Gamma_v * v_thetatheta[:, None]
+        )
+        gammadash1dash2 = (
+            (2 * np.pi * Gamma_uv + Gamma_vv * v_theta[:, None])
+            * v_phi[:, None]
+            + Gamma_v * v_phitheta[:, None]
+        )
+
+        out = out + (gammadash1dash1, gammadash1dash2, gammadash2dash2)
+        return out
+
+    def _dash_on_grid(self, max_deriv):
+        """
+        Evaluate _gamma_and_derivs on the tensor product grid
+        self.quadpoints_phi x self.quadpoints_theta, and return a
+        reshape helper -- same meshgrid/flatten/reshape pattern
+        gamma_impl already uses around gamma_lin.
+        """
+        nphi = len(self.quadpoints_phi)
+        ntheta = len(self.quadpoints_theta)
+        phi2d, theta2d = np.meshgrid(self.quadpoints_phi, self.quadpoints_theta)
+        result = self._gamma_and_derivs(
+            np.reshape(phi2d, (nphi * ntheta,)),
+            np.reshape(theta2d, (nphi * ntheta,)),
+            max_deriv=max_deriv,
+        )
+
+        def reshape3(arr1d):
+            out = np.zeros((nphi, ntheta, 3))
+            for xyz in range(3):
+                out[:, :, xyz] = np.reshape(arr1d[:, xyz], (ntheta, nphi)).T
+            return out
+
+        return result, reshape3
+
+    def gammadash1_impl(self, data):
+        (_, g1, _g2), reshape3 = self._dash_on_grid(max_deriv=1)
+        data[:, :, :] = reshape3(g1)
+
+    def gammadash2_impl(self, data):
+        (_, _g1, g2), reshape3 = self._dash_on_grid(max_deriv=1)
+        data[:, :, :] = reshape3(g2)
+
+    def gammadash1dash1_impl(self, data):
+        (_, _g1, _g2, g11, _g12, _g22), reshape3 = self._dash_on_grid(
+            max_deriv=2
+        )
+        data[:, :, :] = reshape3(g11)
+
+    def gammadash1dash2_impl(self, data):
+        (_, _g1, _g2, _g11, g12, _g22), reshape3 = self._dash_on_grid(
+            max_deriv=2
+        )
+        data[:, :, :] = reshape3(g12)
+
+    def gammadash2dash2_impl(self, data):
+        (_, _g1, _g2, _g11, _g12, g22), reshape3 = self._dash_on_grid(
+            max_deriv=2
+        )
+        data[:, :, :] = reshape3(g22)
+
     def centroid_axis_callable(
         self,
         a,
