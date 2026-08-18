@@ -290,6 +290,20 @@ class CrossSectionFixedZeta(Optimizable):
         closest to old point old_i) for the r_i/theta_i/w_i dof triples.
         Points with no close old counterpart are left free, matching how
         other interior control points are normally free.
+
+        That "leave free" default is wrong for w_i when nurbs=False: every
+        old w_i is fixed in that case (weights aren't real dofs at all,
+        just a constant 0.5 needed for the rational-blend machinery), but
+        index_map only reaches old_n_pts of new_cs's 2*old_n_pts points --
+        the other half, freshly inserted by doubling, would otherwise be
+        left free by new_cs.unfix_all() (called by the caller just before
+        this). A free weight is not inert: eval_periodic_curve/
+        lane_riesenfeld_double always do rational (weighted) blending
+        regardless of self.nurbs -- nurbs only gates whether weights are
+        exposed as dofs -- so a stray free w_i lets the optimizer silently
+        turn a supposedly non-rational spline into a rational one with a
+        drifting weight. Fix every w_i unconditionally in that case,
+        rather than only the ones index_map happens to touch.
         """
         old_n_pts = self.n_pts if old_n_pts is None else old_n_pts
         for old_i in range(old_n_pts):
@@ -303,6 +317,10 @@ class CrossSectionFixedZeta(Optimizable):
                 lb = self.dofs.full_lower_bounds[old_idx]
                 ub = self.dofs.full_upper_bounds[old_idx]
                 new_cs.dofs.update_bounds(new_name, (lb, ub))
+
+        if not self.nurbs:
+            for i in range(new_cs.n_pts):
+                new_cs.fix(f"w_{i}")
 
     @staticmethod
     def _nearest_angle_index_map(old_theta, new_theta, circular):
