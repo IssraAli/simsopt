@@ -57,7 +57,7 @@ from simsopt.objectives.shape_errors import (
 from simsopt.solve import least_squares_mpi_solve
 from simsopt.util import MpiPartition, proc0_print
 
-TARGET_FILE = "/Users/issraali/codes/simsopt/figures_spline_paper/corner_sharpening/input.0155963"
+TARGET_FILE = "/Users/issraali/codes/simsopt/figures_spline_paper/corner_sharpening/input.0203395"
 
 mpi = MpiPartition()
 mpi.write()
@@ -65,13 +65,16 @@ mpi.write()
 proc0_print("Running 2_Intermediate/spline_fit_w7x_unconstrained.py")
 proc0_print("==================================================")
 
+MPOL = 24
+NTOR = 24
+
 spline_kwargs = {
     "axis_points": 3,
     "points_per_cs": 6,
-    "n_cs": 6,
+    "n_cs": 12,
     "nfp": 1,
-    "M": 12,
-    "N": 12,
+    "M": MPOL,
+    "N": NTOR,
     "p_u": 3,
     "p_v": 3,
     "cs_equispaced": True,
@@ -81,7 +84,7 @@ spline_kwargs = {
     "cs_basis": "polar",
     "nurbs": False,
     "use_bishop_frame": True,
-    "knot_parametrization":"uniform"
+    "knot_parametrization": "uniform",
 }
 
 
@@ -195,15 +198,15 @@ proc0_print(
     f"nfp={target_surf.nfp}, mpol={target_surf.mpol}, ntor={target_surf.ntor}"
 )
 
-n_cross_sections = 2 * 12 * target_surf.nfp + 2
-ntheta_ref = 2 * 12 + 1
+n_cross_sections = 2 * NTOR * target_surf.nfp + 2
+ntheta_ref = 2 * MPOL + 1
 phi_1d = np.linspace(0, 2 * np.pi, n_cross_sections, endpoint=False)
 reference = build_exact_shape_reference(target_surf, phi_1d, ntheta=ntheta_ref)
 
 # Build the spline surface, initialized to roughly the target's physical
 # scale (major/minor radius) rather than the class's tiny unit-scale
 # default, so the optimizer starts from a sane shape.
-spline_surf = SurfaceBSpline(default_r=0.5, **spline_kwargs)
+spline_surf = SurfaceBSpline(default_r=0.4, **spline_kwargs)
 # for i in range(spline_kwargs["axis_points"]):
 #     # PseudoAxis's default r bounds ([0.3, 2.5]) assume its own unit-scale
 #     # default (r_axis=1) -- widen them before setting r_axis to W7-X's
@@ -264,8 +267,11 @@ report_bound_violations(spline_surf, "Stage 1")
 
 if mpi.proc0_world:
     plot_cross_section_comparison(
-        target_surf, spline_surf, "Stage 1 optimized spline vs. target cross sections"
+        target_surf,
+        spline_surf,
+        "Stage 1 optimized spline vs. target cross sections",
     )
+    print(repr(spline_surf.x))
 
 # Refine: grow the poloidal (per-cross-section) resolution via exact
 # Lane-Riesenfeld/Boehm knot insertion (toroidal, i.e. cross-section-count,
@@ -280,8 +286,12 @@ proc0_print(f"spline_surf.dof_names after refine: {spline_surf.dof_names}")
 proc0_print(f"ndofs after refine: {len(spline_surf.x)}")
 
 postrefine_residuals = spline_shape_residuals(spline_surf, reference)
-proc0_print(f"Post-refine (pre-stage-2) max shape error: {np.max(postrefine_residuals):.4e}")
-proc0_print(f"Post-refine (pre-stage-2) mean shape error: {np.mean(postrefine_residuals):.4e}")
+proc0_print(
+    f"Post-refine (pre-stage-2) max shape error: {np.max(postrefine_residuals):.4e}"
+)
+proc0_print(
+    f"Post-refine (pre-stage-2) mean shape error: {np.mean(postrefine_residuals):.4e}"
+)
 
 proc0_print("")
 proc0_print("Beginning stage 2 optimization (post-refine)")
@@ -309,7 +319,9 @@ report_bound_violations(spline_surf, "Stage 2 (final)")
 
 if mpi.proc0_world:
     plot_cross_section_comparison(
-        target_surf, spline_surf, "Refined + optimized spline vs. target cross sections"
+        target_surf,
+        spline_surf,
+        "Refined + optimized spline vs. target cross sections",
     )
 
 proc0_print("")

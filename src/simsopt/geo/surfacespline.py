@@ -1298,6 +1298,199 @@ class SurfaceBSpline(sopp.Surface, Surface):
         self.points_per_cs = self.cs_list[0].n_ctrl_pts
         self._invalidate_control_net_cache()
 
+    def refine_toroidal(self):
+        r"""
+        Grow the number of toroidal cross sections n_cs -> 2*n_cs - 1
+        (insert a new cross section at the midpoint of every gap, same
+        "double everything uniformly" spirit as refine_poloidal, but one
+        level up: the "points" being Lane-Riesenfeld-doubled here are
+        whole cross sections, not individual (r, theta) control points
+        within one.
+
+        Structurally this SURFACE's own toroidal domain (cs_zeta in
+        [0, max_angle], stellarator-symmetric mirror-and-nfp-tile out to
+        the full device -- see _get_control_points_xyz) is exactly
+        analogous to a single z_sym CrossSectionFixedZeta's own poloidal
+        domain: cs_zeta0=0 and cs_zeta{n_cs-1}=max_angle are the two
+        once-appearing mirror-fixed points, interior cs_zeta_i each
+        appear twice (once directly, once as that row's own .flipped()
+        at the mirrored angle). Lane-Riesenfeld doubling that structure
+        needs p_v odd for the exact same reason refine_poloidal needs
+        p_u odd for z_sym rows: an even-degree uniform B-spline's mirror
+        axis always falls exactly on a knot, never a control point, so
+        there'd be nothing there to preserve.
+
+        Unlike refine_poloidal, this does NOT reconstruct new angles by
+        computing them and then sorting -- that approach is exactly what
+        broke refine_poloidal's z_sym reconstruction when a pinned
+        control point's own radius was too small to outvote its
+        neighbors in the blend (see "SurfaceBSpline roadmap.md"/vault
+        notes on that bug). Lane-Riesenfeld's own output is already in a
+        deterministic index order consistent with uniform_knots(2m-1,p)
+        (see lane_riesenfeld_double's docstring) -- so this reconstructs
+        the new cross sections by direct index slicing throughout,
+        column identity preserved by construction, never by re-deriving
+        "which new thing is closest to which old thing" from computed
+        angles. This sidesteps that whole bug class rather than
+        depending on any particular row's control points staying safely
+        away from the axis.
+
+        Blending happens in genuine 3D Cartesian space (each cross
+        section's full, already-embedded (X, Y, Z) control points via
+        _get_control_points_xyz), not in local (r, theta): unlike
+        poloidal refinement, where every point being blended shares one
+        row's single local frame (so blending locally commutes exactly
+        with that frame's fixed affine embedding), toroidal blending
+        mixes points from DIFFERENT cross sections, each with its own
+        distinct local frame (Bishop or fixed-phi-plane, evaluated at
+        that row's own zeta) -- there is no single shared affine map to
+        commute through, so the blend has to happen after embedding, and
+        each new cross section's (r, theta, w) has to be recovered by
+        projecting its blended 3D points back into ITS OWN new local
+        frame (evaluated at the new cross section's own zeta, via
+        _axis_local_basis) afterward.
+
+        Raises ValueError if p_v is even, or if any existing cs_angle is
+        nonzero (the new cross sections' own cs_angle isn't derived from
+        the 3D blend at all -- see below -- so there's no principled
+        value to give it other than 0, which is only consistent with
+        the surface's existing cross sections if they were all 0 to
+        begin with).
+        """
+        p = self.p_v
+        if p % 2 == 0:
+            raise ValueError(
+                f"refine_toroidal: p_v={p} is even -- this surface's "
+                "toroidal domain is always stellarator-symmetric-mirrored "
+                "(cs_zeta0=0, cs_zeta{n_cs-1}=max_angle are the mirror-"
+                "fixed points), and an even-degree uniform B-spline's "
+                "mirror axis always falls exactly on a knot, never a "
+                "control point, at every level of dyadic refinement -- "
+                "so there is no control point there to preserve after "
+                "doubling. Use an odd p_v."
+            )
+
+        n_cs_old = self.n_cs
+        new_n_cs = 2 * n_cs_old - 1
+        n_ctrl_pts = self.cs_list[0].n_ctrl_pts
+        max_angle = np.pi / self.nfp
+
+        cs_zeta_old, cs_angle_old = self.get_cs_zeta_angle()
+        if np.any(cs_angle_old != 0):
+            raise NotImplementedError(
+                "refine_toroidal: nonzero cs_angle is not supported -- "
+                "the new cross sections' own cs_angle has no principled "
+                "value derivable from the 3D control-point blend below, "
+                "so this only handles the (default, cs_global_angle_free"
+                "=False) all-zero case."
+            )
+
+        # Full one-field-period, already-embedded (X, Y, Z) control net
+        # and weights -- core_n_v_old = 2*n_cs_old - 2 rows, index 0 and
+        # index n_cs_old-1 the two mirror-fixed cross sections, the rest
+        # each appearing a second time (as .flipped()) later in the full,
+        # multi-field-period list _get_control_points_xyz returns; only
+        # one field period's worth is needed here; the mirror/nfp tiling
+        # is unaffected by refinement, same as for refine_poloidal.
+        core_n_v_old = 2 * n_cs_old - 2
+        point_list, w_list = self._get_control_points_xyz(return_w=True)
+        old_pos = np.array(point_list[:core_n_v_old])  # (core_n_v_old, n_ctrl_pts, 3)
+        old_w = np.array(w_list[:core_n_v_old])  # (core_n_v_old, n_ctrl_pts)
+
+        new_pos = np.empty((2 * core_n_v_old, n_ctrl_pts, 3))
+        new_w = np.empty((2 * core_n_v_old, n_ctrl_pts))
+        for j in range(n_ctrl_pts):
+            new_pos[:, j, :], new_w[:, j] = lane_riesenfeld_double(
+                old_pos[:, j, :], old_w[:, j], p
+            )
+
+        # Direct index slice -- the new one-field-period cross sections,
+        # in order, no angle-based sorting (see docstring).
+        new_pos = new_pos[:new_n_cs]
+        new_w = new_w[:new_n_cs]
+
+        new_cs_zeta = np.linspace(0, max_angle, new_n_cs)
+        axis_pos, e1, e2 = self._axis_local_basis(new_cs_zeta)
+
+        new_cs_list = []
+        for i in range(new_n_cs):
+            z_sym = i == 0 or i == new_n_cs - 1
+            rel = new_pos[i] - axis_pos[i]  # (n_ctrl_pts, 3)
+            r_full = np.hypot(rel @ e1[i], rel @ e2[i])
+            theta_full = np.mod(
+                np.arctan2(rel @ e2[i], rel @ e1[i]), 2 * np.pi
+            )
+            w_full = new_w[i]
+
+            if z_sym:
+                # Same slice-not-sort logic as _get_control_points_xyz's
+                # own get_r_ctrl_full()/get_theta_ctrl_full() convention:
+                # column index order within a row is preserved exactly
+                # by the per-column toroidal blend above (it never mixes
+                # different columns together), so the first half_len
+                # columns are still exactly the [0, pi] half by
+                # construction, same as any other z_sym row.
+                half_len = n_ctrl_pts // 2 + 1
+                r_use = r_full[:half_len]
+                theta_use = theta_full[:half_len].copy()
+                w_use = w_full[:half_len]
+                theta_use[0] = 0.0
+                if n_ctrl_pts % 2 == 0:
+                    theta_use[-1] = np.pi
+            else:
+                r_use, theta_use, w_use = r_full, theta_full, w_full
+
+            new_cs = CrossSectionFixedZeta(
+                zeta_index=i,
+                n_ctrl_pts=n_ctrl_pts,
+                equispaced=self.rays_equispaced,
+                default_r=self.default_r,
+                z_sym=z_sym,
+                nurbs=self.nurbs,
+            )
+            new_cs.full_x = np.concatenate([r_use, theta_use, w_use])
+            CrossSectionFixedZeta._set_theta_neighbor_bounds(
+                new_cs, periodic=not z_sym
+            )
+            new_cs_list.append(new_cs)
+
+        # Rebuild this surface's own local dofs (cs_zeta_i/cs_angle_i,
+        # one pair per cross section) at the new count -- there is no
+        # DOFs.append, so this mirrors __init__'s own construction of
+        # this same block exactly, just parametrized by new_n_cs. cs_
+        # angle stays all zero (checked above).
+        names = [f"cs_zeta{i}" for i in range(new_n_cs)] + [
+            f"cs_angle{i}" for i in range(new_n_cs)
+        ]
+        new_local_dofs = np.append(new_cs_zeta, np.zeros(new_n_cs))
+        new_dofs = DOFs(
+            new_local_dofs,
+            names,
+            [not self.cs_equispaced] * new_n_cs
+            + [self.cs_global_angle_free] * new_n_cs,
+            [(n - 1) * max_angle / (new_n_cs - 2) for n in range(new_n_cs)]
+            + [-2 * np.pi / n_ctrl_pts] * new_n_cs,
+            [(n) * max_angle / (new_n_cs - 2) for n in range(new_n_cs)]
+            + [2 * np.pi / n_ctrl_pts] * new_n_cs,
+        )
+        new_dofs.fix("cs_angle0")
+        new_dofs.fix(f"cs_angle{new_n_cs - 1}")
+        new_dofs.fix("cs_zeta0")
+        new_dofs.fix(f"cs_zeta{new_n_cs - 1}")
+
+        self.cs_list = new_cs_list
+        self.n_cs = new_n_cs
+        self._dofs = new_dofs
+
+        for _ in range(n_cs_old):
+            self.pop_parent(1)
+        for idx, new_cs in enumerate(new_cs_list):
+            self.add_parent(idx + 1, new_cs)
+
+        self._update_full_dof_size_indices()
+        self.update_free_dof_size_indices()
+        self._invalidate_control_net_cache()
+
     def _invalidate_control_net_cache(self):
         self.new_x = True
         self._knots_u = None
