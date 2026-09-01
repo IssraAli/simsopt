@@ -3846,6 +3846,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         _surf_points=False,
         _ctrl_points=True,
         _ctrl_points_full=True,
+        _ctrl_net=False,
         _pseudo_axis=True,
         _pseudo_axis_ctrl_pts=True,
         _centroid_axis=True,
@@ -3855,6 +3856,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         _surf_kwargs={"alpha": 0.3, "rcount": 64, "ccount": 64},
         _surf_points_kwargs={"color": "k", "marker": "."},
         _ctrl_points_kwargs={"color": "g", "marker": ".", "ls": "--"},
+        _ctrl_net_kwargs={"color": "g", "ls": "-", "lw": 0.5},
         _pseudo_axis_kwargs={"color": "g", "ls": "-"},
         _pseudo_axis_ctrl_pts_kwargs={"color": "c", "marker": "*"},
         _centroid_axis_kwargs={"color": "r", "ls": "--"},
@@ -3867,7 +3869,6 @@ class SurfaceBSpline(sopp.Surface, Surface):
 
         # Generating surface
         if _surf or _surf_points:
-            ax.set_aspect("equal")
             ax.set_ylim(-1, 1)
             ax.set_xlim(-1, 1)
             ax.set_zlim(-1, 1)
@@ -3955,6 +3956,27 @@ class SurfaceBSpline(sopp.Surface, Surface):
                         ),
                         **_ctrl_points_kwargs,
                     )
+
+        #####################################################################
+        # plotting the control net over a single half field period (the
+        # first self.n_cs rows of xyz_list -- see _get_control_points_xyz:
+        # its cs_zeta_1fp starts with the unmirrored, untiled cs_zeta
+        # itself, i.e. zeta in [0, pi/nfp], before the mirror-and-tile
+        # continuation that builds the rest of the device), connecting
+        # control points with straight lines in both tensor-product
+        # directions -- the existing _ctrl_points rings (poloidal, fixed
+        # row) plus, new here, one line per poloidal index j connecting
+        # that same control point across neighboring rows (toroidal).
+        if _ctrl_net:
+            net_points = np.array(xyz_list[: self.n_cs])
+            for i in range(self.n_cs):
+                ring = np.vstack([net_points[i], net_points[i, :1]])
+                ax.plot(ring[:, 0], ring[:, 1], ring[:, 2], **_ctrl_net_kwargs)
+            for j in range(self.points_per_cs):
+                column = net_points[:, j, :]
+                ax.plot(
+                    column[:, 0], column[:, 1], column[:, 2], **_ctrl_net_kwargs
+                )
 
         #####################################################################
         # plotting vectors from axis to control points
@@ -4050,4 +4072,5 @@ class SurfaceBSpline(sopp.Surface, Surface):
             x_centroid, y_centroid, z_centroid = self.centroid_axis_callable(a)
 
             ax.plot(x_centroid, y_centroid, z_centroid, **_centroid_axis_kwargs)
+        ax.set_aspect("equal")
         ax._axis3don = False

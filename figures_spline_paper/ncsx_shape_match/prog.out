@@ -1,0 +1,133 @@
+Running 2_Intermediate/spline_fit_w7x_unconstrained.py
+==================================================
+Target original: R0=1.4089, a0~0.0279
+Target rescaled (x0.7098): R0=1.0000, a0~0.2050, nfp=3, mpol=10, ntor=6
+spline_surf.dof_names: ['CrossSectionFixedZeta1:r_0', 'CrossSectionFixedZeta1:r_1', 'CrossSectionFixedZeta1:r_2', 'CrossSectionFixedZeta1:r_3', 'CrossSectionFixedZeta1:r_4', 'CrossSectionFixedZeta1:theta_1', 'CrossSectionFixedZeta1:theta_2', 'CrossSectionFixedZeta1:theta_3', 'CrossSectionFixedZeta2:r_0', 'CrossSectionFixedZeta2:r_1', 'CrossSectionFixedZeta2:r_2', 'CrossSectionFixedZeta2:r_3', 'CrossSectionFixedZeta2:r_4', 'CrossSectionFixedZeta2:r_5', 'CrossSectionFixedZeta2:r_6', 'CrossSectionFixedZeta2:r_7', 'CrossSectionFixedZeta2:theta_1', 'CrossSectionFixedZeta2:theta_2', 'CrossSectionFixedZeta2:theta_3', 'CrossSectionFixedZeta2:theta_4', 'CrossSectionFixedZeta2:theta_5', 'CrossSectionFixedZeta2:theta_6', 'CrossSectionFixedZeta2:theta_7', 'CrossSectionFixedZeta3:r_0', 'CrossSectionFixedZeta3:r_1', 'CrossSectionFixedZeta3:r_2', 'CrossSectionFixedZeta3:r_3', 'CrossSectionFixedZeta3:r_4', 'CrossSectionFixedZeta3:r_5', 'CrossSectionFixedZeta3:r_6', 'CrossSectionFixedZeta3:r_7', 'CrossSectionFixedZeta3:theta_1', 'CrossSectionFixedZeta3:theta_2', 'CrossSectionFixedZeta3:theta_3', 'CrossSectionFixedZeta3:theta_4', 'CrossSectionFixedZeta3:theta_5', 'CrossSectionFixedZeta3:theta_6', 'CrossSectionFixedZeta3:theta_7', 'CrossSectionFixedZeta4:r_0', 'CrossSectionFixedZeta4:r_1', 'CrossSectionFixedZeta4:r_2', 'CrossSectionFixedZeta4:r_3', 'CrossSectionFixedZeta4:r_4', 'CrossSectionFixedZeta4:r_5', 'CrossSectionFixedZeta4:r_6', 'CrossSectionFixedZeta4:r_7', 'CrossSectionFixedZeta4:theta_1', 'CrossSectionFixedZeta4:theta_2', 'CrossSectionFixedZeta4:theta_3', 'CrossSectionFixedZeta4:theta_4', 'CrossSectionFixedZeta4:theta_5', 'CrossSectionFixedZeta4:theta_6', 'CrossSectionFixedZeta4:theta_7', 'CrossSectionFixedZeta5:r_0', 'CrossSectionFixedZeta5:r_1', 'CrossSectionFixedZeta5:r_2', 'CrossSectionFixedZeta5:r_3', 'CrossSectionFixedZeta5:r_4', 'CrossSectionFixedZeta5:r_5', 'CrossSectionFixedZeta5:r_6', 'CrossSectionFixedZeta5:r_7', 'CrossSectionFixedZeta5:theta_1', 'CrossSectionFixedZeta5:theta_2', 'CrossSectionFixedZeta5:theta_3', 'CrossSectionFixedZeta5:theta_4', 'CrossSectionFixedZeta5:theta_5', 'CrossSectionFixedZeta5:theta_6', 'CrossSectionFixedZeta5:theta_7', 'CrossSectionFixedZeta6:r_0', 'CrossSectionFixedZeta6:r_1', 'CrossSectionFixedZeta6:r_2', 'CrossSectionFixedZeta6:r_3', 'CrossSectionFixedZeta6:r_4', 'CrossSectionFixedZeta6:theta_1', 'CrossSectionFixedZeta6:theta_2', 'CrossSectionFixedZeta6:theta_3', 'PseudoAxis1:r_axis_0', 'PseudoAxis1:r_axis_1', 'PseudoAxis1:r_axis_2', 'PseudoAxis1:z_axis_1']
+ndofs: 80
+Initial max shape error: 2.4834e-01
+Initial mean shape error: 7.7003e-02
+Beginning optimization
+   Iteration     Total nfev        Cost      Cost reduction    Step norm     Optimality   
+       0              1         8.1132e+00                                    9.38e+00    
+       1              2         3.5850e+00      4.53e+00       9.68e-01       7.19e+00    
+       2              3         2.1488e+00      1.44e+00       7.48e-01       4.78e+00    
+       3              4         1.8672e+00      2.82e-01       3.31e-01       4.90e+00    
+       4              5         1.8243e+00      4.29e-02       5.23e-02       4.57e+00    
+       5              6         1.5505e+00      2.74e-01       3.92e-01       5.02e+00    
+       6              7         1.1428e+00      4.08e-01       4.69e-01       6.81e+00    
+       7              8         1.0288e+00      1.14e-01       2.18e-02       5.39e+00    
+       8              9         4.5942e-01      5.69e-01       4.96e-01       8.20e+00    
+       9             10         2.1930e-01      2.40e-01       2.06e-01       4.78e+00    
+      10             11         1.6397e-01      5.53e-02       9.76e-02       3.87e+00    
+      11             12         1.2755e-01      3.64e-02       1.31e-01       2.90e+00    
+      12             13         5.5843e-02      7.17e-02       2.89e-01       1.34e+00    
+      13             14         3.8963e-02      1.69e-02       1.15e-01       7.12e-01    
+      14             15         1.8785e-02      2.02e-02       5.36e-01       2.66e-01    
+      15             16         1.2770e-02      6.01e-03       1.07e-01       1.71e-01    
+      16             17         9.3179e-03      3.45e-03       5.81e-01       2.35e-01    
+      17             18         7.0872e-03      2.23e-03       1.03e-01       2.55e-01    
+      18             19         6.4087e-03      6.78e-04       7.31e-02       1.91e-01    
+      19             20         6.1257e-03      2.83e-04       7.13e-02       1.43e-01    
+      20             21         5.3463e-03      7.79e-04       1.67e-01       6.67e-02    
+      21             22         5.0245e-03      3.22e-04       1.23e-01       7.86e-02    
+      22             23         4.5345e-03      4.90e-04       3.95e-01       8.41e-02    
+      23             24         4.4235e-03      1.11e-04       6.00e-02       2.95e-02    
+      24             25         4.4103e-03      1.32e-05       9.28e-03       2.08e-02    
+      25             26         4.4027e-03      7.61e-06       3.83e-03       2.52e-02    
+      26             27         4.3969e-03      5.84e-06       3.72e-03       2.09e-02    
+      27             28         4.3904e-03      6.46e-06       3.58e-03       2.50e-02    
+      28             29         4.3857e-03      4.67e-06       3.26e-03       2.11e-02    
+      29             30         4.3841e-03      1.60e-06       1.17e-04       1.04e-02    
+      30             31         4.3819e-03      2.29e-06       1.61e-04       2.78e-02    
+      31             32         4.3805e-03      1.38e-06       9.28e-05       8.99e-03    
+      32             33         4.3780e-03      2.51e-06       2.33e-04       3.70e-02    
+      33             34         4.3763e-03      1.68e-06       9.54e-05       7.85e-03    
+      34             35         4.3729e-03      3.37e-06       4.06e-04       4.31e-02    
+      35             36         4.3706e-03      2.32e-06       1.55e-03       3.90e-02    
+      36             37         4.3689e-03      1.72e-06       9.45e-05       5.19e-03    
+      37             38         4.3662e-03      2.69e-06       5.07e-04       3.56e-02    
+      38             39         4.3647e-03      1.48e-06       8.65e-05       3.21e-03    
+      39             40         4.3462e-03      1.85e-05       3.53e-02       4.32e-02    
+      40             41         4.3023e-03      4.38e-05       8.12e-02       3.85e-02    
+      41             42         4.3002e-03      2.14e-06       1.12e-04       9.20e-03    
+      42             43         4.2296e-03      7.06e-05       2.73e-01       4.34e-02    
+      43             44         4.2231e-03      6.55e-06       2.22e-04       1.95e-02    
+      44             45         4.2156e-03      7.44e-06       3.02e-04       4.66e-02    
+      45             46         4.2119e-03      3.70e-06       1.48e-04       1.18e-02    
+      46             47         4.2051e-03      6.77e-06       4.20e-04       5.71e-02    
+      47             48         4.2012e-03      3.96e-06       1.45e-04       9.54e-03    
+      48             49         4.1949e-03      6.31e-06       5.77e-04       5.47e-02    
+      49             50         4.1915e-03      3.38e-06       1.32e-04       6.78e-03    
+      50             51         4.1882e-03      3.28e-06       4.92e-04       3.23e-02    
+      51             52         4.1867e-03      1.50e-06       4.15e-03       1.84e-02    
+      52             53         4.1591e-03      2.76e-05       7.94e-02       3.46e-02    
+      53             54         4.1215e-03      3.76e-05       7.74e-02       1.76e-02    
+      54             55         4.0740e-03      4.75e-05       1.82e-01       2.49e-02    
+      55             56         4.0672e-03      6.78e-06       1.46e-02       1.31e-02    
+      56             57         4.0648e-03      2.44e-06       6.03e-03       2.01e-02    
+      57             58         4.0373e-03      2.75e-05       5.75e-02       1.34e-02    
+      58             59         3.9967e-03      4.06e-05       9.81e-02       1.07e-02    
+      59             60         3.9493e-03      4.74e-05       9.60e-02       7.52e-03    
+      60             61         3.8890e-03      6.03e-05       9.69e-02       3.09e-03    
+      61             62         3.8557e-03      3.34e-05       4.33e-02       5.06e-03    
+      62             63         3.8150e-03      4.06e-05       5.16e-02       9.29e-03    
+      63             64         3.7840e-03      3.11e-05       3.88e-02       1.02e-02    
+      64             65         3.7525e-03      3.15e-05       3.95e-02       1.53e-02    
+      65             66         3.6930e-03      5.95e-05       6.92e-02       2.33e-02    
+      66             67         3.6924e-03      5.88e-07       6.15e-05       4.24e-03    
+      67             68         3.6863e-03      6.04e-06       6.99e-03       4.65e-03    
+      68             69         3.5918e-03      9.45e-05       1.35e-01       7.55e-02    
+      69             70         3.5866e-03      5.22e-06       1.90e-04       1.35e-02    
+      70             71         3.5580e-03      2.86e-05       4.04e-02       1.28e-02    
+      71             72         3.4976e-03      6.03e-05       6.16e-02       6.81e-03    
+      72             73         3.4970e-03      6.76e-07       5.69e-03       4.16e-03    
+      73             74         3.4678e-03      2.92e-05       8.42e-02       1.38e-02    
+      74             75         3.4576e-03      1.02e-05       2.01e-02       6.21e-03    
+      75             76         3.4426e-03      1.50e-05       5.36e-02       5.10e-03    
+      76             77         3.4399e-03      2.65e-06       1.07e-02       2.93e-03    
+      77             78         3.4351e-03      4.81e-06       2.65e-02       2.42e-03    
+      78             79         3.4348e-03      3.40e-07       3.69e-03       7.27e-04    
+      79             80         3.4310e-03      3.77e-06       4.31e-02       4.58e-03    
+      80             81         3.4309e-03      1.49e-07       1.79e-03       4.29e-03    
+      81             82         3.4308e-03      5.72e-08       1.83e-05       1.37e-03    
+      82             83         3.4307e-03      5.55e-08       2.68e-05       3.66e-03    
+      83             84         3.4307e-03      5.43e-08       8.86e-04       1.19e-03    
+      84             85         3.4306e-03      7.51e-08       1.23e-03       1.29e-03    
+      85             86         3.4293e-03      1.32e-06       1.94e-02       8.24e-04    
+      86             87         3.4293e-03      1.80e-08       7.08e-04       5.24e-04    
+      87             88         3.4291e-03      2.23e-07       8.20e-03       4.48e-04    
+      88             89         3.4290e-03      7.32e-08       4.93e-03       6.81e-05    
+      89             90         3.4290e-03      1.54e-08       2.63e-03       2.26e-05    
+      90             91         3.4290e-03      4.31e-09       1.55e-03       7.39e-06    
+      91             92         3.4290e-03      9.77e-10       8.68e-04       3.36e-06    
+      92             93         3.4290e-03      3.06e-10       5.43e-04       2.29e-06    
+      93             94         3.4290e-03      8.53e-11       2.97e-04       1.58e-06    
+      94             95         3.4290e-03      2.62e-11       1.78e-04       1.09e-06    
+`ftol` termination condition is satisfied.
+Function evaluations 95, initial cost 8.1132e+00, final cost 3.4290e-03, first-order optimality 1.09e-06.
+
+Final max shape error: 6.2632e-03
+Final mean shape error: 1.4952e-03
+
+Spline dofs:
+array([0.011402  , 0.46504157, 0.67930365, 0.24118562, 0.08804102,
+       1.04719755, 1.1535654 , 2.0943951 , 0.05554031, 0.57983078,
+       0.43669809, 0.15083665, 0.114151  , 0.37484532, 0.74442349,
+       0.19604831, 0.88516021, 1.17809725, 1.96349541, 3.4541344 ,
+       4.3196899 , 5.0016396 , 5.10508806, 0.15329512, 0.53111147,
+       0.16124337, 0.07395703, 0.17535249, 0.44669011, 0.73179838,
+       0.12437343, 0.78410841, 1.44907055, 1.96349541, 3.53429174,
+       4.3196899 , 4.79763613, 5.17140763, 0.16635884, 0.34760288,
+       0.17027156, 0.12515422, 0.30692015, 0.61946003, 0.53591057,
+       0.12528128, 0.7316746 , 1.22440617, 2.74889357, 3.47072736,
+       4.3196899 , 4.48036769, 5.89048623, 0.11763882, 0.25152944,
+       0.18563163, 0.24467197, 0.32771976, 0.65524436, 0.20669872,
+       0.12964066, 1.17809725, 1.24485138, 2.74889357, 3.01517487,
+       3.82244728, 4.87647605, 5.10508806, 0.08884859, 0.09700345,
+       0.23671654, 0.43760036, 0.49663514, 1.04719755, 1.22117985,
+       2.7053699 , 1.28803617, 1.07878184, 0.77921579, 0.25427187])
+
+No bounds violations.
+
+End of 2_Intermediate/spline_fit_w7x_unconstrained.py
+=================================================

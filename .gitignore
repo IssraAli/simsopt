@@ -71,3 +71,6 @@ tests/boundary*
 src/simsopt/_version.py
 
 examples/2_Intermediate/old/*
+jac_log_*
+figures_spline_paper/x_point/da_remix/stage_2_scan_twin_out/*
+figures_spline_paper/x_point/ml_originals/*

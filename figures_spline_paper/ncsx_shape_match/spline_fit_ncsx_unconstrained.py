@@ -34,11 +34,8 @@ below; run this with mpirun -n <nprocs> to parallelize those evaluations
 across ranks (least_squares_mpi_solve distributes Jacobian columns across
 the MPI pool), e.g. `mpirun -n 8 python spline_fit_w7x_unconstrained.py`.
 W7-X is a strongly-shaped stellarator, so don't expect a tight match at a
-coarse spline resolution at first -- the fit runs in two stages to help
-with that: an initial optimization at spline_kwargs' resolution, then one
-poloidal refinement (SurfaceBSpline.refine_poloidal(), exact
-Lane-Riesenfeld knot doubling -- curve-preserving, so it only grows the
-dof count) followed by a second optimization at that higher resolution.
+coarse spline resolution -- this demonstrates the fitting pipeline, not a
+high-fidelity reconstruction.
 """
 
 import matplotlib
@@ -47,8 +44,7 @@ matplotlib.use("qtagg")
 import matplotlib.pyplot as plt
 import numpy as np
 from simsopt._core import make_optimizable
-from simsopt.geo import SurfaceBSpline
-from simsopt.mhd import Vmec
+from simsopt.geo import SurfaceBSpline, SurfaceRZFourier
 from simsopt.objectives import LeastSquaresProblem
 from simsopt.objectives.shape_errors import (
     build_exact_shape_reference,
@@ -57,7 +53,7 @@ from simsopt.objectives.shape_errors import (
 from simsopt.solve import least_squares_mpi_solve
 from simsopt.util import MpiPartition, proc0_print
 
-TARGET_FILE = "/Users/issraali/codes/simsopt/figures_spline_paper/corner_sharpening/input.0203395"
+TARGET_FILE = "/Users/issraali/codes/simsopt/tests/test_files/input.NCSX_c09r00_halfTeslaTF"
 
 mpi = MpiPartition()
 mpi.write()
@@ -65,16 +61,13 @@ mpi.write()
 proc0_print("Running 2_Intermediate/spline_fit_w7x_unconstrained.py")
 proc0_print("==================================================")
 
-MPOL = 12
-NTOR = 12
-
 spline_kwargs = {
     "axis_points": 3,
-    "points_per_cs": 6,
-    "n_cs": 6,
-    "nfp": 2,
-    "M": MPOL,
-    "N": NTOR,
+    "points_per_cs": 8,
+    "n_cs": 5,
+    "nfp": 3,
+    "M": 12,
+    "N": 12,
     "p_u": 3,
     "p_v": 3,
     "cs_equispaced": True,
@@ -84,7 +77,6 @@ spline_kwargs = {
     "cs_basis": "polar",
     "nurbs": False,
     "use_bishop_frame": True,
-    "knot_parametrization": "uniform",
 }
 
 
@@ -110,7 +102,7 @@ def plot_cross_section_comparison(target_surf, spline_surf, title, n_cuts=4):
             np.append(target_pts[:, 2], target_pts[0, 2]),
             "k-",
             lw=2,
-            label="target (QUASR)",
+            label="target (NCSX)",
         )
         ax.plot(
             np.append(spline_r, spline_r[0]),
@@ -150,28 +142,10 @@ def spline_shape_residuals(spline_surf, reference):
     return exact_shape_error(rz_surf, reference).flatten()
 
 
-def report_bound_violations(surf, label):
-    """Print any surf.x entries outside their own box bounds, by dof name."""
-    lb, ub = surf.bounds
-    x = np.asarray(surf.x)
-    violations = [
-        (name, xi, lbi, ubi)
-        for name, xi, lbi, ubi in zip(surf.dof_names, x, lb, ub)
-        if not (lbi <= xi <= ubi)
-    ]
-    proc0_print("")
-    if violations:
-        proc0_print(f"{label}: {len(violations)} bound violation(s):")
-        for name, xi, lbi, ubi in violations:
-            proc0_print(f"  {name}: x={xi:.6e} not in [{lbi:.6e}, {ubi:.6e}]")
-    else:
-        proc0_print(f"{label}: no bound violations")
-
-
 # Target boundary: read directly from the VMEC input file's Fourier
 # coefficients -- no equilibrium solve needed, just the boundary shape.
-target_vmec = Vmec(TARGET_FILE, verbose=False)
-target_surf = target_vmec.boundary
+# target_surf = SurfaceRZFourier.from_focus(TARGET_FILE)
+# target_surf.plot(rcount=200, ccount=200)
 R0_orig = abs(target_surf.get_rc(0, 0))
 a0_orig = abs(target_surf.get_rc(0, 1))
 proc0_print(
@@ -198,15 +172,15 @@ proc0_print(
     f"nfp={target_surf.nfp}, mpol={target_surf.mpol}, ntor={target_surf.ntor}"
 )
 
-n_cross_sections = 2 * NTOR * target_surf.nfp + 2
-ntheta_ref = 2 * MPOL + 1
+n_cross_sections = 2 * (2 * 12 * target_surf.nfp + 2)
+ntheta_ref = 2 * (2 * 12 + 1)
 phi_1d = np.linspace(0, 2 * np.pi, n_cross_sections, endpoint=False)
 reference = build_exact_shape_reference(target_surf, phi_1d, ntheta=ntheta_ref)
 
 # Build the spline surface, initialized to roughly the target's physical
 # scale (major/minor radius) rather than the class's tiny unit-scale
 # default, so the optimizer starts from a sane shape.
-spline_surf = SurfaceBSpline(default_r=0.4, **spline_kwargs)
+spline_surf = SurfaceBSpline(default_r=0.3, **spline_kwargs)
 # for i in range(spline_kwargs["axis_points"]):
 #     # PseudoAxis's default r bounds ([0.3, 2.5]) assume its own unit-scale
 #     # default (r_axis=1) -- widen them before setting r_axis to W7-X's
@@ -236,15 +210,9 @@ if mpi.proc0_world:
     )
 
 shape_obj = make_optimizable(spline_shape_residuals, spline_surf, reference)
-# goals/weights are scalars broadcast against the residual vector -- built
-# once here since the residual length (fixed by `reference`'s cross
-# sections/ntheta_ref) doesn't change across refine_poloidal() below, even
-# though spline_surf's own dof count does; the Optimizable graph rooted at
-# shape_obj reflects that new dof count automatically, so this same `prob`
-# stays valid for the post-refine reoptimization -- no need to rebuild it.
 prob = LeastSquaresProblem(goals=0, weights=1, funcs_in=[shape_obj.J])
 
-proc0_print("Beginning stage 1 optimization (initial resolution)")
+proc0_print("Beginning optimization")
 try:
     least_squares_mpi_solve(
         prob,
@@ -253,57 +221,7 @@ try:
         abs_step=1e-6,
     )
 except Exception as e:
-    proc0_print(f"Stage 1 optimization raised: {e}")
-
-stage1_residuals = spline_shape_residuals(spline_surf, reference)
-proc0_print("")
-proc0_print(f"Stage 1 max shape error: {np.max(stage1_residuals):.4e}")
-proc0_print(f"Stage 1 mean shape error: {np.mean(stage1_residuals):.4e}")
-
-# Box bounds are supposed to be respected exactly by scipy's bounded
-# least_squares, but that relies on prob.bounds having been threaded
-# through correctly -- check explicitly rather than assuming.
-report_bound_violations(spline_surf, "Stage 1")
-
-if mpi.proc0_world:
-    plot_cross_section_comparison(
-        target_surf,
-        spline_surf,
-        "Stage 1 optimized spline vs. target cross sections",
-    )
-    print(repr(spline_surf.x))
-
-# Refine: grow the poloidal (per-cross-section) resolution via exact
-# Lane-Riesenfeld/Boehm knot insertion (toroidal, i.e. cross-section-count,
-# refinement isn't implemented -- see SurfaceBSpline.refine_poloidal's
-# docstring). This only adds control points/dofs -- it doesn't move the
-# curve -- so it's safe to do right before continuing to optimize at the
-# new resolution instead of restarting from scratch.
-proc0_print("")
-proc0_print("Refining spline resolution (poloidal)")
-spline_surf.refine_poloidal()
-proc0_print(f"spline_surf.dof_names after refine: {spline_surf.dof_names}")
-proc0_print(f"ndofs after refine: {len(spline_surf.x)}")
-
-postrefine_residuals = spline_shape_residuals(spline_surf, reference)
-proc0_print(
-    f"Post-refine (pre-stage-2) max shape error: {np.max(postrefine_residuals):.4e}"
-)
-proc0_print(
-    f"Post-refine (pre-stage-2) mean shape error: {np.mean(postrefine_residuals):.4e}"
-)
-
-proc0_print("")
-proc0_print("Beginning stage 2 optimization (post-refine)")
-try:
-    least_squares_mpi_solve(
-        prob,
-        mpi,
-        grad=True,
-        abs_step=1e-6,
-    )
-except Exception as e:
-    proc0_print(f"Stage 2 optimization raised: {e}")
+    proc0_print(f"Optimization raised: {e}")
 
 final_residuals = spline_shape_residuals(spline_surf, reference)
 proc0_print("")
@@ -315,13 +233,27 @@ proc0_print("Spline dofs:")
 spline_dofs = repr(np.array(spline_surf.x))
 proc0_print(spline_dofs)
 
-report_bound_violations(spline_surf, "Stage 2 (final)")
+# Box bounds are supposed to be respected exactly by scipy's bounded
+# least_squares, but that relies on prob.bounds having been threaded
+# through correctly -- check explicitly rather than assuming.
+lb, ub = spline_surf.bounds
+x = np.asarray(spline_surf.x)
+below = x < lb
+above = x > ub
+proc0_print("")
+if np.any(below) or np.any(above):
+    proc0_print("Bounds violation detected:")
+    for name, xi, lbi, ubi, is_below, is_above in zip(
+        spline_surf.dof_names, x, lb, ub, below, above
+    ):
+        if is_below or is_above:
+            proc0_print(f"  {name}: x={xi:.6e} not in [{lbi:.6e}, {ubi:.6e}]")
+else:
+    proc0_print("No bounds violations.")
 
 if mpi.proc0_world:
     plot_cross_section_comparison(
-        target_surf,
-        spline_surf,
-        "Refined + optimized spline vs. target cross sections",
+        target_surf, spline_surf, "Optimized spline vs. target cross sections"
     )
 
 proc0_print("")
