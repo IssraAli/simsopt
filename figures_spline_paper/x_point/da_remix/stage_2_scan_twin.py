@@ -53,11 +53,9 @@ from scipy.optimize import minimize
 from sharpen_fixed_s_twin import (
     DEMO_SPLINE_KWARGS,
     build_demo_surface,
-    compute_uphi_grid_interpolated,
+    build_sharpened_twins,
     interpolated_corner_u,
-    phi_fractions,
     plot_leg_length_grid,
-    sharpen_with_crossover,
 )
 from simsopt._core.derivative import derivative_dec
 from simsopt._core.optimizable import Optimizable
@@ -72,7 +70,6 @@ from simsopt.geo import (
     curves_to_vtk,
 )
 from simsopt.objectives import QuadraticPenalty
-from tangent_extension import _cross_section_local_curve
 
 nfp = DEMO_SPLINE_KWARGS["nfp"]
 
@@ -82,16 +79,13 @@ R0 = 1.0
 R1 = 0.6
 order = 5
 
-# Crossover-leg sharpening (see sharpen_with_crossover)
-S1_FRACTION = 0.05
-S2_FRACTION = 0.05
-D_FRACTION = 0.18
-CORNER_CRITERION = "max z"
+# Crossover-leg sharpening (see build_sharpened_twins)
+D_CRAWL = 0.05
+D_EXT = 0.18
+CORNER_CRITERION = "z"
 
 # Squared-flux evaluation grid: N_PHI toroidal angles, NTHETA points per
-# leg per angle, using the twins' own full crossover reach (leg_fraction
-# == D_FRACTION -- no need to shorten for a physics evaluation, unlike
-# the display-only shortening in sharpen_fixed_s_twin.py's plots).
+# leg per angle. LEG_FRACTION is l_x (<= D_EXT).
 N_PHI = 64
 NTHETA = 64
 LEG_FRACTION = 0.03
@@ -264,41 +258,12 @@ def build_flux_grids():
     positions/normals -- built once and reused across every sweep run,
     since none of it depends on the coil hyperparameters being scanned."""
     spline_surf = build_demo_surface()
-    perimeters = [
-        _cross_section_local_curve(spline_surf, cs, n_samples=2000)["L"]
-        for cs in spline_surf.cs_list
-    ]
-    S1 = S1_FRACTION * min(perimeters)
-    S2 = S2_FRACTION * min(perimeters)
+    spline_surf, surf_outboard, surf_inboard, grids = build_sharpened_twins(
+        spline_surf, DEMO_SPLINE_KWARGS, D_CRAWL, D_EXT, LEG_FRACTION, CORNER_CRITERION,
+        n_phi=N_PHI, ntheta=NTHETA,
+    )
+    grid_outboard, grid_inboard = grids["outboard"], grids["inboard"]
 
-    surf_outboard, surf_inboard, geometry, outboard_is_between = (
-        sharpen_with_crossover(
-            spline_surf,
-            DEMO_SPLINE_KWARGS,
-            S1,
-            S2,
-            D_FRACTION,
-            CORNER_CRITERION,
-        )
-    )
-
-    phis = phi_fractions(surf_outboard, n_phi=N_PHI)
-    grid_outboard = compute_uphi_grid_interpolated(
-        spline_surf,
-        geometry,
-        LEG_FRACTION,
-        outboard_is_between,
-        phis,
-        ntheta=NTHETA,
-    )
-    grid_inboard = compute_uphi_grid_interpolated(
-        spline_surf,
-        geometry,
-        LEG_FRACTION,
-        not outboard_is_between,
-        phis,
-        ntheta=NTHETA,
-    )
     pos_outboard, normal_outboard = positions_and_normals_on_grid(
         surf_outboard, grid_outboard
     )
@@ -306,10 +271,10 @@ def build_flux_grids():
         surf_inboard, grid_inboard
     )
     weights_outboard = squared_flux_weights(
-        spline_surf, geometry, surf_outboard, grid_outboard, pos_outboard, P_WEIGHT
+        spline_surf, grids["geometry"], surf_outboard, grid_outboard, pos_outboard, P_WEIGHT
     )
     weights_inboard = squared_flux_weights(
-        spline_surf, geometry, surf_inboard, grid_inboard, pos_inboard, P_WEIGHT
+        spline_surf, grids["geometry"], surf_inboard, grid_inboard, pos_inboard, P_WEIGHT
     )
 
     # Show the two twins on the exact same custom (u, phi) grids the
@@ -317,12 +282,12 @@ def build_flux_grids():
     # optimization runs.
     fig, _ax = plot_leg_length_grid(
         spline_surf,
-        geometry,
+        grids["geometry"],
         surf_outboard,
         surf_inboard,
-        outboard_is_between,
+        grids["outboard_is_between"],
         LEG_FRACTION,
-        phis,
+        grids["phis"],
     )
     fig.savefig(os.path.join(SWEEP_DIR, "flux_grids.png"))
     plt.show()
@@ -494,7 +459,8 @@ def run_optimization(
         "ncoils": ncoils,
         "R0": R0,
         "R1": R1,
-        "d_fraction": D_FRACTION,
+        "d_crawl": D_CRAWL,
+        "d_ext": D_EXT,
         "leg_fraction": LEG_FRACTION,
         "n_phi": N_PHI,
         "ntheta": NTHETA,

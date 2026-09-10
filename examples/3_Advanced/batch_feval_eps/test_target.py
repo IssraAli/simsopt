@@ -13,7 +13,7 @@ comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
-INVALID_PENALTY = np.array([-100])
+INVALID_PENALTY = np.array([-1000])
 default_fev_var = np.array([1e-3])
 failed_fev_var = np.array([5e2])
 
@@ -46,33 +46,33 @@ def target(X, spline_kwargs, lb, ub):
         f"len(surf.x): {len(surf.x)}, len(dofs): {len(dofs)}"
     )
     surf.x = np.array(dofs)
-    # try:
-    vmec = Vmec.vmec_from_surf(
-        nfp=surf.nfp, surf=surf, mpi=mpi, ns=50, M=12, N=12, ftol=1e-8
-    )
-    vmec.run()
+    try:
+        vmec = Vmec.vmec_from_surf(
+            nfp=surf.nfp, surf=surf, mpi=mpi, ns=50, M=12, N=12, ftol=1e-8
+        )
+        vmec.run()
 
-    def eps_eff_callable(vmec):
-        ripple = EffectiveRipple(vmec, np.linspace(1e-3, 1, 10))
-        results = ripple.compute()
-        return results.eps_eff_32
+        def eps_eff_callable(vmec):
+            ripple = EffectiveRipple(vmec, np.linspace(1e-3, 1, 10))
+            results = ripple.compute()
+            return results.eps_eff_32
 
-    e32 = make_optimizable(eps_eff_callable, vmec)
+        e32 = make_optimizable(eps_eff_callable, vmec)
 
-    prob = LeastSquaresProblem.from_tuples(
-        [
-            (e32.J, 0, 1),
-            (vmec.aspect, 4, 10),
-            (vmec.mean_iota, 0.42, 10),
-            # (vmec.iota_edge(), 0.42, 10)
-        ]
-    )
-    return np.maximum(prob.objective(), INVALID_PENALTY), default_fev_var
-    # except Exception as e:
-    #     print(f"Failed with exception {e}, appending invalid penalty")
-    #     rz_surf = surf.to_RZFourier()
-    #     rz_surf.plot(engine='plotly')
-    #     return INVALID_PENALTY, failed_fev_var
+        prob = LeastSquaresProblem.from_tuples(
+            [
+                (e32.J, 0, 1),
+                (vmec.aspect, 4, 10),
+                (vmec.mean_iota, 0.42, 10),
+                # (vmec.iota_edge(), 0.42, 10)
+            ]
+        )
+        return np.maximum(-prob.objective(), INVALID_PENALTY), default_fev_var
+    except Exception as e:
+        print(f"Failed with exception {e}, appending invalid penalty")
+        rz_surf = surf.to_RZFourier()
+        rz_surf.plot(engine='plotly')
+        return INVALID_PENALTY, failed_fev_var
 
 
 def ar_target(vmec, target):

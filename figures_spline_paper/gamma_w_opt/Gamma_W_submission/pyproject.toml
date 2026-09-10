@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+# Run the fast, firm3d-free lane with:  pytest -m unit
+#   pytest -m unit                          # <1 s, no firm3d, runs anywhere
+#   pytest                                  # default: unit + fast regression (~25 s, needs firm3d)
+#   pytest -m slow                          # field-building end-to-end Gamma_W (~2.5 min)
+#   pytest -m "unit or regression or slow"  # everything
+addopts = "-m 'not slow' -ra"
+markers = [
+    "unit: fast pure-numpy tests, no firm3d, <1s each",
+    "regression: firm3d-dependent tests against frozen values / identities",
+    "slow: field-building end-to-end Gamma_W runs (~20s each)",
+]
+testpaths = ["tests"]

@@ -53,7 +53,9 @@ import numpy as np
 from matplotlib.patches import Patch
 from sharpen import _full_to_stored_index_map
 from simsopt.geo import SurfaceBSpline
+from simsopt.mhd import Vmec
 from simsopt.util import proc0_print
+from simsopt.util.mpi import MpiPartition
 from tangent_extension import (
     _apex_full_index,
     _apply_tangent_extension,
@@ -65,6 +67,9 @@ from tangent_extension import (
     _periodic_curve_deriv2,
     _u_to_arclength,
 )
+
+mpi = MpiPartition(ngroups=1)
+mpi.write()
 
 REFINE_POLOIDAL_COUNT = 3
 
@@ -543,6 +548,81 @@ def mirror_position_to_phi(pos, phi_frac):
     return np.stack([X, Y, Z], axis=-1)
 
 
+def build_sharpened_twins(
+    spline_surf,
+    spline_kwargs,
+    d_crawl,
+    d_ext,
+    l_x,
+    corner_criterion,
+    n_phi=30,
+    ntheta=60,
+    n_samples=4000,
+    refine_poloidal_count=REFINE_POLOIDAL_COUNT,
+):
+    """
+    One-call entry point for the whole pipeline: sharpen spline_surf's
+    corners into wedges and split it into the two crossover "twin"
+    surfaces (sharpen_with_crossover), then compute the (phi, theta)
+    points on each twin needed to show/evaluate exactly
+    l_x*perimeter of crossover leg beyond each corner
+    (compute_uphi_grid_interpolated).
+
+    d_crawl: shared tangent-extension crawl fraction -- both s1 and s2
+        (arc length, as a fraction of each cross section's own
+        perimeter) used to measure each corner's tangent directions.
+        Not the crossover reach itself.
+    d_ext: the crossover-leg extension fraction the twins are actually
+        BUILT with (sharpen_with_crossover's own d_fraction) -- how far
+        each twin's straight stub reaches past the apex, baked into its
+        control points.
+    l_x: the X-point leg length fraction used only to pick which
+        u-values (the returned grids) to evaluate the ALREADY-built
+        twins at -- independent of d_ext, but must be <= d_ext to stay
+        on the guaranteed-straight part of the stub (a larger value
+        would reach into the real, untouched curve beyond it).
+    corner_criterion: "z" (locate each corner by max Z) or "curvature".
+
+    Mutates spline_surf in place (the sharpening step) and returns
+    (spline_surf, surf_outboard, surf_inboard, grids) where grids is
+    {'outboard': ..., 'inboard': ...} (each a
+    compute_uphi_grid_interpolated result -- the points to evaluate via
+    surf.gamma_lin to get exactly l_x of crossover leg), plus 'phis',
+    'geometry', and 'outboard_is_between' for callers that also want to
+    plot_before_after_twin/plot_leg_length_grid.
+    """
+    if corner_criterion not in ("z", "curvature"):
+        raise ValueError(f"corner_criterion must be 'z' or 'curvature', got {corner_criterion!r}")
+    internal_criterion = "max z" if corner_criterion == "z" else "curvature"
+
+    perimeters = [
+        _cross_section_local_curve(spline_surf, cs, n_samples=n_samples)["L"]
+        for cs in spline_surf.cs_list
+    ]
+    s1 = s2 = d_crawl * min(perimeters)
+
+    surf_outboard, surf_inboard, geometry, outboard_is_between = sharpen_with_crossover(
+        spline_surf, spline_kwargs, s1, s2, d_ext, internal_criterion,
+        n_samples=n_samples, refine_poloidal_count=refine_poloidal_count,
+    )
+
+    phis = phi_fractions(surf_outboard, n_phi=n_phi)
+    grid_outboard = compute_uphi_grid_interpolated(
+        spline_surf, geometry, l_x, outboard_is_between, phis, ntheta=ntheta
+    )
+    grid_inboard = compute_uphi_grid_interpolated(
+        spline_surf, geometry, l_x, not outboard_is_between, phis, ntheta=ntheta
+    )
+    grids = {
+        "outboard": grid_outboard,
+        "inboard": grid_inboard,
+        "phis": phis,
+        "geometry": geometry,
+        "outboard_is_between": outboard_is_between,
+    }
+    return spline_surf, surf_outboard, surf_inboard, grids
+
+
 def plot_leg_length_grid(
     spline_surf, geometry, surf_outboard, surf_inboard, outboard_is_between, leg_fraction, phis, ntheta=60
 ):
@@ -650,8 +730,8 @@ DEMO_SPLINE_KWARGS = {
     "points_per_cs": 6,
     "n_cs": 6,
     "nfp": 2,
-    "M": 12,
-    "N": 12,
+    "M": 16,
+    "N": 16,
     "p_u": 3,
     "p_v": 3,
     "cs_equispaced": True,
@@ -678,33 +758,24 @@ def build_demo_surface(fix_all=False):
 
 
 if __name__ == "__main__":
+    # d_crawl: tangent-extension crawl fraction (both s1 and s2).
+    # d_ext: crossover-leg extension the twins are actually built with.
+    # l_x: leg length (<= d_ext) used to pick the evaluation grids.
+    D_CRAWL = 0.04
+    D_EXT = 0.10
+    L_X = 0.04
+    CORNER_CRITERION = "curvature"
+    N_PHI = 30
+
     spline_kwargs = DEMO_SPLINE_KWARGS
     spline_surf = build_demo_surface()
     spline_surf_before = build_demo_surface(fix_all=True)
 
-    S1_FRACTION = 0.05
-    S2_FRACTION = 0.05
-    D_FRACTION = 0.18
-    CORNER_CRITERION = "max z"
-    # Display-only: how much of each (already-built) crossover leg to
-    # show, independent of D_FRACTION -- must be <= D_FRACTION.
-    LEG_FRACTION = 0.01
-    N_PHI = 30
-
-    perimeters = [
-        _cross_section_local_curve(spline_surf, cs, n_samples=2000)["L"]
-        for cs in spline_surf.cs_list
-    ]
-    S1 = S1_FRACTION * min(perimeters)
-    S2 = S2_FRACTION * min(perimeters)
-    proc0_print(
-        f"s1={S1:.4f}, s2={S2:.4f} (smallest cross-section perimeter is "
-        f"{min(perimeters):.4f}); d_fraction={D_FRACTION}, leg_fraction={LEG_FRACTION}"
+    spline_surf, surf_outboard, surf_inboard, grids = build_sharpened_twins(
+        spline_surf, spline_kwargs, D_CRAWL, D_EXT, L_X, CORNER_CRITERION, n_phi=N_PHI
     )
-
-    surf_outboard, surf_inboard, geometry, outboard_is_between = sharpen_with_crossover(
-        spline_surf, spline_kwargs, S1, S2, D_FRACTION, CORNER_CRITERION
-    )
+    geometry = grids["geometry"]
+    outboard_is_between = grids["outboard_is_between"]
 
     pickle_twin_surface(surf_outboard, spline_kwargs, "sharpen_fixed_s_twin_outboard.pkl")
     pickle_twin_surface(surf_inboard, spline_kwargs, "sharpen_fixed_s_twin_inboard.pkl")
@@ -713,18 +784,33 @@ if __name__ == "__main__":
         "sharpen_fixed_s_twin_inboard.pkl (load with load_twin_surface)."
     )
 
-    plot_before_after_twin(
-        spline_surf_before, spline_surf, geometry, surf_outboard, surf_inboard,
-        outboard_is_between, LEG_FRACTION,
+    # vmec run 
+    vmec = Vmec.vmec_from_surf(
+        nfp=spline_surf.nfp,
+        surf=spline_surf,
+        mpi=mpi,
+        ns=50,
+        M=16,
+        N=16,
+        ftol=1e-11,
+        verbose=True,
+        niter=8000,
+        ntheta=64,
+        nzeta=64,
     )
-    plt.show()
+    vmec.run()
 
-    phis_grid = phi_fractions(surf_outboard, n_phi=N_PHI)
-    plot_leg_length_grid(
-        spline_surf, geometry, surf_outboard, surf_inboard, outboard_is_between,
-        LEG_FRACTION, phis_grid,
-    )
-    plt.show()
+    if mpi.proc0_world:
+        # Both created above by build_sharpened_twins -- plotted together here.
+        plot_before_after_twin(
+            spline_surf_before, spline_surf, geometry, surf_outboard, surf_inboard,
+            outboard_is_between, L_X,
+        )
+        plot_leg_length_grid(
+            spline_surf, geometry, surf_outboard, surf_inboard, outboard_is_between,
+            L_X, grids["phis"],
+        )
+        plt.show()
 
     proc0_print("")
     proc0_print("End of figures_spline_paper/corner_sharpening/sharpen_fixed_s_twin.py")

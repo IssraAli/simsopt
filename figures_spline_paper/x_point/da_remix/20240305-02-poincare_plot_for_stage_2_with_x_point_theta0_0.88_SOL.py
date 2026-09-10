@@ -41,14 +41,12 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..", "corner_sharpening")
 )
 from sharpen_fixed_s_twin import (  # noqa: E402
+    build_sharpened_twins,
     compute_uphi_grid_interpolated,
     mirror_position_to_phi,
-    phi_fractions,
     plot_leg_length_grid,
     reduce_phi_to_fundamental_domain,
-    sharpen_with_crossover,
 )
-from tangent_extension import _cross_section_local_curve  # noqa: E402
 
 proc0_print("Running 1_Simple/tracing_fieldlines_QA.py")
 proc0_print("=========================================")
@@ -64,7 +62,9 @@ logger.setLevel(1)
 # coils_filename = "20240304-01-stage_2_filament_optimization_for_x_point/theta0_0.84_ncoils_4_order_16_R1_0.8_length_target_4.4_weight_0.1_max_curvature_1.4e+01_weight_1.7e-05_msc_5.1_weight_2.5e-06/biot_savart1.json"
 # coils_filename = "20240304-01-stage_2_filament_optimization_for_x_point/theta0_0.84_ncoils_4_order_10_R1_0.71_length_target_4.0_weight_0.11_max_curvature_1.4e+01_weight_2.6e-05_msc_7.5_weight_1.2e-07/biot_savart1.json"
 # coils_filename = "20240304-01-stage_2_filament_optimization_for_x_point/theta0_0.88_ncoils_4_order_10_R1_0.54_length_target_3.8_weight_4.6_max_curvature_7.6_weight_1.1e-06_msc_1.4e+01_weight_4.8e-07/biot_savart1.json"
-coils_filename = "/Users/issraali/codes/simsopt/figures_spline_paper/x_point/da_remix/stage_2_scan_twin_out/order_10_R1_0.42_length_target_4.8_weight_0.21_max_curvature_7.1_weight_0.00022_msc_1.4e+01_weight_0.00044_cc_0.11_weight_9.7e+01/biot_savart.json"
+# coils_filename = "/Users/issraali/codes/simsopt/figures_spline_paper/x_point/da_remix/stage_2_scan_twin_out/order_10_R1_0.42_length_target_4.8_weight_0.21_max_curvature_7.1_weight_0.00022_msc_1.4e+01_weight_0.00044_cc_0.11_weight_9.7e+01/biot_savart.json"
+# manifold-optimization refinement of the above (see manifold_opt_twin.py):
+coils_filename = "/Users/issraali/codes/simsopt/figures_spline_paper/x_point/da_remix/stage_2_scan_twin_out/order_10_R1_0.42_length_target_4.8_weight_0.21_max_curvature_7.1_weight_0.00022_msc_1.4e+01_weight_0.00044_cc_0.11_weight_9.7e+01/manifold_opt/biot_savart.json"
 
 # If we're in the CI, make the run a bit cheaper:
 # nfieldlines = 3 if in_github_actions else 10
@@ -913,10 +913,9 @@ ntheta = 64
 # two corners are always well-separated), so refine_poloidal_count=0
 # (spline_kwargs already describes that final resolution, not a
 # pre-refine_poloidal one). Same parameter values as stage_2_scan_twin.py.
-S1_FRACTION = 0.05
-S2_FRACTION = 0.05
-D_FRACTION = 0.18
-CORNER_CRITERION = "max z"
+D_CRAWL = 0.05
+D_EXT = 0.18
+CORNER_CRITERION = "z"
 N_PHI = 30
 NTHETA = 20
 LEG_FRACTION = 0.02
@@ -924,7 +923,7 @@ LEG_FRACTION = 0.02
 
 def build_surfaces():
     """The twin crossover surfaces this equilibrium's X-point boundary
-    splits into (see sharpen_with_crossover) -- same construction
+    splits into (see build_sharpened_twins) -- same construction
     pattern as stage_2_scan_twin.py's build_flux_grids(), including
     showing both twins on their own custom (u, phi) grid before using
     them for anything else."""
@@ -932,34 +931,26 @@ def build_surfaces():
     spline_surf.unfix_all()
     spline_surf.x = dofs
 
-    perimeters = [
-        _cross_section_local_curve(spline_surf, cs, n_samples=2000)["L"]
-        for cs in spline_surf.cs_list
-    ]
-    S1 = S1_FRACTION * min(perimeters)
-    S2 = S2_FRACTION * min(perimeters)
-
-    surf_outboard, surf_inboard, geometry, outboard_is_between = (
-        sharpen_with_crossover(
-            spline_surf,
-            spline_kwargs,
-            S1,
-            S2,
-            D_FRACTION,
-            CORNER_CRITERION,
-            refine_poloidal_count=0,
-        )
+    spline_surf, surf_outboard, surf_inboard, grids = build_sharpened_twins(
+        spline_surf,
+        spline_kwargs,
+        D_CRAWL,
+        D_EXT,
+        LEG_FRACTION,
+        CORNER_CRITERION,
+        n_phi=N_PHI,
+        ntheta=NTHETA,
+        refine_poloidal_count=0,
     )
 
-    phis = phi_fractions(surf_outboard, n_phi=N_PHI)
     fig, _ax = plot_leg_length_grid(
         spline_surf,
-        geometry,
+        grids["geometry"],
         surf_outboard,
         surf_inboard,
-        outboard_is_between,
+        grids["outboard_is_between"],
         LEG_FRACTION,
-        phis,
+        grids["phis"],
         ntheta=NTHETA,
     )
     fig.savefig(OUT_DIR + "flux_grids.png")
@@ -969,8 +960,8 @@ def build_surfaces():
         spline_surf,
         surf_outboard,
         surf_inboard,
-        geometry,
-        outboard_is_between,
+        grids["geometry"],
+        grids["outboard_is_between"],
     )
 
 

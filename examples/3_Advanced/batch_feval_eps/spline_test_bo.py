@@ -3,6 +3,7 @@
 import sys
 
 import numpy as np
+import torch
 from bo_model import VanillaBO
 from bo_utils import write_doflist_maxlist_minlist
 from mpi4py import MPI
@@ -38,7 +39,7 @@ if __name__ == "__main__":
 
     dof_list, ub, lb = write_doflist_maxlist_minlist(spline_kwargs)
 
-    n_init = 12# 4*len(lb)
+    n_init = 4 * len(lb)
 
     if rank == 0:
         optimizer = VanillaBO(
@@ -69,16 +70,29 @@ if __name__ == "__main__":
             new_y, new_yvar = parallel_batch_target(
                 X, spline_kwargs, lb, ub, stop
             )
+            print(f"Random iter {count}: {new_y}")
             initial_y.append(new_y)
             initial_yvar.append(new_yvar)
             count += batch_size
-
+        optimizer.X_history = torch.Tensor(
+            np.array(initial_X).reshape(-1, optimizer.dims)
+        ).to(torch.double)
+        optimizer.y_history = (
+            torch.Tensor(np.array(initial_y), device=optimizer.device)
+            .reshape(-1, 1)
+            .to(torch.double)
+        )
+        optimizer.Y_var = (
+            torch.Tensor(np.array(initial_yvar), device=optimizer.device)
+            .reshape(-1, 1)
+            .to(torch.double)
+        )
         print(
             f"Completed {count} initial runs. Beginning bayesian iterations. "
         )
-        print(initial_y)
-        print(np.std(initial_y))
-        print(np.mean(initial_y))
+        # print(initial_y)
+        # print(np.std(initial_y))
+        # print(np.mean(initial_y))
         i = 0
 
         # bayesian runs
