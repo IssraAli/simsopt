@@ -70,6 +70,7 @@ from simsopt.geo import (
     curves_to_vtk,
 )
 from simsopt.objectives import QuadraticPenalty
+from simsopt.util import comm_world
 
 nfp = DEMO_SPLINE_KWARGS["nfp"]
 
@@ -279,18 +280,24 @@ def build_flux_grids():
 
     # Show the two twins on the exact same custom (u, phi) grids the
     # flux objective below is evaluated on, before any coil
-    # optimization runs.
-    fig, _ax = plot_leg_length_grid(
-        spline_surf,
-        grids["geometry"],
-        surf_outboard,
-        surf_inboard,
-        grids["outboard_is_between"],
-        LEG_FRACTION,
-        grids["phis"],
-    )
-    fig.savefig(os.path.join(SWEEP_DIR, "flux_grids.png"))
-    plt.show()
+    # optimization runs. Every MPI rank calls build_flux_grids()
+    # (MPI is SPMD -- the leader/worker split only happens later,
+    # inside least_squares_mpi_solve's own mpi.apart()), so without
+    # this guard every rank would independently build/save/show the
+    # same plot -- same pattern as sharpen_fixed_s_twin.py's own
+    # `if mpi.proc0_world:`-gated demo plotting.
+    if comm_world is None or comm_world.rank == 0:
+        fig, _ax = plot_leg_length_grid(
+            spline_surf,
+            grids["geometry"],
+            surf_outboard,
+            surf_inboard,
+            grids["outboard_is_between"],
+            LEG_FRACTION,
+            grids["phis"],
+        )
+        fig.savefig(os.path.join(SWEEP_DIR, "flux_grids.png"))
+        plt.show()
 
     return (
         surf_outboard,
