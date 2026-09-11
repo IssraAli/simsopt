@@ -14,26 +14,31 @@ size = comm.Get_size()
 rank = comm.Get_rank()
 
 INVALID_PENALTY = np.array([-1000])
-default_fev_var = np.array([1e-3])
-failed_fev_var = np.array([5e2])
 
 mpi = MpiPartition()
 
 
 def parallel_batch_target(candidates, spline_kwargs, lb, ub, stopp):
+    """Evaluate a batch of candidates across ranks.
+
+    Returns (values, success_mask). Failed evaluations are reported with a
+    sentinel value but flagged as not-success so callers can exclude them from
+    the GP fit, rather than being fed in with an inflated variance: a genuine
+    failure isn't a noisy measurement of the true function, it's a different
+    kind of information (infeasible/undefined region) and shouldn't be mixed
+    into the target's actual (now-inferred) noise model.
+    """
     stopp[0] = comm.bcast(stopp[0], root=0)
     if stopp[0] == 0:
         x = comm.scatter(candidates, root=0)
-        val, var = target(x.flatten(), spline_kwargs, lb, ub)
+        val, success = target(x.flatten(), spline_kwargs, lb, ub)
         gathered_val = comm.gather(val)
-        gathered_var = comm.gather(var)
+        gathered_success = comm.gather(success)
         if rank == 0:
             print("batch complete. ")
             Y_cand = np.array(gathered_val)
-            Yvar_cand = np.array(gathered_var)
-            return torch.Tensor(Y_cand).reshape(-1, 1), torch.Tensor(
-                Yvar_cand
-            ).reshape(-1, 1)
+            success_mask = np.array(gathered_success)
+            return torch.Tensor(Y_cand).reshape(-1, 1), success_mask
 
 
 def target(X, spline_kwargs, lb, ub):
@@ -67,12 +72,12 @@ def target(X, spline_kwargs, lb, ub):
                 # (vmec.iota_edge(), 0.42, 10)
             ]
         )
-        return np.maximum(-prob.objective(), INVALID_PENALTY), default_fev_var
+        return np.maximum(-prob.objective(), INVALID_PENALTY), True
     except Exception as e:
         print(f"Failed with exception {e}, appending invalid penalty")
         rz_surf = surf.to_RZFourier()
         rz_surf.plot(engine='plotly')
-        return INVALID_PENALTY, failed_fev_var
+        return INVALID_PENALTY, False
 
 
 def ar_target(vmec, target):

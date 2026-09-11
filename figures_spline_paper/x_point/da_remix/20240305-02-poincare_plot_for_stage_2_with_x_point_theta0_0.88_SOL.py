@@ -95,9 +95,9 @@ n_core_fieldlines = 8
 # QUASR) equilibrium's actual axis, so hardcoding R0_core=1 could seed
 # core field lines outside the real confined region entirely.
 
-delta_initial_conditions = 0.01
-inital_conditions_ntheta = 20
-inital_conditions_nphi = 25
+delta_initial_conditions = 0.005
+inital_conditions_ntheta = 10
+inital_conditions_nphi = 10
 nfieldlines = (
     n_core_fieldlines + inital_conditions_ntheta * inital_conditions_nphi * 2
 )
@@ -1080,7 +1080,10 @@ bs = simsopt.load(coils_filename)
 # X-point, not representative of the device as a whole.
 bs.set_points(
     np.concatenate(
-        [surf_outboard.gamma().reshape((-1, 3)), surf_inboard.gamma().reshape((-1, 3))]
+        [
+            surf_outboard.gamma().reshape((-1, 3)),
+            surf_inboard.gamma().reshape((-1, 3)),
+        ]
     )
 )
 proc0_print("Currents before scaling:", [c.current.full_x[0] for c in bs.coils])

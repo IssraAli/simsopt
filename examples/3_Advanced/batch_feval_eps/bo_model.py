@@ -2,7 +2,6 @@ from typing import Any
 import torch
 
 from botorch import fit_fully_bayesian_model_nuts
-from botorch.acquisition.logei import qLogExpectedImprovement
 from botorch.models.fully_bayesian import SaasFullyBayesianSingleTaskGP
 from botorch.models.transforms import Standardize, Normalize
 from botorch.optim import optimize_acqf
@@ -20,7 +19,7 @@ from botorch.models.utils.gpytorch_modules import get_covar_module_with_dim_scal
 
 from gpytorch.kernels import ScaleKernel
 
-from botorch.acquisition.logei import qLogExpectedImprovement
+from botorch.acquisition.logei import qLogNoisyExpectedImprovement
 from botorch.acquisition import qExpectedImprovement,  qUpperConfidenceBound
 from botorch.sampling import SobolQMCNormalSampler
 
@@ -107,31 +106,35 @@ class VanillaBO(GlobalOptimizer):
         # all X_history are stored unscaled - this is NECESSARY for rebounding
         self.X_history = None
         self.y_history = None
-        self.Y_var = None,
         self.device = 'cpu'
         self.dtype = torch.double
         self.dof_list = dof_list
         self.spline_kwargs = spline_kwargs
 
     def _fitting_loop(self, batch_size):
-        print(f'Current best: {self.y_history.max()}')
-        print(f'at {from_unit_cube(self.X_history[np.argmax(self.y_history)], self.lb, self.ub)}')
+        print(f'Current best: {self.y_history.max()}', flush=True)
+        print(f'at {from_unit_cube(self.X_history[np.argmax(self.y_history)], self.lb, self.ub)}', flush=True)
         # bounds = torch.tensor(np.vstack([self.lb, self.ub]))
+        # No train_Yvar: the target is genuinely noisy but the noise level is
+        # unknown, so it is inferred (as a GP hyperparameter) rather than fixed.
         gp = SingleTaskGP(
-            train_X = self.X_history, 
+            train_X = self.X_history,
             train_Y = self.y_history,
-            train_Yvar = self.Y_var,
             outcome_transform=Standardize(m=1),
             #covar_module = get_covar_module_with_dim_scaled_prior_maxlengthscale_constrained(ard_num_dims=len(self.lb), use_rbf_kernel=True)
         )
         mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
         fit_gpytorch_mll(mll)
         sampler = SobolQMCNormalSampler(sample_shape=torch.Size([1024]), seed=0)
-        MC_LogEI = qLogExpectedImprovement(gp, best_f=self.y_history.max(), sampler=sampler, fat=False)
-        
+        # Noisy EI (rather than plain EI) integrates over uncertainty in which
+        # observed point is truly best, instead of trusting the raw incumbent.
+        MC_LogNEI = qLogNoisyExpectedImprovement(
+            gp, X_baseline=self.X_history, sampler=sampler, prune_baseline=True,
+        )
+
         torch.manual_seed(seed=0)  # to keep the restart conditions the same
         candidates, _ = optimize_acqf(
-            acq_function=MC_LogEI,
+            acq_function=MC_LogNEI,
             bounds=torch.tensor([[0.0] * len(self.lb), [1.0] * len(self.lb)]),
             q=batch_size,
             num_restarts=128,
@@ -146,10 +149,10 @@ class VanillaBO(GlobalOptimizer):
         '''
         # assert batch_size == 1 , 'LogExpectedImprovement supports only one new point per ask'
         gp, candidates = self._fitting_loop(batch_size)
-        print(f'Length scales: {gp.covar_module.lengthscale.detach()}')      
+        print(f'Length scales: {gp.covar_module.lengthscale.detach()}', flush=True)
         return candidates
     
-    def tell(self, X_new:np.ndarray, y_new:np.ndarray, Y_var_new: np.ndarray, lb:np.ndarray, ub:np.ndarray):
+    def tell(self, X_new:np.ndarray, y_new:np.ndarray, lb:np.ndarray, ub:np.ndarray):
         '''
         Literally just concatenating to history and updating bounds
         '''
@@ -158,7 +161,6 @@ class VanillaBO(GlobalOptimizer):
 
         self.X_history = torch.cat((self.X_history, X_new), dim = 0)
         self.y_history = torch.cat((self.y_history, y_new))
-        self.Y_var = torch.cat((self.Y_var, Y_var_new))
         self.lb = lb
         self.ub = ub
 

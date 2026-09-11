@@ -31,30 +31,41 @@ least_squares_mpi_solve's finite-difference Jacobian (grad=True) --
 MPIFiniteDifference distributes the per-dof columns across MPI ranks,
 so run this with `mpirun -n <nprocs>`.
 
-Seed points are a union of outboard+inboard crossover-leg grid points
--- the same KIND of grid plot_leg_length_grid/build_flux_grids uses for
-the flux objective (not the twins' full closed surfaces), but built at
-its own N_PHI_MANIFOLD/NTHETA_MANIFOLD resolution (see below) via
+Seed points match the paper's own setup (Sec. II.3: "we use an array of
+points on the target surface for a single phi angle, here chosen to be
+phi0 = 0.25*pi") rather than spanning many toroidal angles: a single
+poloidal array (NTHETA_MANIFOLD points) per twin, all at ONE toroidal
+cross section -- N_PHI_MANIFOLD=1 below, together with phi_fractions'
+own np.linspace(cs_zeta[0], cs_zeta[-1], 1) convention (returns just
+cs_zeta[0]), pins that single phi0 to the FIRST corner-defining cross
+section (spline_surf's own cs_zeta[0]) -- the corner/apex itself,
+rather than the paper's arbitrary-looking 0.25*pi. Built via
 build_manifold_seed_grid, independent of stage_2_scan_twin.py's own
-N_PHI/NTHETA for the flux objective -- change N_PHI_MANIFOLD/
-NTHETA_MANIFOLD to trade seed-grid density for finite-difference cost
-without touching the flux objective's own grid at all.
+N_PHI/NTHETA for the flux objective -- raise N_PHI_MANIFOLD (and see
+the cost warning below) to seed additional cross sections instead.
 
-Cost warning: at N_PHI_MANIFOLD=NTHETA_MANIFOLD=64 (~4096 points per
-twin, ~8192 total) with ALL coil dofs free (~250, shape + current),
-each finite-difference Jacobian costs ~8192*(ndofs+1) field-line
-integrations. Lower N_PHI_MANIFOLD/NTHETA_MANIFOLD for a cheaper first
-pass before committing to the full-resolution run.
+Cost warning: total seed points = 2*N_PHI_MANIFOLD*NTHETA_MANIFOLD (the
+2 is outboard+inboard), and each finite-difference Jacobian costs
+(seed points)*(ndofs+1) field-line integrations, with ndofs ~250 (all
+coil shape+current dofs free) -- N_PHI_MANIFOLD=1 keeps this cheap;
+raising it back up (e.g. to seed every cross section rather than just
+one) multiplies that cost linearly.
 """
 
 import os
+import sys
 
 import numpy as np
 import simsopt
 from field_topology_optimizables import TargetSurfaceDeviation
 
-# stage_2_scan_twin's own import (above) already put corner_sharpening on
-# sys.path -- see its own module docstring/imports.
+# Needed for the sharpen_fixed_s_twin import below -- don't rely on
+# stage_2_scan_twin's own sys.path.insert side effect (its own import
+# happens to appear later below, and alphabetical import sorting has
+# already reordered this once).
+sys.path.insert(
+    0, os.path.join(os.path.dirname(__file__), "..", "..", "corner_sharpening")
+)
 from sharpen_fixed_s_twin import (
     DEMO_SPLINE_KWARGS,
     build_demo_surface,
@@ -115,13 +126,14 @@ CC_WEIGHT = 97.0
 # Manifold-objective seed grid -- independent of the flux objective's
 # own N_PHI/NTHETA (stage_2_scan_twin.py's globals): change these to
 # make the manifold seed grid coarser/finer without touching the flux
-# objective's own grid at all. Defaults match the flux grid's own
-# resolution (see cost warning in the module docstring).
-N_PHI_MANIFOLD = 12
-NTHETA_MANIFOLD = 12
+# objective's own grid at all. N_PHI_MANIFOLD=1 matches the paper (a
+# single toroidal cross section -- see module docstring); raise it to
+# seed additional cross sections instead (see cost warning above).
+N_PHI_MANIFOLD = 1
+NTHETA_MANIFOLD = 32
 NTHETA_TARGET = 400  # poloidal resolution of each seed point's own
 # target cross section (nearest-point search)
-MANIFOLD_WEIGHT = 10.0  # TODO: tune against the flux term's own scale
+MANIFOLD_WEIGHT = 1000.0  # TODO: tune against the flux term's own scale
 # (Jf ~ 5.8e-5 at the stage-2 optimum) before a
 # full run -- this is a first guess, not a
 # validated value.
