@@ -39,6 +39,7 @@ high-fidelity reconstruction.
 """
 
 import matplotlib
+
 matplotlib.use("qtagg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -69,8 +70,8 @@ spline_kwargs = {
     "points_per_cs": 6,
     "n_cs": 5,
     "nfp": 5,
-    "M": 12,
-    "N": 12,
+    "M": 6,
+    "N": 6,
     "p_u": 3,
     "p_v": 3,
     "cs_equispaced": True,
@@ -80,6 +81,7 @@ spline_kwargs = {
     "cs_basis": "polar",
     "nurbs": False,
     "use_bishop_frame": True,
+    "knot_parametrization": "uniform",
 }
 
 
@@ -103,12 +105,16 @@ def plot_cross_section_comparison(target_surf, spline_surf, title, n_cuts=4):
         ax.plot(
             np.append(target_r, target_r[0]),
             np.append(target_pts[:, 2], target_pts[0, 2]),
-            "k-", lw=2, label="target (W7-X)",
+            "k-",
+            lw=2,
+            label="target (W7-X)",
         )
         ax.plot(
             np.append(spline_r, spline_r[0]),
             np.append(spline_pts[:, 2], spline_pts[0, 2]),
-            "r--", lw=2, label="optimized spline",
+            "r--",
+            lw=2,
+            label="optimized spline",
         )
         ax.set_title(rf"$\zeta$ = {phi * 2 * np.pi:.3f} rad")
         ax.set_xlabel("R [m]")

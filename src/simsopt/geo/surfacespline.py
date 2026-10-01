@@ -925,7 +925,8 @@ class PseudoAxis(sopp.Curve, Curve):
         # t=0 point, which sits on the periodic wrap seam where the
         # pre-existing Newton solve in _solve_v has a floating-point-level
         # quirk (see gammadashdash_impl's validation).
-        t_dense = np.linspace(1e-8, 1.0 / nfp - 1e-8, n_prop)
+        eps = np.finfo(float).eps
+        t_dense = np.linspace(eps, 1.0 / nfp - eps, n_prop)
         X, Y, Z, dX, dY, dZ = self._gamma_and_derivs(t_dense, max_deriv=1)
         gamma_dense = np.vstack([X, Y, Z]).T
         gammadash_dense = np.vstack([dX, dY, dZ]).T
@@ -968,7 +969,7 @@ class PseudoAxis(sopp.Curve, Curve):
         N_corr = cB[:, None] * N_dense + sB[:, None] * B_dense
 
         # evaluate at the actually-requested quadpoints: reduce into one
-        # field period, interpolate the corrected propagated normal there
+        # field period, interpolate the co5rrected propagated normal there
         # (T is cheap and exact, so it's recomputed directly rather than
         # interpolated), then tile by the rigid nfp-fold rotation and
         # re-orthonormalize against the exact tangent.
@@ -1394,7 +1395,9 @@ class SurfaceBSpline(sopp.Surface, Surface):
         # is unaffected by refinement, same as for refine_poloidal.
         core_n_v_old = 2 * n_cs_old - 2
         point_list, w_list = self._get_control_points_xyz(return_w=True)
-        old_pos = np.array(point_list[:core_n_v_old])  # (core_n_v_old, n_ctrl_pts, 3)
+        old_pos = np.array(
+            point_list[:core_n_v_old]
+        )  # (core_n_v_old, n_ctrl_pts, 3)
         old_w = np.array(w_list[:core_n_v_old])  # (core_n_v_old, n_ctrl_pts)
 
         new_pos = np.empty((2 * core_n_v_old, n_ctrl_pts, 3))
@@ -1417,9 +1420,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
             z_sym = i == 0 or i == new_n_cs - 1
             rel = new_pos[i] - axis_pos[i]  # (n_ctrl_pts, 3)
             r_full = np.hypot(rel @ e1[i], rel @ e2[i])
-            theta_full = np.mod(
-                np.arctan2(rel @ e2[i], rel @ e1[i]), 2 * np.pi
-            )
+            theta_full = np.mod(np.arctan2(rel @ e2[i], rel @ e1[i]), 2 * np.pi)
             w_full = new_w[i]
 
             if z_sym:

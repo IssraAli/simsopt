@@ -29,7 +29,13 @@ a fixed point. So the WHOLE combined problem below (including the
 terms that could otherwise use analytic gradients) is solved via
 least_squares_mpi_solve's finite-difference Jacobian (grad=True) --
 MPIFiniteDifference distributes the per-dof columns across MPI ranks,
-so run this with `mpirun -n <nprocs>`.
+so run this with `srun -n <nprocs> python3 manifold_opt_twin.py` (NOT
+mpirun -- on NERSC/Cray systems mpirun isn't the MPI launcher; srun's
+own PMI/PMIx integration is what actually spawns and coordinates the
+MPI ranks mpi4py/MpiPartition need, whether inside an salloc session
+or a batch job). Also see run_script.sh (simsopt-pyoculus-manifold-opt/
+examples/manifold_optimization/) for the sbatch pattern this toolkit
+was originally set up with.
 
 Seed points match the paper's own setup (Sec. II.3: "we use an array of
 points on the target surface for a single phi angle, here chosen to be
@@ -129,7 +135,7 @@ CC_WEIGHT = 97.0
 # objective's own grid at all. N_PHI_MANIFOLD=1 matches the paper (a
 # single toroidal cross section -- see module docstring); raise it to
 # seed additional cross sections instead (see cost warning above).
-N_PHI_MANIFOLD = 1
+N_PHI_MANIFOLD = 32
 NTHETA_MANIFOLD = 32
 NTHETA_TARGET = 400  # poloidal resolution of each seed point's own
 # target cross section (nearest-point search)
