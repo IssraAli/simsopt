@@ -3417,6 +3417,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         fix_axis_angles=False,
         z_axis_max=0.5,
         cs_axis_ratio=None,
+        cs_angle_step_max=None,
     ):
         """
         Build linear inequality constraints lb <= A @ dofs <= ub on the
@@ -3465,6 +3466,12 @@ class SurfaceBSpline(sopp.Surface, Surface):
             already fixed.
         z_axis_max : float
             Bound |z_axis_i| <= z_axis_max on the interior axis points.
+        cs_angle_step_max : float or None
+            If a number, bound the rotation between neighboring cross
+            sections, |cs_angle_{k+1} - cs_angle_k| <= cs_angle_step_max,
+            for the free cross-section angle dofs (cs_global_angle_free).
+            Fixed neighbors (e.g. the end cross sections, pinned by
+            stellarator symmetry) enter as constants. None adds no rows.
         cs_axis_ratio : float or None
             If None (default), every cross-section radius is bounded by
             every axis radius (i.e. the smallest one). If a number a, that
@@ -3608,6 +3615,38 @@ class SurfaceBSpline(sopp.Surface, Surface):
                     elif ax_free:
                         # cross-section radius fixed at c -> r_axis_m >= c
                         add_row({ax_name: 1}, cs_val, maxval, title)
+
+        if cs_angle_step_max is not None:
+            angle_name = lambda k: f"{self.name}:cs_angle{k}"  # noqa: E731
+            for k in range(self.n_cs - 1):
+                n0, n1 = angle_name(k), angle_name(k + 1)
+                f0, f1 = n0 in indices_dict, n1 in indices_dict
+                if not (f0 or f1):
+                    continue
+                title = f"|cs_angle{k + 1} - cs_angle{k}| <= {cs_angle_step_max}"
+                if f0 and f1:
+                    add_row(
+                        {n1: 1, n0: -1},
+                        -cs_angle_step_max,
+                        cs_angle_step_max,
+                        title,
+                    )
+                elif f1:
+                    c0 = self.get(f"cs_angle{k}")
+                    add_row(
+                        {n1: 1},
+                        c0 - cs_angle_step_max,
+                        c0 + cs_angle_step_max,
+                        title,
+                    )
+                else:
+                    c1 = self.get(f"cs_angle{k + 1}")
+                    add_row(
+                        {n0: 1},
+                        c1 - cs_angle_step_max,
+                        c1 + cs_angle_step_max,
+                        title,
+                    )
 
         A = (
             np.array(constraints_list)

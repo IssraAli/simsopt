@@ -3,13 +3,30 @@
 Draw SurfaceBSpline dof vectors at random from the feasible region used
 in the constrained spline examples, and count how many of the resulting
 boundaries VMEC converges on. The feasible region is:
-  - the class's default box bounds on the cross-section thetas and the
-    axis angles (zeta_axis) only, and
+  - the class's default box bounds on the cross-section thetas, the
+    cross-section rotation angles (cs_angle, free unless
+    --fixed-cs-angles) and the axis angles (zeta_axis) only, and
   - SurfaceBSpline.write_inequality_constraints() on everything else
-    (nested radii: cs r <= every axis r, axis r <= first axis r or the
-    fixed-scale cap; |z_axis| <= --z-axis-max (0.5); r >= 0).
+    (a * r_cs <= mean(r_axis) with a = --cs-axis-ratio (default 2.6; 'none'
+    gives r_cs <= every axis r instead), axis r <= first axis r or the
+    fixed-scale cap (r_axis_0 is fixed at 1 unless --free-r-axis-0);
+    |z_axis| <= --z-axis-max (0.5); r >= 0).
 Every other dof has its box bound dropped, as in those examples. The
 zeta_axis dofs get no linear constraints, only their box bounds.
+
+Defaults aimed at aspect ratio ~3.5-8 (1.3 * a / F with F, the per-draw
+mean cross-section fraction, log-uniform in --cs-size-range 0.46 0.92): on
+256 draws 96% land in [3.5, 8]. VMEC runs with ns=51, M=N=8, a 64x64 grid,
+ftol=1e-11, niter=5000; the spline's own Fourier transform uses M=N=8
+(--spline-M).
+
+Cross-section shapes (--cs-shape): 'random' draws independent radii; 'ellipse'
+(sobol only) makes every cross section of a draw an ellipse of one
+elongation (log-uniform up to --ellipse-max-elong) whose orientation turns by
+N*pi/2 over the half period (N in -W..W, --ellipse-max-winding), the
+near-axis way to produce iota; the cs_angle dofs are fixed then because the
+end cross sections are pinned at angle 0 by stellarator symmetry, so a
+winding has to live in the shape.
 
 Two samplers (--sampler):
   sobol (default): a scrambled Sobol design in normalized coordinates that
@@ -77,21 +94,71 @@ parser.add_argument(
 parser.add_argument("--ngroups", type=int, default=None)
 parser.add_argument("--axis-r-max", type=float, default=1.0)
 parser.add_argument("--z-axis-max", type=float, default=0.5)
+def float_or_none(text):
+    return None if text.lower() == "none" else float(text)
+
+
 parser.add_argument(
     "--cs-axis-ratio",
-    type=float,
-    default=None,
-    help="a in a*r_cs <= mean(r_axis); default: r_cs <= every axis radius",
+    type=float_or_none,
+    default=2.6,
+    help="a in a*r_cs <= mean(r_axis) (default 2.6, which with the default "
+    "--cs-size-range keeps the aspect ratio mostly in [3.5, 8]); 'none' "
+    "uses r_cs <= every axis radius instead",
 )
 parser.add_argument("--spline-M", type=int, default=8, help="spline M = N")
+parser.add_argument(
+    "--cs-angle-step-max",
+    type=float_or_none,
+    default=-1.0,
+    help="max |cs_angle_{k+1} - cs_angle_k| between neighboring cross "
+    "sections; default (-1) = 2*pi/points_per_cs, 'none' = no limit",
+)
+parser.add_argument(
+    "--cs-shape",
+    choices=["random", "ellipse"],
+    default="random",
+    help="'random': independent cross-section radii. 'ellipse': each draw "
+    "uses elliptical cross sections of one elongation whose orientation "
+    "winds along the half period (sobol only; the cs_angle dofs are then "
+    "fixed, since the orientation lives in the shape)",
+)
+parser.add_argument("--ellipse-max-elong", type=float, default=2.0)
+parser.add_argument(
+    "--ellipse-max-winding",
+    type=int,
+    default=1,
+    help="ellipse orientation turns by N*pi/2 over the half period, with N "
+    "uniform in -W..W (the end cross sections stay up-down symmetric)",
+)
+parser.add_argument("--ellipse-noise", type=float, default=0.15)
+parser.add_argument(
+    "--theta-spread",
+    type=float,
+    default=0.5,
+    help="ellipse design: each theta stays within this fraction of its box "
+    "width, centered on the box middle",
+)
+parser.add_argument(
+    "--fixed-cs-angles",
+    action="store_true",
+    help="pin the cross-section rotation angles at 0 (default: free, "
+    "bounded by the class's own +-pi/2 box bounds)",
+)
 parser.add_argument(
     "--cs-size-range",
     type=float,
     nargs=2,
-    default=None,
+    default=[0.46, 0.92],
     metavar=("LO", "HI"),
     help="per-draw mean cross-section fraction F, log-uniform in [LO, HI]; "
-    "each draw's cross-section fractions are rescaled to mean F (sobol only)",
+    "each draw's cross-section fractions are rescaled to mean F (sobol only; "
+    "default 0.46 0.92). Aspect ratio ~ 1.3 * a / F.",
+)
+parser.add_argument(
+    "--no-cs-size-range",
+    action="store_true",
+    help="skip the per-draw size factor (plain Sobol cross-section fractions)",
 )
 parser.add_argument(
     "--free-r-axis-0",
@@ -126,6 +193,8 @@ parser.add_argument(
 )
 args = parser.parse_args()
 args.outdir = os.path.abspath(args.outdir)  # the script chdirs into it
+if args.no_cs_size_range:
+    args.cs_size_range = None
 
 mpi = MpiPartition(ngroups=args.ngroups)
 mpi.write()
@@ -144,12 +213,17 @@ spline_kwargs = {
     "p_v": 3,
     "cs_equispaced": True,
     "rays_equispaced": False,
-    "cs_global_angle_free": False,
+    "cs_global_angle_free": not (
+        args.fixed_cs_angles or args.cs_shape == "ellipse"
+    ),
     "axis_angles_fixed": False,
     "cs_basis": "polar",
     "nurbs": False,
     "use_bishop_frame": True,
 }
+
+if args.cs_angle_step_max == -1.0:
+    args.cs_angle_step_max = 2 * np.pi / spline_kwargs["points_per_cs"]
 
 spline_surf = SurfaceBSpline(**spline_kwargs)
 if not args.free_r_axis_0:
@@ -162,6 +236,7 @@ A_lc, lb_lc, ub_lc, lc_titles = spline_surf.write_inequality_constraints(
     fix_axis_angles=args.fixed_axis_angles,
     z_axis_max=args.z_axis_max,
     cs_axis_ratio=args.cs_axis_ratio,
+    cs_angle_step_max=args.cs_angle_step_max,
 )
 n_dofs = len(spline_surf.x)
 names = spline_surf.dof_names
@@ -169,7 +244,9 @@ names = spline_surf.dof_names
 # Box bounds are kept only for thetas and axis angles; everything else is
 # governed by the linear constraints (same split as the constrained
 # examples).
-keep_box = np.array([(":theta_" in n) or (":zeta_axis_" in n) for n in names])
+keep_box = np.array(
+    [(":theta_" in n) or (":zeta_axis_" in n) or (":cs_angle" in n) for n in names]
+)
 box_lb = np.where(keep_box, spline_surf.lower_bounds, -np.inf)
 box_ub = np.where(keep_box, spline_surf.upper_bounds, np.inf)
 zeta_cols = [i for i, n in enumerate(names) if ":zeta_axis_" in n]
@@ -264,6 +341,7 @@ def sobol_design(n_samples, seed):
         + z_axis
         + box
         + (["__size__"] if args.cs_size_range else [])
+        + (["__elong__", "__wind__"] if args.cs_shape == "ellipse" else [])
     )
     m = int(np.ceil(np.log2(max(n_samples, 2))))
     cube = qmc.Sobol(d=len(cube_names), scramble=True, seed=seed).random_base2(
@@ -309,9 +387,69 @@ def sobol_design(n_samples, seed):
     )
     for n in z_axis:
         out[:, col[n]] = zmax * (2 * c[n] - 1)
-    for n in box:
+    # cs angles: map sequentially into [max(box lo, prev - step), min(box hi,
+    # prev + step)], also keeping within step of the next fixed neighbor,
+    # so the neighbor-step rows hold by construction
+    step = args.cs_angle_step_max
+    ang = sorted(
+        [n for n in box if ":cs_angle" in n],
+        key=lambda n: int(n.split("cs_angle")[-1]),
+    )
+    prev = np.zeros(n_samples)  # cs_angle0 is fixed at 0 (stellarator symmetry)
+    n_cs = spline_kwargs["n_cs"]
+    for n in ang:
         i = col[n]
-        out[:, i] = box_lb[i] + (box_ub[i] - box_lb[i]) * c[n]
+        k = int(n.split("cs_angle")[-1])
+        lo, hi = box_lb[i] * np.ones(n_samples), box_ub[i] * np.ones(n_samples)
+        if step is not None:
+            lo, hi = np.maximum(lo, prev - step), np.minimum(hi, prev + step)
+            # distance to the fixed last cross section (angle 0) after
+            # n_cs-1-k further steps
+            reach = step * (n_cs - 1 - k)
+            lo, hi = np.maximum(lo, -reach), np.minimum(hi, reach)
+        out[:, i] = lo + (hi - lo) * c[n]
+        prev = out[:, i]
+    for n in box:
+        if n in ang:
+            continue
+        i = col[n]
+        if args.cs_shape == "ellipse" and ":theta_" in n:
+            mid = 0.5 * (box_lb[i] + box_ub[i])
+            out[:, i] = mid + args.theta_spread * (c[n] - 0.5) * (
+                box_ub[i] - box_lb[i]
+            )
+        else:
+            out[:, i] = box_lb[i] + (box_ub[i] - box_lb[i]) * c[n]
+    if args.cs_shape == "ellipse":
+        assert args.cs_size_range, "--cs-shape ellipse needs --cs-size-range"
+        lo, hi = args.cs_size_range
+        F = np.exp(np.log(lo) + (np.log(hi) - np.log(lo)) * c["__size__"])
+        elong = np.exp(c["__elong__"] * np.log(args.ellipse_max_elong))
+        a_ax, b_ax = np.sqrt(elong), 1 / np.sqrt(elong)  # a * b = 1
+        W = args.ellipse_max_winding
+        wind = np.minimum((c["__wind__"] * (2 * W + 1)).astype(int), 2 * W) - W
+        for k, cs in enumerate(spline_surf.cs_list):
+            psi = wind * (np.pi / 2) * k / (n_cs - 1)
+            rho, rnames = [], []
+            for j in range(cs.n_pts):
+                rn = f"{cs.name}:r_{j}"
+                if rn not in col:
+                    continue
+                tn = f"{cs.name}:theta_{j}"
+                th = out[:, col[tn]] if tn in col else cs.get(f"theta_{j}")
+                phi = th - psi
+                rho.append(
+                    a_ax * b_ax
+                    / np.sqrt(
+                        (b_ax * np.cos(phi)) ** 2 + (a_ax * np.sin(phi)) ** 2
+                    )
+                )
+                rnames.append(rn)
+            rho = np.array(rho)
+            rho_hat = rho / rho.mean(axis=0)
+            for rn, rh in zip(rnames, rho_hat):
+                f = F * rh * (1 + 2 * args.ellipse_noise * (c[rn] - 0.5))
+                out[:, col[rn]] = cs_cap * np.clip(f, args.min_cs_frac, 1.0)
     return out
 
 
