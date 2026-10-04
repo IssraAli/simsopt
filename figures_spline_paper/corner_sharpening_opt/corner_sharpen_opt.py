@@ -211,7 +211,7 @@ W_AR = 10
 #                              equilibrium's iota is negative in VMEC's sign
 #                              convention -- the sign is left free)
 #   AR_MIN <= aspect <= AR_MAX
-IOTA_MIN = 0.8
+IOTA_MIN = 0.08
 AR_MIN, AR_MAX = 4.0, 8.0
 W_ANGLE = 10
 BOUND_MARGIN = 0.1  # slack added when widening bounds the fitted dofs violate
@@ -221,7 +221,7 @@ W_APEX_Z = (
 
 # Targets for the corners. None -> hold each corner at its ORIGINAL value
 # (measured on the initial low-dof surface); a number -> drive EVERY corner to it.
-TARGET_ANGLE_DEG = 90  # opening angle at the apex [deg], e.g. 60.0
+TARGET_ANGLE_DEG = 45  # opening angle at the apex [deg], e.g. 60.0
 TARGET_APEX_Z = (
     0.6  # |Z| of the crossover point [same units as the surface], e.g. 0.35;
 )

@@ -38,19 +38,26 @@ spline_surf = SurfaceBSpline(**spline_kwargs, default_r=0.2)
 
 proc0_print(f"spline_surf.dof_names: {spline_surf.dof_names}")
 
-# Disable box bounds on the spline dofs (+-inf instead of the per-dof
-# defaults from CrossSectionFixedZeta/PseudoAxis's own construction) --
-# the linear inequality constraints built below express the ordering
-# relationships that actually matter (e.g. theta_k <= theta_{k+1}
-# within a cross section) directly, which per-dof box bounds can't, so
-# they replace box bounds here rather than supplementing them.
+# Disable box bounds on every dof except the cross-section thetas and the
+# axis angles zeta_axis (+-inf instead of the per-dof defaults from
+# CrossSectionFixedZeta/PseudoAxis's own construction). Those keep the
+# class's default bounds (each theta_k is bounded by the midpoints to its
+# neighbors, which keeps the cross section's points in order); the radii
+# and axis z are instead constrained by the linear inequality constraints
+# below.
 n_dofs = len(spline_surf.x)
-spline_surf.upper_bounds = np.inf * np.ones(n_dofs)
-spline_surf.lower_bounds = -np.inf * np.ones(n_dofs)
+keep_box = np.array(
+    [(":theta_" in n) or (":zeta_axis_" in n) for n in spline_surf.dof_names]
+)
+spline_surf.upper_bounds = np.where(
+    keep_box, spline_surf.upper_bounds, np.inf
+)
+spline_surf.lower_bounds = np.where(
+    keep_box, spline_surf.lower_bounds, -np.inf
+)
 
 A_lc, lb_lc, ub_lc, lc_titles = spline_surf.write_inequality_constraints(
-    cs_r_max=0.6,
-    axis_r_max =1.0
+    axis_r_max=1.0
 
 )
 proc0_print(f"n linear (spline dof) constraints: {A_lc.shape[0]}")

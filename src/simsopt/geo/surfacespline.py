@@ -908,9 +908,11 @@ class PseudoAxis(sopp.Curve, Curve):
 
         quadpoints : array-like of t (fraction in [0,1)), or None for
             self.quadpoints.
-        n_prop : number of points used for the internal double-reflection
-            propagation over one field period -- an accuracy knob,
-            independent of how many points are actually being requested.
+        n_prop : number of points in the base grid used for the internal
+            double-reflection propagation over one field period -- an
+            accuracy knob. The requested quadpoints' own positions (reduced
+            into one field period) are spliced into this grid, so the frame
+            is evaluated exactly there rather than interpolated.
 
         Returns (T, N, B), each (n, 3): T is the unit tangent, N is the
         rotation-minimizing normal (up to the field-period tiling
@@ -921,12 +923,40 @@ class PseudoAxis(sopp.Curve, Curve):
         quadpoints = np.asarray(quadpoints)
         nfp = self.nfp
 
-        # dense propagation grid over one field period -- avoid the exact
-        # t=0 point, which sits on the periodic wrap seam where the
-        # pre-existing Newton solve in _solve_v has a floating-point-level
-        # quirk (see gammadashdash_impl's validation).
+        # base propagation grid over one field period. The ends are pulled
+        # in by machine epsilon rather than placed exactly on t=0 and
+        # t=1/nfp, which sit on the periodic wrap seam, where _solve_v's
+        # Newton solve was originally thought to have a floating-point-level
+        # quirk (not reproduced since). The offset must stay tiny: the
+        # R-hat seed below is placed at the first node, so the
+        # reflection-symmetry error of the frame scales linearly with it
+        # (~1e-8 at an offset of 1e-8, ~1e-15 at machine epsilon).
         eps = np.finfo(float).eps
-        t_dense = np.linspace(eps, 1.0 / nfp - eps, n_prop)
+        t_grid = np.linspace(eps, 1.0 / nfp - eps, n_prop)
+
+        # splice the exact requested positions (reduced into one field
+        # period) into the propagation grid, so the frame is read off at
+        # them directly instead of interpolated. A requested point within
+        # `snap_tol` of an existing node (or of another requested point)
+        # is NOT added as its own node and just uses that node: the
+        # double-reflection step between near-coincident points divides by
+        # |p_{i+1} - p_i|^2, so it loses all precision as that spacing
+        # approaches rounding error (and is 0/0 for exact duplicates).
+        snap_tol = 1e-9
+        k = np.floor(quadpoints * nfp).astype(int)
+        t_local = quadpoints - k / nfp
+
+        t_req = np.unique(t_local)
+        j = np.clip(np.searchsorted(t_grid, t_req), 1, n_prop - 1)
+        d_grid = np.minimum(
+            np.abs(t_req - t_grid[j - 1]), np.abs(t_grid[j] - t_req)
+        )
+        t_extra = t_req[d_grid > snap_tol]
+        if len(t_extra) > 1:
+            t_extra = t_extra[
+                np.concatenate([[True], np.diff(t_extra) > snap_tol])
+            ]
+        t_dense = np.sort(np.concatenate([t_grid, t_extra]))
         X, Y, Z, dX, dY, dZ = self._gamma_and_derivs(t_dense, max_deriv=1)
         gamma_dense = np.vstack([X, Y, Z]).T
         gammadash_dense = np.vstack([dX, dY, dZ]).T
@@ -968,17 +998,18 @@ class PseudoAxis(sopp.Curve, Curve):
         cB, sB = np.cos(beta), np.sin(beta)
         N_corr = cB[:, None] * N_dense + sB[:, None] * B_dense
 
-        # evaluate at the actually-requested quadpoints: reduce into one
-        # field period, interpolate the co5rrected propagated normal there
-        # (T is cheap and exact, so it's recomputed directly rather than
-        # interpolated), then tile by the rigid nfp-fold rotation and
-        # re-orthonormalize against the exact tangent.
-        k = np.floor(quadpoints * nfp).astype(int)
-        t_local = quadpoints - k / nfp
-
-        N_local = np.empty((len(quadpoints), 3))
-        for i in range(3):
-            N_local[:, i] = np.interp(t_local, t_dense, N_corr[:, i])
+        # read the corrected propagated normal off the node at (or, within
+        # snap_tol, nearest to) each requested position -- no interpolation
+        # (T is cheap and exact, so it's recomputed directly), then tile
+        # by the rigid nfp-fold rotation and re-orthonormalize against the
+        # exact tangent.
+        j = np.clip(np.searchsorted(t_dense, t_local), 1, len(t_dense) - 1)
+        j = np.where(
+            np.abs(t_local - t_dense[j - 1]) < np.abs(t_dense[j] - t_local),
+            j - 1,
+            j,
+        )
+        N_local = N_corr[j]
 
         N_rot = np.empty_like(N_local)
         for kk in np.unique(k):
@@ -3381,19 +3412,29 @@ class SurfaceBSpline(sopp.Surface, Surface):
     def write_inequality_constraints(
         self,
         maxval=np.inf,
-        constrain_radii=False,
         axis_r_max=10.0,
-        cs_r_max=1.0,
+        axis_r_fixed_max=1.0,
+        fix_axis_angles=False,
+        z_axis_max=0.5,
+        cs_axis_ratio=None,
     ):
         """
-        Build linear inequality constraints lb <= A @ dofs <= ub, intended
-        as a less restrictive alternative to box-bounding every dof
-        directly -- in particular the angle dofs, where independent box
-        bounds on each theta_k can't express "these must stay in order",
-        so the optimizer is free to walk them past each other and fold
-        the cross section's control polygon over on itself. A linear
-        ordering constraint between consecutive thetas can express that
-        directly.
+        Build linear inequality constraints lb <= A @ dofs <= ub on the
+        radii and the axis z. Angle (theta) dofs get no linear
+        constraints here: their ordering is enforced by the per-dof box
+        bounds that CrossSectionFixedZeta already sets (each theta_k is
+        bounded by the midpoints to its neighbors). Anything that
+        removes those box bounds (e.g. setting every bound to +-inf)
+        therefore also removes the theta ordering.
+
+        The radii are nested, which also sets the overall scale:
+          - every axis r_axis_i (i >= 1) is <= r_axis_0 if r_axis_0 is
+            free, or <= axis_r_fixed_max if r_axis_0 is fixed (it is then
+            assumed to be pinned at that scale, typically 1);
+          - every cross-section radius r_j is <= every axis r_axis_m,
+            i.e. <= the smallest axis radius;
+          - all radii are >= 0, and |z_axis_i| <= z_axis_max for
+            interior axis points.
 
         All constraints are built over free dofs only. Where one endpoint
         of a would-be two-dof constraint happens to be fixed, its fixed
@@ -3405,39 +3446,33 @@ class SurfaceBSpline(sopp.Surface, Surface):
         ----------
         maxval : float
             Upper bound used for otherwise-unbounded constraints.
-        constrain_radii : bool
-            Every cross-section radius is always constrained to be >= 0
-            and <= cs_r_max (both basic physical/scale sanity checks --
-            unconditional, not gated by this flag; observed during
-            optimization: without an upper bound, the cross-section and
-            axis radii can grow without limit together). If
-            constrain_radii is additionally True, each radius is also
-            upper-bounded (for cross sections after the first) by the
-            pseudo-axis's own r_ctrl at the *matching* index specifically
-            -- a tighter, per-cross-section refinement on top of the
-            unconditional cs_r_max cap. Off by default: that extra,
-            index-matched behavior isn't actually necessary to prevent
-            self-intersection (a properly-ordered cross section can still
-            self-intersect via its radii alone, and unbounded radii don't
-            by themselves cause self-intersection -- a real
-            non-self-intersection constraint is a separate, nonlinear
-            thing, not yet implemented here). This option also inherits a
-            pre-existing limitation: it matches cross-section index i
-            directly against PseudoAxis1:r_axis_{i}, which is only
-            meaningful when axis_points == n_cs.
         axis_r_max : float
-            Upper bound on each pseudo-axis r_ctrl value -- unconditional,
-            same motivation as cs_r_max below (observed unbounded growth
-            during optimization).
-        cs_r_max : float
-            Upper bound on each cross-section radius -- unconditional,
-            same motivation as axis_r_max above. A fixed constant rather
-            than a bound relative to another dof (e.g. the axis's own
-            r_ctrl) specifically because SLSQP's line search can probe
-            trial points that don't respect every constraint
-            simultaneously -- a dof-relative bound can still be blown
-            through if the reference dof is *also* moving in the same
-            wild trial step.
+            Upper bound on r_axis_0 when it is free (nothing else bounds
+            it from above, and without a bound the whole shape can grow
+            without limit, as observed during optimization).
+        axis_r_fixed_max : float
+            Upper bound on every r_axis_i (i >= 1) when r_axis_0 is
+            fixed.
+        fix_axis_angles : bool
+            If True, fix every free zeta_axis_i dof of the axis at its
+            current value (axis.fix) before building the constraints.
+            This mutates the surface: the fixed dofs drop out of
+            self.x / dof_names, so the returned A has correspondingly
+            fewer columns, and anything computed from the dof vector
+            before this call (bounds arrays, dof counts) is stale. The
+            same effect as constructing with axis_angles_fixed=True, but
+            applied to an existing surface. No-op for angles that are
+            already fixed.
+        z_axis_max : float
+            Bound |z_axis_i| <= z_axis_max on the interior axis points.
+        cs_axis_ratio : float or None
+            If None (default), every cross-section radius is bounded by
+            every axis radius (i.e. the smallest one). If a number a, that
+            is replaced by a * r_cs_j <= mean(r_axis) for every
+            cross-section radius, so a roughly sets the smallest aspect
+            ratio the representation can reach (a = 1 allows a cross
+            section as large as the mean axis radius). Fixed axis radii
+            enter the mean as constants.
 
         Returns
         -------
@@ -3448,6 +3483,11 @@ class SurfaceBSpline(sopp.Surface, Surface):
         constraint_titles : list of str
             Human-readable label for each constraint row.
         """
+        if fix_axis_angles:
+            for i in range(self.axis_points):
+                if f"{self.axis.name}:zeta_axis_{i}" in self.dof_names:
+                    self.axis.fix(f"zeta_axis_{i}")
+
         dofs = self.dof_names
         indices_dict = dict(zip(dofs, range(len(dofs))))
 
@@ -3472,134 +3512,102 @@ class SurfaceBSpline(sopp.Surface, Surface):
             temp = np.zeros(len(dofs))
             temp[indices_dict[f"{axis_name_prefix}:z_axis_{i}"]] = 1
             constraints_list.append(temp)
-            constraint_titles.append(f"-1 < {axis_name_prefix}:z_axis_{i} < 1")
-            lb.append(-1)
-            ub.append(1)
+            constraint_titles.append(
+                f"-{z_axis_max} < {axis_name_prefix}:z_axis_{i} < {z_axis_max}"
+            )
+            lb.append(-z_axis_max)
+            ub.append(z_axis_max)
 
-        # range(self.axis_points), not range(1, ...): r_axis_0 is free by
-        # default (only z_axis_0/zeta_axis_0 are fixed in PseudoAxis), so
-        # it needs this bound too -- guard on indices_dict for scripts
-        # that do fix it explicitly (e.g. axis.fix("r_axis_0")).
-        for i in range(self.axis_points):
-            name = f"{axis_name_prefix}:r_axis_{i}"
-            if name not in indices_dict:
-                continue
+        def axis_r_name(i):
+            return f"{axis_name_prefix}:r_axis_{i}"
+
+        def add_row(coeffs, lo, hi, title):
             temp = np.zeros(len(dofs))
-            temp[indices_dict[name]] = 1
+            for name, c in coeffs.items():
+                temp[indices_dict[name]] = c
             constraints_list.append(temp)
-            constraint_titles.append(f"0 < {name} < {axis_r_max}")
-            lb.append(0)
-            ub.append(axis_r_max)
+            constraint_titles.append(title)
+            lb.append(lo)
+            ub.append(hi)
 
-        # r >= 0 is a basic physical necessity (a radius can't be
-        # negative), not a self-intersection-prevention measure, so it's
-        # unconditional -- unlike constrain_radii's upper-bound behavior
-        # below, this isn't optional.
-        for i, cs in enumerate(self.cs_list):
-            for j in range(cs.n_pts):
-                name = f"{cs.name}:r_{j}"
-                if name not in indices_dict:
-                    continue
-                temp = np.zeros(len(dofs))
-                temp[indices_dict[name]] = 1
-                constraints_list.append(temp)
-                constraint_titles.append(f"0 <= {name}")
-                lb.append(0)
-                ub.append(maxval)
+        # Axis radii: r_axis_0 is free by default (only z_axis_0/zeta_axis_0
+        # are fixed in PseudoAxis) but scripts may fix it (e.g.
+        # axis.fix("r_axis_0")), which sets the overall scale.
+        r0_free = axis_r_name(0) in indices_dict
+        if r0_free:
+            add_row(
+                {axis_r_name(0): 1},
+                0,
+                axis_r_max,
+                f"0 < {axis_r_name(0)} < {axis_r_max}",
+            )
+        for i in range(1, self.axis_points):
+            if axis_r_name(i) not in indices_dict:
+                continue
+            if r0_free:
+                add_row(
+                    {axis_r_name(i): 1}, 0, maxval, f"0 <= {axis_r_name(i)}"
+                )
+                add_row(
+                    {axis_r_name(0): 1, axis_r_name(i): -1},
+                    0,
+                    maxval,
+                    f"{axis_r_name(i)} <= {axis_r_name(0)}",
+                )
+            else:
+                add_row(
+                    {axis_r_name(i): 1},
+                    0,
+                    axis_r_fixed_max,
+                    f"0 < {axis_r_name(i)} < {axis_r_fixed_max}",
+                )
 
-        # r_cs <= cs_r_max for every cross-section radius -- unconditional
-        # (same reasoning as r >= 0 above): without some upper bound, the
-        # cross-section and axis radii have been observed to grow without
-        # limit together during optimization. A fixed numeric cap (rather
-        # than tying it to another dof's current value, e.g. the axis's
-        # own r_ctrl) matters here specifically because SLSQP's line
-        # search can probe trial points that don't respect every
-        # constraint simultaneously -- a dof-relative bound can still be
-        # blown through if the dof it's relative to is *also* moving in
-        # the same wild trial step, where a fixed constant can't.
+        # Cross-section radii: r_j >= 0, and r_j <= every axis r_axis_m
+        # (i.e. the smallest axis radius). r_axis_0 is skipped when other
+        # axis points exist, since r_axis_i <= r_axis_0 (or <= the fixed
+        # scale) above already makes that row redundant.
+        axis_ms = range(1 if self.axis_points > 1 else 0, self.axis_points)
+        all_axis = range(self.axis_points)
         for cs in self.cs_list:
             for j in range(cs.n_pts):
                 name = f"{cs.name}:r_{j}"
-                if name not in indices_dict:
-                    continue
-                temp = np.zeros(len(dofs))
-                temp[indices_dict[name]] = 1
-                constraints_list.append(temp)
-                constraint_titles.append(f"{name} <= {cs_r_max}")
-                lb.append(-maxval)
-                ub.append(cs_r_max)
-
-        if constrain_radii:
-            for i, cs in enumerate(self.cs_list):
-                for j in range(cs.n_pts):
-                    name = f"{cs.name}:r_{j}"
-                    if name not in indices_dict:
-                        continue
-                    axis_r_name = f"{axis_name_prefix}:r_axis_{i}"
-                    if i > 0 and axis_r_name in indices_dict:
-                        temp = np.zeros(len(dofs))
-                        temp[indices_dict[name]] = -1
-                        temp[indices_dict[axis_r_name]] = 1
-                        constraints_list.append(temp)
-                        constraint_titles.append(
-                            f"0 < {axis_r_name} - {name} < {maxval}"
+                cs_free = name in indices_dict
+                if cs_free:
+                    add_row({name: 1}, 0, maxval, f"0 <= {name}")
+                cs_val = None if cs_free else cs.get(f"r_{j}")
+                if cs_axis_ratio is not None:
+                    # a * r_cs - mean(r_axis) <= 0, fixed values as constants
+                    n_ax = self.axis_points
+                    coeffs = {name: cs_axis_ratio} if cs_free else {}
+                    const = 0.0 if cs_free else -cs_axis_ratio * cs_val
+                    for m in all_axis:
+                        ax_name = axis_r_name(m)
+                        if ax_name in indices_dict:
+                            coeffs[ax_name] = coeffs.get(ax_name, 0) - 1.0 / n_ax
+                        else:
+                            const += self.axis.get(f"r_axis_{m}") / n_ax
+                    if coeffs:
+                        add_row(
+                            coeffs,
+                            -maxval,
+                            const,
+                            f"{cs_axis_ratio}*{name} <= mean(r_axis)",
                         )
-                        lb.append(0)
-                        ub.append(maxval)
-
-        # theta ordering: theta_0 >= 0, theta_k <= theta_{k+1} for each
-        # consecutive pair, theta_{n-1} <= 2*pi -- applies regardless of
-        # cs_equispaced/z_sym, since it's just as important to keep an
-        # equispaced cross section's *free* dofs (theta_0/global angle
-        # aside) from reordering as a non-equispaced one's.
-        for cs in self.cs_list:
-            n_pts = cs.n_pts
-            theta_names = [f"{cs.name}:theta_{k}" for k in range(n_pts)]
-
-            def theta_value(k, cs=cs):
-                return cs.get(f"theta_{k}")
-
-            if theta_names[0] in indices_dict:
-                temp = np.zeros(len(dofs))
-                temp[indices_dict[theta_names[0]]] = 1
-                constraints_list.append(temp)
-                constraint_titles.append(f"0 <= {theta_names[0]}")
-                lb.append(0)
-                ub.append(maxval)
-
-            for k in range(n_pts - 1):
-                name_k, name_k1 = theta_names[k], theta_names[k + 1]
-                free_k = name_k in indices_dict
-                free_k1 = name_k1 in indices_dict
-                if not free_k and not free_k1:
                     continue
-                temp = np.zeros(len(dofs))
-                if free_k:
-                    temp[indices_dict[name_k]] = -1
-                if free_k1:
-                    temp[indices_dict[name_k1]] = 1
-                constraints_list.append(temp)
-                constraint_titles.append(f"{name_k} <= {name_k1}")
-                if free_k and free_k1:
-                    lb.append(0)
-                    ub.append(maxval)
-                elif free_k1:
-                    # theta_k fixed at a constant c -> theta_k1 >= c
-                    lb.append(theta_value(k))
-                    ub.append(maxval)
-                else:
-                    # theta_k1 fixed at a constant c -> theta_k <= c, and
-                    # the row is -theta_k, so the bound is -c
-                    lb.append(-theta_value(k + 1))
-                    ub.append(maxval)
-
-            if theta_names[-1] in indices_dict:
-                temp = np.zeros(len(dofs))
-                temp[indices_dict[theta_names[-1]]] = 1
-                constraints_list.append(temp)
-                constraint_titles.append(f"{theta_names[-1]} <= 2*pi")
-                lb.append(-maxval)
-                ub.append(2 * np.pi)
+                for m in axis_ms:
+                    ax_name = axis_r_name(m)
+                    ax_free = ax_name in indices_dict
+                    title = f"{name} <= {ax_name}"
+                    if cs_free and ax_free:
+                        add_row({ax_name: 1, name: -1}, 0, maxval, title)
+                    elif cs_free:
+                        # axis radius fixed at a constant c -> r_j <= c
+                        add_row(
+                            {name: 1}, -maxval, self.axis.get(f"r_axis_{m}"), title
+                        )
+                    elif ax_free:
+                        # cross-section radius fixed at c -> r_axis_m >= c
+                        add_row({ax_name: 1}, cs_val, maxval, title)
 
         A = (
             np.array(constraints_list)

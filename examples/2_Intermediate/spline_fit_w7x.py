@@ -6,10 +6,11 @@ to the boundary of a target VMEC equilibrium (W7-X), using the exact
 (simsopt.objectives.shape_errors.exact_shape_error) as the objective,
 minimized subject to SurfaceBSpline's own linear inequality constraints
 (write_inequality_constraints) rather than box bounds on the individual
-dofs -- box bounds can't express "these angles must stay in order," which
-is what actually keeps a cross section from folding over on itself, so
-the dofs' own upper_bounds/lower_bounds are set to +-inf here and
-constrained_mpi_solve (SLSQP) enforces the linear constraints instead.
+dofs. The cross-section angle dofs and the axis angles keep the class's
+default box bounds, and the other dofs'
+upper_bounds/lower_bounds are set to +-inf here, so
+constrained_mpi_solve (SLSQP) enforces the linear constraints on them
+instead.
 
 No VMEC equilibrium solve is needed for either surface -- the target's
 boundary Fourier coefficients are read directly from its input file, and
@@ -197,15 +198,23 @@ spline_surf = SurfaceBSpline(default_r=0.3, **spline_kwargs)
 proc0_print(f"spline_surf.dof_names: {spline_surf.dof_names}")
 proc0_print(f"ndofs: {len(spline_surf.x)}")
 
-# Disable box bounds on the dofs (+-inf instead of the per-dof defaults
-# from CrossSectionFixedZeta/PseudoAxis's own construction) -- the linear
-# inequality constraints below express the ordering relationships that
-# actually matter (e.g. theta_k <= theta_{k+1}) directly, which per-dof
-# box bounds can't, so they replace box bounds here rather than
-# supplementing them.
+# Disable box bounds on every dof except the cross-section thetas and the
+# axis angles zeta_axis (+-inf instead of the per-dof defaults from
+# CrossSectionFixedZeta/PseudoAxis's own construction). Those keep the
+# class's default bounds (each theta_k is bounded by the midpoints to its
+# neighbors, which keeps the cross section's points in order); the radii
+# and axis z are instead constrained by the linear inequality constraints
+# below.
 n_dofs = len(spline_surf.x)
-spline_surf.upper_bounds = np.inf * np.ones(n_dofs)
-spline_surf.lower_bounds = -np.inf * np.ones(n_dofs)
+keep_box = np.array(
+    [(":theta_" in n) or (":zeta_axis_" in n) for n in spline_surf.dof_names]
+)
+spline_surf.upper_bounds = np.where(
+    keep_box, spline_surf.upper_bounds, np.inf
+)
+spline_surf.lower_bounds = np.where(
+    keep_box, spline_surf.lower_bounds, -np.inf
+)
 
 A_lc, lb_lc, ub_lc, lc_titles = spline_surf.write_inequality_constraints()
 proc0_print(f"n linear constraints: {A_lc.shape[0]}")
