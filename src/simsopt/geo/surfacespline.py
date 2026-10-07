@@ -1103,7 +1103,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         dofs=None,
         quadpoints_phi=None,
         quadpoints_theta=None,
-        knot_parametrization="chord",
+        knot_parametrization="uniform",
         use_bishop_frame=False,
     ):
         """
@@ -1114,14 +1114,27 @@ class SurfaceBSpline(sopp.Surface, Surface):
         points_per_cs : int
             Number of points per cross section.
         n_cs : int
-            Number of toroidal cross sections per half field period.
+            Number of toroidal cross sections per half field period, counting
+            the up-down symmetric one at zeta = 0 and not counting zeta =
+            pi/nfp (not stored: see __init__). One field period then has
+            2 * n_cs - 1 cross sections. They sit at zeta = k * h, with
+            h = (pi/nfp) / (n_cs - 1/2).
         knot_parametrization : 'chord' or 'uniform'
-            Whether the internal NURBS knot vectors (both u and v, and the
-            pseudo-axis's own) are spaced by actual chord length between
-            control points ('chord', the default) or assumed evenly spaced
-            regardless of where the control points are ('uniform', the
-            original behavior). See "Chord-length parametrization.md" for
-            the math and references.
+            DEPRECATED: 'chord' is spaced by actual chord length between
+            control points, but only the v-knots (toroidal, from the row
+            centroids) and the pseudo-axis's own knots are a genuine
+            per-curve chord-length fit. The u-knots (poloidal) cannot be,
+            because a tensor-product surface needs one shared u-knot
+            vector across all cross sections: each cross section's own
+            chord-length knots are computed independently and then
+            *averaged* together (see _control_net_and_knots). When cross
+            sections aren't self-similar -- e.g. the spacing between
+            same-index control points changes with toroidal angle -- that
+            average matches none of them exactly, so 'chord' does not
+            actually deliver true chord-length parametrization in u.
+            'uniform' (the default) assumes control points are evenly
+            spaced regardless of where they actually are. See
+            "Chord-length parametrization.md" for the math and references.
         use_bishop_frame : bool
             If False (the default), cross sections are placed in the
             fixed-zeta poloidal plane (independent of how the axis bends),
@@ -1142,6 +1155,17 @@ class SurfaceBSpline(sopp.Surface, Surface):
             raise ValueError(
                 "knot_parametrization must be 'chord' or 'uniform', "
                 f"got {knot_parametrization!r}"
+            )
+        if knot_parametrization == "chord":
+            warnings.warn(
+                "knot_parametrization='chord' is deprecated for "
+                "SurfaceBSpline: the u-knots are each cross section's "
+                "chord-length knots averaged into one shared vector, which "
+                "is not a true chord-length fit for any individual cross "
+                "section once they stop being self-similar. Use 'uniform' "
+                "(now the default) instead.",
+                DeprecationWarning,
+                stacklevel=2,
             )
 
         self.axis_points = axis_points
@@ -1164,39 +1188,46 @@ class SurfaceBSpline(sopp.Surface, Surface):
         self.use_bishop_frame = use_bishop_frame
 
         if dofs is None:
-            # create equidistant points in zeta
-            cs_zeta = np.linspace(0, max_angle, n_cs)
+            # Cross sections sit at cs_zeta[k] = k * h for k = 0..n_cs-1. The
+            # cross section at zeta = max_angle (= pi/nfp) is not stored:
+            # stellarator symmetry makes it the up-down symmetric blend of
+            # the last stored cross section and its mirror image, so it
+            # needs no dofs of its own, and (unlike a stored, z_sym cross
+            # section there) it doesn't pin a control point at theta = 0.
+            # h is chosen so the gap across the mirror plane equals the
+            # gap between neighbors: the last cross section sits h/2 short
+            # of max_angle and its mirror image h/2 past it.
+            h_zeta = max_angle / (n_cs - 0.5)
+            cs_zeta = h_zeta * np.arange(n_cs)
             # all angles zero
             cs_angles = np.zeros(n_cs)
 
             self.cs_zeta = cs_zeta
             self.cs_angles = cs_angles
 
-            cs_dofs = np.array([None] * n_cs)
-
-            if stellsym & np.all(cs_dofs != None):  # noqa: E711 -- elementwise vs. numpy array, "is not" checks object identity instead and breaks this
-                assert len(cs_dofs[0]) == 2 * ((points_per_cs // 2) + 1)
-                assert len(cs_dofs[-1]) == 2 * ((points_per_cs // 2) + 1)
-
             dofs = np.append(self.cs_zeta, self.cs_angles)
 
             names = [f"cs_zeta{i}" for i in range(n_cs)] + [
                 f"cs_angle{i}" for i in range(n_cs)
             ]
+            # cs_zeta bounds: halfway to each neighbor's default position
+            # (like the theta bounds), kept strictly inside the mirror plane
+            zeta_lb = [(n - 0.5) * h_zeta for n in range(n_cs)]
+            zeta_ub = [
+                min((n + 0.5) * h_zeta, max_angle - 0.25 * h_zeta)
+                for n in range(n_cs)
+            ]
             dofs = DOFs(
                 dofs,
                 names,
                 [not cs_equispaced] * n_cs + [cs_global_angle_free] * n_cs,
-                [(n - 1) * max_angle / (n_cs - 2) for n in range(n_cs)]
-                + [-2 * np.pi / points_per_cs] * n_cs,
-                [(n) * max_angle / (n_cs - 2) for n in range(n_cs)]
-                + [2 * np.pi / points_per_cs] * n_cs,
+                zeta_lb + [-2 * np.pi / points_per_cs] * n_cs,
+                zeta_ub + [2 * np.pi / points_per_cs] * n_cs,
             )
 
+        # the cross section at zeta = 0 is z_sym and pinned: angle 0, zeta 0
         dofs.fix("cs_angle0")
-        dofs.fix(f"cs_angle{n_cs - 1}")
         dofs.fix("cs_zeta0")
-        dofs.fix(f"cs_zeta{n_cs - 1}")
 
         self.axis = PseudoAxis(
             n_ctrl_pts=axis_points,
@@ -1215,7 +1246,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
                     n_ctrl_pts=points_per_cs,
                     equispaced=rays_equispaced,
                     default_r=default_r,
-                    z_sym=((i == 0) or (i == n_cs - 1)),
+                    z_sym=(i == 0),
                     nurbs=nurbs,
                 )
             elif cs_basis == "cartesian":
@@ -1331,197 +1362,21 @@ class SurfaceBSpline(sopp.Surface, Surface):
         self._invalidate_control_net_cache()
 
     def refine_toroidal(self):
-        r"""
-        Grow the number of toroidal cross sections n_cs -> 2*n_cs - 1
-        (insert a new cross section at the midpoint of every gap, same
-        "double everything uniformly" spirit as refine_poloidal, but one
-        level up: the "points" being Lane-Riesenfeld-doubled here are
-        whole cross sections, not individual (r, theta) control points
-        within one.
-
-        Structurally this SURFACE's own toroidal domain (cs_zeta in
-        [0, max_angle], stellarator-symmetric mirror-and-nfp-tile out to
-        the full device -- see _get_control_points_xyz) is exactly
-        analogous to a single z_sym CrossSectionFixedZeta's own poloidal
-        domain: cs_zeta0=0 and cs_zeta{n_cs-1}=max_angle are the two
-        once-appearing mirror-fixed points, interior cs_zeta_i each
-        appear twice (once directly, once as that row's own .flipped()
-        at the mirrored angle). Lane-Riesenfeld doubling that structure
-        needs p_v odd for the exact same reason refine_poloidal needs
-        p_u odd for z_sym rows: an even-degree uniform B-spline's mirror
-        axis always falls exactly on a knot, never a control point, so
-        there'd be nothing there to preserve.
-
-        Unlike refine_poloidal, this does NOT reconstruct new angles by
-        computing them and then sorting -- that approach is exactly what
-        broke refine_poloidal's z_sym reconstruction when a pinned
-        control point's own radius was too small to outvote its
-        neighbors in the blend (see "SurfaceBSpline roadmap.md"/vault
-        notes on that bug). Lane-Riesenfeld's own output is already in a
-        deterministic index order consistent with uniform_knots(2m-1,p)
-        (see lane_riesenfeld_double's docstring) -- so this reconstructs
-        the new cross sections by direct index slicing throughout,
-        column identity preserved by construction, never by re-deriving
-        "which new thing is closest to which old thing" from computed
-        angles. This sidesteps that whole bug class rather than
-        depending on any particular row's control points staying safely
-        away from the axis.
-
-        Blending happens in genuine 3D Cartesian space (each cross
-        section's full, already-embedded (X, Y, Z) control points via
-        _get_control_points_xyz), not in local (r, theta): unlike
-        poloidal refinement, where every point being blended shares one
-        row's single local frame (so blending locally commutes exactly
-        with that frame's fixed affine embedding), toroidal blending
-        mixes points from DIFFERENT cross sections, each with its own
-        distinct local frame (Bishop or fixed-phi-plane, evaluated at
-        that row's own zeta) -- there is no single shared affine map to
-        commute through, so the blend has to happen after embedding, and
-        each new cross section's (r, theta, w) has to be recovered by
-        projecting its blended 3D points back into ITS OWN new local
-        frame (evaluated at the new cross section's own zeta, via
-        _axis_local_basis) afterward.
-
-        Raises ValueError if p_v is even, or if any existing cs_angle is
-        nonzero (the new cross sections' own cs_angle isn't derived from
-        the 3D blend at all -- see below -- so there's no principled
-        value to give it other than 0, which is only consistent with
-        the surface's existing cross sections if they were all 0 to
-        begin with).
         """
-        p = self.p_v
-        if p % 2 == 0:
-            raise ValueError(
-                f"refine_toroidal: p_v={p} is even -- this surface's "
-                "toroidal domain is always stellarator-symmetric-mirrored "
-                "(cs_zeta0=0, cs_zeta{n_cs-1}=max_angle are the mirror-"
-                "fixed points), and an even-degree uniform B-spline's "
-                "mirror axis always falls exactly on a knot, never a "
-                "control point, at every level of dyadic refinement -- "
-                "so there is no control point there to preserve after "
-                "doubling. Use an odd p_v."
-            )
-
-        n_cs_old = self.n_cs
-        new_n_cs = 2 * n_cs_old - 1
-        n_ctrl_pts = self.cs_list[0].n_ctrl_pts
-        max_angle = np.pi / self.nfp
-
-        cs_zeta_old, cs_angle_old = self.get_cs_zeta_angle()
-        if np.any(cs_angle_old != 0):
-            raise NotImplementedError(
-                "refine_toroidal: nonzero cs_angle is not supported -- "
-                "the new cross sections' own cs_angle has no principled "
-                "value derivable from the 3D control-point blend below, "
-                "so this only handles the (default, cs_global_angle_free"
-                "=False) all-zero case."
-            )
-
-        # Full one-field-period, already-embedded (X, Y, Z) control net
-        # and weights -- core_n_v_old = 2*n_cs_old - 2 rows, index 0 and
-        # index n_cs_old-1 the two mirror-fixed cross sections, the rest
-        # each appearing a second time (as .flipped()) later in the full,
-        # multi-field-period list _get_control_points_xyz returns; only
-        # one field period's worth is needed here; the mirror/nfp tiling
-        # is unaffected by refinement, same as for refine_poloidal.
-        core_n_v_old = 2 * n_cs_old - 2
-        point_list, w_list = self._get_control_points_xyz(return_w=True)
-        old_pos = np.array(
-            point_list[:core_n_v_old]
-        )  # (core_n_v_old, n_ctrl_pts, 3)
-        old_w = np.array(w_list[:core_n_v_old])  # (core_n_v_old, n_ctrl_pts)
-
-        new_pos = np.empty((2 * core_n_v_old, n_ctrl_pts, 3))
-        new_w = np.empty((2 * core_n_v_old, n_ctrl_pts))
-        for j in range(n_ctrl_pts):
-            new_pos[:, j, :], new_w[:, j] = lane_riesenfeld_double(
-                old_pos[:, j, :], old_w[:, j], p
-            )
-
-        # Direct index slice -- the new one-field-period cross sections,
-        # in order, no angle-based sorting (see docstring).
-        new_pos = new_pos[:new_n_cs]
-        new_w = new_w[:new_n_cs]
-
-        new_cs_zeta = np.linspace(0, max_angle, new_n_cs)
-        axis_pos, e1, e2 = self._axis_local_basis(new_cs_zeta)
-
-        new_cs_list = []
-        for i in range(new_n_cs):
-            z_sym = i == 0 or i == new_n_cs - 1
-            rel = new_pos[i] - axis_pos[i]  # (n_ctrl_pts, 3)
-            r_full = np.hypot(rel @ e1[i], rel @ e2[i])
-            theta_full = np.mod(np.arctan2(rel @ e2[i], rel @ e1[i]), 2 * np.pi)
-            w_full = new_w[i]
-
-            if z_sym:
-                # Same slice-not-sort logic as _get_control_points_xyz's
-                # own get_r_ctrl_full()/get_theta_ctrl_full() convention:
-                # column index order within a row is preserved exactly
-                # by the per-column toroidal blend above (it never mixes
-                # different columns together), so the first half_len
-                # columns are still exactly the [0, pi] half by
-                # construction, same as any other z_sym row.
-                half_len = n_ctrl_pts // 2 + 1
-                r_use = r_full[:half_len]
-                theta_use = theta_full[:half_len].copy()
-                w_use = w_full[:half_len]
-                theta_use[0] = 0.0
-                if n_ctrl_pts % 2 == 0:
-                    theta_use[-1] = np.pi
-            else:
-                r_use, theta_use, w_use = r_full, theta_full, w_full
-
-            new_cs = CrossSectionFixedZeta(
-                zeta_index=i,
-                n_ctrl_pts=n_ctrl_pts,
-                equispaced=self.rays_equispaced,
-                default_r=self.default_r,
-                z_sym=z_sym,
-                nurbs=self.nurbs,
-            )
-            new_cs.full_x = np.concatenate([r_use, theta_use, w_use])
-            CrossSectionFixedZeta._set_theta_neighbor_bounds(
-                new_cs, periodic=not z_sym
-            )
-            new_cs_list.append(new_cs)
-
-        # Rebuild this surface's own local dofs (cs_zeta_i/cs_angle_i,
-        # one pair per cross section) at the new count -- there is no
-        # DOFs.append, so this mirrors __init__'s own construction of
-        # this same block exactly, just parametrized by new_n_cs. cs_
-        # angle stays all zero (checked above).
-        names = [f"cs_zeta{i}" for i in range(new_n_cs)] + [
-            f"cs_angle{i}" for i in range(new_n_cs)
-        ]
-        new_local_dofs = np.append(new_cs_zeta, np.zeros(new_n_cs))
-        new_dofs = DOFs(
-            new_local_dofs,
-            names,
-            [not self.cs_equispaced] * new_n_cs
-            + [self.cs_global_angle_free] * new_n_cs,
-            [(n - 1) * max_angle / (new_n_cs - 2) for n in range(new_n_cs)]
-            + [-2 * np.pi / n_ctrl_pts] * new_n_cs,
-            [(n) * max_angle / (new_n_cs - 2) for n in range(new_n_cs)]
-            + [2 * np.pi / n_ctrl_pts] * new_n_cs,
+        Not available: the cross section at zeta = pi/nfp is no longer
+        stored (see n_cs in __init__), so one field period holds an odd
+        number, 2 * n_cs - 1, of cross sections: 0, the n_cs - 1 others,
+        and their mirror images. Inserting a cross section in every gap
+        would put one at the mirror plane (an extra, stored,
+        up-down symmetric cross section) and leave an even count, which
+        has no representation in this structure, so exact knot-insertion
+        doubling can't be expressed here.
+        """
+        raise NotImplementedError(
+            "refine_toroidal is not supported when the zeta = pi/nfp cross "
+            "section is not stored (each field period has an odd number of "
+            "cross sections, which doubling cannot preserve)."
         )
-        new_dofs.fix("cs_angle0")
-        new_dofs.fix(f"cs_angle{new_n_cs - 1}")
-        new_dofs.fix("cs_zeta0")
-        new_dofs.fix(f"cs_zeta{new_n_cs - 1}")
-
-        self.cs_list = new_cs_list
-        self.n_cs = new_n_cs
-        self._dofs = new_dofs
-
-        for _ in range(n_cs_old):
-            self.pop_parent(1)
-        for idx, new_cs in enumerate(new_cs_list):
-            self.add_parent(idx + 1, new_cs)
-
-        self._update_full_dof_size_indices()
-        self.update_free_dof_size_indices()
-        self._invalidate_control_net_cache()
 
     def _invalidate_control_net_cache(self):
         self.new_x = True
@@ -1715,7 +1570,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         cs_zeta, cs_angles = self.get_cs_zeta_angle()
 
         cs_zeta_1fp = np.append(
-            cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[-2:0:-1]
+            cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[:0:-1]
         )
         cs_zeta_full = np.concatenate(
             [cs_zeta_1fp + n * (2 * np.pi / self.nfp) for n in range(self.nfp)]
@@ -1725,13 +1580,13 @@ class SurfaceBSpline(sopp.Surface, Surface):
 
         cs_list_1fp = [
             cs if (i // self.n_cs) == 0 else cs.flipped()
-            for i, cs in enumerate(self.cs_list + self.cs_list[-2:0:-1])
+            for i, cs in enumerate(self.cs_list + self.cs_list[:0:-1])
         ]  #!!!!
         cs_list_full = np.tile(cs_list_1fp, self.nfp)
 
         cs_angle_1fp = [
             angle if (i // self.n_cs) == 0 else -angle
-            for i, angle in enumerate(np.append(cs_angles, cs_angles[-2:0:-1]))
+            for i, angle in enumerate(np.append(cs_angles, cs_angles[:0:-1]))
         ]
         cs_angle_full = np.tile(cs_angle_1fp, self.nfp)
 
@@ -1770,7 +1625,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         point_list = []
         # cross section by cross section
         cs_zeta_1fp = np.append(
-            cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[-2:0:-1]
+            cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[:0:-1]
         )
         cs_zeta_full = np.concatenate(
             [cs_zeta_1fp + n * (2 * np.pi / self.nfp) for n in range(self.nfp)]
@@ -1780,13 +1635,13 @@ class SurfaceBSpline(sopp.Surface, Surface):
 
         cs_list_1fp = [
             cs if (i // self.n_cs) == 0 else cs.flipped()
-            for i, cs in enumerate(self.cs_list + self.cs_list[-2:0:-1])
+            for i, cs in enumerate(self.cs_list + self.cs_list[:0:-1])
         ]  #!!!!
         cs_list_full = np.tile(cs_list_1fp, self.nfp)
 
         cs_angle_1fp = [
             angle if (i // self.n_cs) == 0 else -angle
-            for i, angle in enumerate(np.append(cs_angles, cs_angles[-2:0:-1]))
+            for i, angle in enumerate(np.append(cs_angles, cs_angles[:0:-1]))
         ]
         cs_angle_full = np.tile(cs_angle_1fp, self.nfp)
 
@@ -1820,7 +1675,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         cs_zeta, cs_angles = self.get_cs_zeta_angle()
 
         cs_zeta_1fp = np.append(
-            cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[-2:0:-1]
+            cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[:0:-1]
         )
         cs_zeta_full = np.concatenate(
             [cs_zeta_1fp + n * (2 * np.pi / self.nfp) for n in range(self.nfp)]
@@ -1828,13 +1683,13 @@ class SurfaceBSpline(sopp.Surface, Surface):
 
         cs_list_1fp = [
             cs if (i // self.n_cs) == 0 else cs.flipped()
-            for i, cs in enumerate(self.cs_list + self.cs_list[-2:0:-1])
+            for i, cs in enumerate(self.cs_list + self.cs_list[:0:-1])
         ]  #!!!!
         cs_list_full = np.tile(cs_list_1fp, self.nfp)
 
         cs_angle_1fp = [
             angle if (i // self.n_cs) == 0 else -angle
-            for i, angle in enumerate(np.append(cs_angles, cs_angles[-2:0:-1]))
+            for i, angle in enumerate(np.append(cs_angles, cs_angles[:0:-1]))
         ]
         cs_angle_full = np.tile(cs_angle_1fp, self.nfp)
 
@@ -3469,9 +3324,12 @@ class SurfaceBSpline(sopp.Surface, Surface):
         cs_angle_step_max : float or None
             If a number, bound the rotation between neighboring cross
             sections, |cs_angle_{k+1} - cs_angle_k| <= cs_angle_step_max,
-            for the free cross-section angle dofs (cs_global_angle_free).
-            Fixed neighbors (e.g. the end cross sections, pinned by
-            stellarator symmetry) enter as constants. None adds no rows.
+            for the free cross-section angle dofs (cs_global_angle_free),
+            plus |2 * cs_angle_last| <= cs_angle_step_max for the step from
+            the last stored cross section to its mirror image (angle
+            -cs_angle_last) across zeta = pi/nfp. The cross section at
+            zeta = 0 is pinned at angle 0 and enters as a constant. None
+            adds no rows.
         cs_axis_ratio : float or None
             If None (default), every cross-section radius is bounded by
             every axis radius (i.e. the smallest one). If a number a, that
@@ -3647,6 +3505,18 @@ class SurfaceBSpline(sopp.Surface, Surface):
                         c1 + cs_angle_step_max,
                         title,
                     )
+            # across the mirror plane at zeta = pi/nfp: the last stored
+            # cross section (angle a) is followed by its mirror image
+            # (angle -a), a step of 2a
+            n_last = angle_name(self.n_cs - 1)
+            if n_last in indices_dict:
+                add_row(
+                    {n_last: 2},
+                    -cs_angle_step_max,
+                    cs_angle_step_max,
+                    f"|2*cs_angle{self.n_cs - 1}| <= {cs_angle_step_max} "
+                    "(step across the zeta = pi/nfp mirror plane)",
+                )
 
         A = (
             np.array(constraints_list)
@@ -3947,7 +3817,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         if _ctrl_points:
             points = np.array(np.vstack(xyz_list))
             if _ctrl_points_full:
-                for i in range(0, self.nfp * (2 * (self.n_cs - 1))):
+                for i in range(0, self.nfp * (2 * self.n_cs - 1)):
                     ax.plot(
                         np.append(
                             points[

@@ -25,10 +25,10 @@ spline_kwargs = {
     "N": 4,
     "p_u": 3,
     "p_v": 3,
-    "cs_equispaced": False,
+    "cs_equispaced": True,
     "rays_equispaced": False,
-    "cs_global_angle_free": False,
-    "axis_angles_fixed": False,
+    "cs_global_angle_free": True,
+    "axis_angles_fixed": True,
     "cs_basis": "polar",
     "nurbs": False,
     "use_bishop_frame": True,
@@ -40,7 +40,7 @@ spline_surf.axis.fix("r_axis_0")
 proc0_print(f"spline_surf.dof_names: {spline_surf.dof_names}")
 
 vmec = Vmec.vmec_from_surf(
-    nfp=spline_surf.nfp, surf=spline_surf, mpi=mpi, ns=13, M=12, N=12, ftol=1e-8
+    nfp=spline_surf.nfp, surf=spline_surf, mpi=mpi, ns=13, M=8, N=8, ftol=1e-8
 )
 
 # Configure quasisymmetry objective:
@@ -75,7 +75,7 @@ least_squares_mpi_solve(
     prob,
     mpi,
     grad=True,
-    rel_step=1e-12,
+    rel_step=1e-9,
     abs_step=5e-6,  # **options
     x_scale="jac",
 )
@@ -355,6 +355,114 @@ proc0_print("=================================================")
 # Quasisymmetry: 0.00018048450748623903
 # aspect ratio: 6.000005235178616
 # rotational transform: 0.4199392268024837
+
+# End of 2_Intermediate/stage_one_splines.py
+# =================================================
+
+# after removing cross section as dofs
+
+#      rank_world,   nprocs_world,          group,        ngroups,    rank_groups,  nprocs_groups,   rank_leaders, nprocs_leaders
+#               0,             12,              0,             12,              0,              1,              0,             12
+#               1,             12,              1,             12,              0,              1,              1,             12
+#               2,             12,              2,             12,              0,              1,              2,             12
+#               3,             12,              3,             12,              0,              1,              3,             12
+#               4,             12,              4,             12,              0,              1,              4,             12
+#               5,             12,              5,             12,              0,              1,              5,             12
+#               6,             12,              6,             12,              0,              1,              6,             12
+#               7,             12,              7,             12,              0,              1,              7,             12
+#               8,             12,              8,             12,              0,              1,              8,             12
+#               9,             12,              9,             12,              0,              1,              9,             12
+#              10,             12,             10,             12,              0,              1,             10,             12
+#              11,             12,             11,             12,              0,              1,             11,             12
+#      rank_world,   nprocs_world,          group,        ngroups,    rank_groups,  nprocs_groups,   rank_leaders, nprocs_leaders
+#               0,             12,              0,             12,              0,              1,              0,             12
+#               1,             12,              1,             12,              0,              1,              1,             12
+#               2,             12,              2,             12,              0,              1,              2,             12
+#               3,             12,              3,             12,              0,              1,              3,             12
+#               4,             12,              4,             12,              0,              1,              4,             12
+#               5,             12,              5,             12,              0,              1,              5,             12
+#               6,             12,              6,             12,              0,              1,              6,             12
+#               7,             12,              7,             12,              0,              1,              7,             12
+#               8,             12,              8,             12,              0,              1,              8,             12
+#               9,             12,              9,             12,              0,              1,              9,             12
+#              10,             12,             10,             12,              0,              1,             10,             12
+#              11,             12,             11,             12,              0,              1,             11,             12
+# Running 2_Intermediate/stage_one_splines.py
+# ==================================================
+# spline_surf.dof_names: ['CrossSectionFixedZeta1:r_0', 'CrossSectionFixedZeta1:r_1', 'CrossSectionFixedZeta1:r_2', 'CrossSectionFixedZeta1:theta_1', 'CrossSectionFixedZeta2:r_0', 'CrossSectionFixedZeta2:r_1', 'CrossSectionFixedZeta2:r_2', 'CrossSectionFixedZeta2:r_3', 'CrossSectionFixedZeta2:theta_1', 'CrossSectionFixedZeta2:theta_2', 'CrossSectionFixedZeta2:theta_3', 'CrossSectionFixedZeta3:r_0', 'CrossSectionFixedZeta3:r_1', 'CrossSectionFixedZeta3:r_2', 'CrossSectionFixedZeta3:r_3', 'CrossSectionFixedZeta3:theta_1', 'CrossSectionFixedZeta3:theta_2', 'CrossSectionFixedZeta3:theta_3', 'CrossSectionFixedZeta4:r_0', 'CrossSectionFixedZeta4:r_1', 'CrossSectionFixedZeta4:r_2', 'CrossSectionFixedZeta4:r_3', 'CrossSectionFixedZeta4:theta_1', 'CrossSectionFixedZeta4:theta_2', 'CrossSectionFixedZeta4:theta_3', 'CrossSectionFixedZeta5:r_0', 'CrossSectionFixedZeta5:r_1', 'CrossSectionFixedZeta5:r_2', 'CrossSectionFixedZeta5:r_3', 'CrossSectionFixedZeta5:theta_1', 'CrossSectionFixedZeta5:theta_2', 'CrossSectionFixedZeta5:theta_3', 'PseudoAxis1:r_axis_1', 'PseudoAxis1:r_axis_2', 'PseudoAxis1:z_axis_1', 'PseudoAxis1:zeta_axis_1', 'SurfaceBSpline1:cs_zeta1', 'SurfaceBSpline1:cs_zeta2', 'SurfaceBSpline1:cs_zeta3', 'SurfaceBSpline1:cs_zeta4']
+# Initial Quasisymmetry: 0.00013880979047140325
+# Initial aspect ratio: 6.7950326471371145
+# Initial rotational transform: 3.5607643475807845e-19
+# Beginning optimization
+# ndofs: 40
+# dofs names: ['CrossSectionFixedZeta1:r_0', 'CrossSectionFixedZeta1:r_1', 'CrossSectionFixedZeta1:r_2', 'CrossSectionFixedZeta1:theta_1', 'CrossSectionFixedZeta2:r_0', 'CrossSectionFixedZeta2:r_1', 'CrossSectionFixedZeta2:r_2', 'CrossSectionFixedZeta2:r_3', 'CrossSectionFixedZeta2:theta_1', 'CrossSectionFixedZeta2:theta_2', 'CrossSectionFixedZeta2:theta_3', 'CrossSectionFixedZeta3:r_0', 'CrossSectionFixedZeta3:r_1', 'CrossSectionFixedZeta3:r_2', 'CrossSectionFixedZeta3:r_3', 'CrossSectionFixedZeta3:theta_1', 'CrossSectionFixedZeta3:theta_2', 'CrossSectionFixedZeta3:theta_3', 'CrossSectionFixedZeta4:r_0', 'CrossSectionFixedZeta4:r_1', 'CrossSectionFixedZeta4:r_2', 'CrossSectionFixedZeta4:r_3', 'CrossSectionFixedZeta4:theta_1', 'CrossSectionFixedZeta4:theta_2', 'CrossSectionFixedZeta4:theta_3', 'CrossSectionFixedZeta5:r_0', 'CrossSectionFixedZeta5:r_1', 'CrossSectionFixedZeta5:r_2', 'CrossSectionFixedZeta5:r_3', 'CrossSectionFixedZeta5:theta_1', 'CrossSectionFixedZeta5:theta_2', 'CrossSectionFixedZeta5:theta_3', 'PseudoAxis1:r_axis_1', 'PseudoAxis1:r_axis_2', 'PseudoAxis1:z_axis_1', 'PseudoAxis1:zeta_axis_1', 'SurfaceBSpline1:cs_zeta1', 'SurfaceBSpline1:cs_zeta2', 'SurfaceBSpline1:cs_zeta3', 'SurfaceBSpline1:cs_zeta4']
+#    Iteration     Total nfev        Cost      Cost reduction    Step norm     Optimality
+#        0              1         4.0431e-01                                    1.89e+00
+#        1              2         9.2117e-02      3.12e-01       1.14e-01       1.83e-01
+#        2              3         8.8191e-02      3.93e-03       2.33e-02       3.71e-03
+#        3              6         8.7163e-02      1.03e-03       1.68e-01       8.18e-02
+#        4              7         8.0537e-02      6.63e-03       2.45e-01       1.35e-01
+#        5              8         6.2452e-02      1.81e-02       4.81e-01       7.54e-01
+#        6              9         3.5031e-02      2.74e-02       6.22e-01       6.12e-01
+#        7             10         2.1430e-02      1.36e-02       3.49e-01       1.06e+00
+#        8             11         3.4461e-03      1.80e-02       1.16e-01       1.78e-01
+#        9             13         2.1908e-03      1.26e-03       5.90e-02       3.41e-02
+#       10             14         1.3471e-03      8.44e-04       1.43e-01       1.93e-01
+#       11             15         7.8679e-04      5.60e-04       1.30e-01       1.52e-01
+#       12             16         5.0033e-04      2.86e-04       7.87e-02       3.58e-02
+#       13             17         3.6615e-04      1.34e-04       8.08e-02       2.13e-02
+#       14             18         3.1153e-04      5.46e-05       8.91e-02       7.41e-02
+#       15             19         2.3991e-04      7.16e-05       3.28e-02       1.82e-02
+#       16             20         2.1762e-04      2.23e-05       8.00e-02       5.58e-02
+#       17             21         1.9574e-04      2.19e-05       4.58e-04       8.76e-03
+#       18             22         1.9149e-04      4.25e-06       5.72e-03       1.18e-02
+#       19             23         1.6088e-04      3.06e-05       4.59e-02       1.30e-02
+#       20             24         1.5994e-04      9.41e-07       1.07e-03       4.51e-03
+#       21             26         1.4344e-04      1.65e-05       3.83e-02       4.22e-03
+#       22             27         1.4289e-04      5.48e-07       1.71e-03       7.34e-02
+#       23             28         1.4221e-04      6.74e-07       1.86e-03       2.91e-03
+#       24             29         1.3598e-04      6.24e-06       4.73e-02       6.69e-03
+#       25             30         1.2099e-04      1.50e-05       3.46e-02       5.08e-03
+#       26             31         1.2085e-04      1.35e-07       4.37e-04       2.28e-03
+#       27             33         1.1234e-04      8.51e-06       2.54e-02       3.35e-03
+#       28             34         1.0184e-04      1.05e-05       4.84e-02       1.05e-02
+#       29             35         1.0082e-04      1.02e-06       1.14e-04       1.11e-02
+#       30             36         1.0036e-04      4.55e-07       1.78e-04       2.54e-03
+#       31             37         1.0030e-04      6.28e-08       2.76e-05       3.60e-03
+#       32             38         1.0025e-04      5.07e-08       5.51e-05       8.74e-04
+#       33             39         1.0020e-04      5.09e-08       5.02e-04       1.19e-03
+#       34             40         1.0019e-04      9.16e-09       1.33e-05       1.59e-03
+#       35             42         9.7583e-05      2.61e-06       2.20e-02       2.18e-03
+#       36             43         9.3157e-05      4.43e-06       4.69e-02       2.66e-02
+#       37             45         8.9784e-05      3.37e-06       7.93e-03       6.75e-04
+#       38             48         8.9622e-05      1.63e-07       1.60e-03       7.44e-05
+#       39             49         8.9371e-05      2.51e-07       2.68e-03       5.03e-05
+#       40             53         8.9363e-05      7.42e-09       9.05e-05       4.73e-05
+#       41             55         8.9360e-05      3.69e-09       4.13e-05       4.56e-05
+#       42             57         8.9358e-05      1.83e-09       2.06e-05       4.57e-05
+#       43             59         8.9357e-05      9.16e-10       1.03e-05       4.83e-02
+#       44             63         8.9357e-05      2.66e-13       6.19e-08       4.83e-02
+# `xtol` termination condition is satisfied.
+# Function evaluations 63, initial cost 4.0431e-01, final cost 8.9357e-05, first-order optimality 4.83e-02.
+# /Users/issraali/envs/simsopt_e/lib/python3.10/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: divide by zero encountered in matmul
+#   shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+# /Users/issraali/envs/simsopt_e/lib/python3.10/site-packages/mpl_toolkits/mplot3d/art3d.py:1403: RuntimeWarning: overflow encountered in matmul
+#   shade = ((normals / np.linalg.norm(normals, axis=1, keepdims=True))
+
+# Final vmec iteration = 245
+# Quasisymmetry: 0.00017849867514534962
+# aspect ratio: 6.000048007926692
+# rotational transform: 0.41953862389903257
+# spline_surf.x: array([3.87720734e-06, 3.91249524e-01, 1.69640982e-01, 1.40746412e+00,
+#        2.54959724e-02, 3.15148642e-01, 1.65276337e-01, 3.97897206e-01,
+#        1.14207696e+00, 3.38721691e+00, 4.64213997e+00, 1.14676434e-01,
+#        2.24180141e-01, 1.74425794e-01, 3.45234723e-01, 7.85423503e-01,
+#        3.60611068e+00, 4.41113947e+00, 1.69197840e-01, 1.52811722e-01,
+#        2.37676924e-01, 2.41158009e-01, 7.93208464e-01, 3.46774607e+00,
+#        4.24147493e+00, 1.95738698e-01, 1.10885507e-01, 2.73933287e-01,
+#        1.46855720e-01, 1.31671056e+00, 3.23287677e+00, 4.37051119e+00,
+#        7.52002275e-01, 5.83800144e-01, 2.69822713e-01, 7.15524724e-01,
+#        3.63090522e-01, 7.58644571e-01, 1.11913738e+00, 1.43625155e+00])
 
 # End of 2_Intermediate/stage_one_splines.py
 # =================================================
