@@ -3258,7 +3258,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
                 if spec_cond_options is not None
                 else default_options
             )
-            surf.condense_spectrum(**options)
+            surf, _ = surf.condense_spectrum(**options)
         else:
             surf = surf
 

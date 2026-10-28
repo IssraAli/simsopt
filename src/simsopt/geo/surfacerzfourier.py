@@ -2070,7 +2070,10 @@ class SurfaceRZFourier(sopp.SurfaceRZFourier, Surface):
             ax1.set_aspect('equal')
 
         surf_to_return = self.copy()
-        surf_to_return.rc, surf_to_return.zs = rbc_f.T, zbs_f.T 
+        surf_to_return.rc, surf_to_return.zs = rbc_f.T, zbs_f.T
+        # Keep the dof vector in sync with rc/zs, or a later .x/.full_x set
+        # would revert to the uncondensed input coefficients.
+        surf_to_return.local_full_x = surf_to_return.get_dofs()
 
         return surf_to_return
 
