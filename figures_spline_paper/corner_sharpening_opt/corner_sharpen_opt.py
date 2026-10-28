@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """
 Corner sharpening IN THE LOOP: optimize a low-resolution SurfaceBSpline
-for quasisymmetry (plus iota / aspect-ratio matching to the original
-QUASR equilibrium) where every objective evaluation sees the SHARPENED
-surface.
+for quasisymmetry, aspect ratio matching the original QUASR equilibrium,
+and corner opening angles of 90 degrees, where every objective evaluation
+sees the SHARPENED surface.
 
 Optimization variables: the low-resolution spline's own dofs (the
-60-dof, 6-points-per-cross-section surface -- i.e. BEFORE any
+65-dof, 6-points-per-cross-section surface -- i.e. BEFORE any
 Lane-Riesenfeld doubling). Sharpening itself has no dofs; it is a
 deterministic function of those low dofs:
 
@@ -23,11 +23,16 @@ surface and VMEC (VMEC only needs `.to_RZFourier()` from its boundary).
 
 Objective (least squares):
   - QS residuals (helicity (1, 0), same as sharpen.py)
-  - |mean iota| >= IOTA_MIN (free above) and AR_MIN <= aspect ratio <= AR_MAX,
-    as one-sided penalties
-  - opening angle at every corner of every cross section held at its
-    ORIGINAL value (measured on the initial low-dof surface), so the
-    optimizer can't buy QS by quietly opening the wedges back up.
+  - |mean iota| >= IOTA_MIN (free above), as a one-sided penalty. Without
+    it the optimizer buys QS by driving iota -> 0 (the (1, 0) residual has
+    a term proportional to iota).
+  - aspect ratio - the original QUASR equilibrium's aspect ratio (read from
+    TARGET_FILE's boundary, VMEC definition)
+  - opening angle at every corner of every cross section - TARGET_ANGLE_DEG
+    (90 deg), currently with a tiny weight (W_ANGLE = 0.01) so it barely
+    competes with QS / aspect ratio.
+  (The apex-Z residuals are still defined below but are not in the
+  objective.)
 
 The crossover point (tangent-line intersection, i.e. the apex) of every
 corner has a target lab-frame Z (apex_z_residuals); it is exposed by
@@ -90,7 +95,7 @@ from sharpen_fixed_s_twin import (  # noqa: E402
 )
 from simsopt._core import Optimizable, make_optimizable  # noqa: E402
 from simsopt._core.util import ObjectiveFailure  # noqa: E402
-from simsopt.geo import SurfaceBSpline  # noqa: E402
+from simsopt.geo import SurfaceBSpline, SurfaceRZFourier  # noqa: E402
 from simsopt.mhd import QuasisymmetryRatioResidual, Vmec  # noqa: E402
 from simsopt.objectives import LeastSquaresProblem  # noqa: E402
 from simsopt.solve import least_squares_mpi_solve  # noqa: E402
@@ -109,73 +114,79 @@ from tangent_extension import (  # noqa: E402
 # ---------------------------------------------------------------------
 
 # The QUASR equilibrium the spline was fit to (see shape_match.py), used
-# for the iota / aspect-ratio targets.
+# for the aspect-ratio target.
 TARGET_FILE = os.path.join(HERE, "..", "corner_sharpening", "input.0203395")
 
-# Low-dof spline fit to that equilibrium (the `dofs` list in sharpen.py /
-# tangent_extension.py's __main__), and the kwargs it was built with.
+# Low-dof spline fit to that equilibrium: stage 1 (no poloidal refine) of
+# ../corner_sharpening/shape_match.py, rerun with SPLINE_KWARGS below
+# (65 dofs; max/mean exact shape error 3.1e-3 / 9.7e-4 at R0 = 1).
 INITIAL_DOFS = np.array(
     [
-        0.20331546,
-        0.15746095,
-        0.43573368,
-        0.14817898,
-        0.88822389,
-        1.9522663,
-        0.14087834,
-        0.24736301,
-        0.42883166,
-        0.15160325,
-        0.45816498,
-        0.14868365,
-        0.59658694,
-        1.7730913,
+        0.18018380,
+        0.16852591,
+        0.43668447,
+        0.17774171,
+        1.44093066,
+        2.03468302,
+        0.12529887,
+        0.20606790,
+        0.40662734,
+        0.18032182,
+        0.49580785,
+        0.14472342,
+        0.67225077,
+        1.90897319,
         2.61799388,
-        4.23531002,
+        4.24893800,
         4.71238898,
-        0.07372945,
-        0.2838024,
-        0.51265284,
-        0.21184257,
-        0.46871346,
-        0.12405194,
-        0.62203555,
-        1.57720828,
-        3.66519143,
-        4.31988537,
+        0.09340778,
+        0.25936872,
+        0.43163652,
+        0.16634469,
+        0.52514823,
+        0.14305778,
+        0.71764233,
+        1.69295334,
+        3.30310028,
+        4.32899377,
         4.71238898,
-        0.07226604,
-        0.40665305,
-        0.48766582,
-        0.22361523,
-        0.53481562,
-        0.04923251,
-        1.02054689,
+        0.08304195,
+        0.31762877,
+        0.46650957,
+        0.21455094,
+        0.55675441,
+        0.14260905,
+        0.89934280,
         1.57079633,
         3.66519143,
-        4.47219325,
+        4.48166409,
         4.71238898,
-        0.02003046,
-        0.43141331,
-        0.50441053,
-        0.22720611,
-        0.58282917,
-        0.17844745,
-        1.12887769,
+        0.04948990,
+        0.38153149,
+        0.48589366,
+        0.22758722,
+        0.60529620,
+        0.12038121,
+        1.12816124,
         1.57079633,
         3.66519143,
-        4.66296652,
+        4.61873460,
         4.71238898,
-        0.0213662,
-        0.44783741,
-        0.51468795,
-        0.18259442,
-        1.37237811,
-        1.57079633,
-        0.95657065,
-        1.10700731,
-        1.21218964,
-        0.012124,
+        0.01610439,
+        0.43932354,
+        0.49271770,
+        0.22449632,
+        0.55532019,
+        0.36753594,
+        1.29195991,
+        1.63056199,
+        3.66519143,
+        4.70701418,
+        4.77931857,
+        0.90245209,
+        1.11239778,
+        1.19157150,
+        0.07070622,
     ]
 )
 SPLINE_KWARGS = (
@@ -195,7 +206,7 @@ L_X = 0.04
 # VMEC inside the loop (same as sharpen.py) and the final verification run
 VMEC_LOOP = dict(ns=25, M=12, N=12, ftol=1e-8, niter=5000)
 VMEC_FINAL = dict(
-    ns=50, M=16, N=16, ftol=1e-11, niter=8000, ntheta=64, nzeta=64
+    ns=50, M=16, N=16, ftol=1e-10, niter=20000, ntheta=64, nzeta=64
 )
 
 # Objective weights. Residual scales: QS residuals ~1e-3 each (x1000, as in
@@ -205,15 +216,13 @@ W_QS = 1000
 W_IOTA = 100
 W_AR = 10
 
-# One-sided (inequality) constraints, enforced as quadratic penalties that are
-# exactly zero inside the allowed region:
+# One-sided (inequality) constraint, a quadratic penalty that is exactly zero
+# inside the allowed region:
 #   |mean iota| >= IOTA_MIN   (free to grow; magnitude because the QUASR
 #                              equilibrium's iota is negative in VMEC's sign
 #                              convention -- the sign is left free)
-#   AR_MIN <= aspect <= AR_MAX
 IOTA_MIN = 0.08
-AR_MIN, AR_MAX = 4.0, 8.0
-W_ANGLE = 10
+W_ANGLE = 0.01
 BOUND_MARGIN = 0.1  # slack added when widening bounds the fitted dofs violate
 W_APEX_Z = (
     10  # crossover-point Z residuals, in the same length units as the surface
@@ -221,7 +230,7 @@ W_APEX_Z = (
 
 # Targets for the corners. None -> hold each corner at its ORIGINAL value
 # (measured on the initial low-dof surface); a number -> drive EVERY corner to it.
-TARGET_ANGLE_DEG = 45  # opening angle at the apex [deg], e.g. 60.0
+TARGET_ANGLE_DEG = 90.0  # opening angle at the apex [deg]
 TARGET_APEX_Z = (
     0.6  # |Z| of the crossover point [same units as the surface], e.g. 0.35;
 )
@@ -451,10 +460,10 @@ def iota_lower_bound_residual(vmec, iota_min):
     return np.array([max(0.0, iota_min - abs(vmec.mean_iota()))])
 
 
-def aspect_band_residual(vmec, ar_min, ar_max):
-    """Distance outside [ar_min, ar_max] (zero inside)."""
-    ar = vmec.aspect()
-    return np.array([max(0.0, ar_min - ar, ar - ar_max)])
+def original_aspect_ratio(target_file):
+    """Aspect ratio of the original equilibrium's boundary (VMEC definition,
+    see SurfaceRZFourier.aspect_ratio), without running VMEC on it."""
+    return SurfaceRZFourier.from_vmec_input(target_file).aspect_ratio()
 
 
 def opening_angle_residuals(boundary, goal_angles):
@@ -490,17 +499,13 @@ def build_targets(
 # ---------------------------------------------------------------------
 
 
-def report(label, vmec, qs, boundary, goal_angles, goal_apex_z):
+def report(label, vmec, qs, boundary, goal_angles, goal_apex_z, goal_aspect):
     ang = boundary.opening_angles()
     proc0_print(f"--- {label} ---")
     proc0_print(f"  QS total (sum of squared residuals): {qs.total():.4e}")
     proc0_print(f"  d_crawl: {boundary.d_crawl:.5f}")
-    proc0_print(
-        f"  mean iota: {vmec.mean_iota():.5f}   (require |iota| >= {IOTA_MIN})"
-    )
-    proc0_print(
-        f"  aspect:    {vmec.aspect():.5f}   (require {AR_MIN} <= AR <= {AR_MAX})"
-    )
+    proc0_print(f"  mean iota: {vmec.mean_iota():.5f}   (require |iota| >= {IOTA_MIN})")
+    proc0_print(f"  aspect:    {vmec.aspect():.5f}   (target {goal_aspect:.5f})")
     proc0_print(
         "  opening angle per corner [deg] (rows = cross sections, cols = [lower-u, higher-u]):"
     )
@@ -584,6 +589,9 @@ def main():
     proc0_print("Target crossover-point Z [Z0 Z1 per cross section]:")
     proc0_print(goal_apex_z.reshape(-1, 2))
 
+    goal_aspect = original_aspect_ratio(TARGET_FILE)
+    proc0_print(f"Target aspect ratio (original equilibrium): {goal_aspect:.5f}")
+
     vmec = Vmec.vmec_from_surf(
         nfp=low_surf.nfp, surf=boundary, mpi=mpi, **VMEC_LOOP
     )
@@ -591,16 +599,15 @@ def main():
         vmec, np.arange(0, 1.01, 0.1), helicity_m=1, helicity_n=0
     )
     iota_obj = make_optimizable(iota_lower_bound_residual, vmec, IOTA_MIN)
-    ar_obj = make_optimizable(aspect_band_residual, vmec, AR_MIN, AR_MAX)
-    # angle_obj = make_optimizable(opening_angle_residuals, boundary, goal_angles)
+    angle_obj = make_optimizable(opening_angle_residuals, boundary, goal_angles)
     # apex_obj = make_optimizable(apex_z_residuals, boundary, goal_apex_z)
 
     prob = LeastSquaresProblem.from_tuples(
         [
             (qs.residuals, 0, W_QS),
             (iota_obj.J, 0, W_IOTA),
-            (ar_obj.J, 0, W_AR),
-            # (angle_obj.J, 0, W_ANGLE),
+            (vmec.aspect, goal_aspect, W_AR),
+            (angle_obj.J, 0, W_ANGLE),
             # (apex_obj.J, 0, W_APEX_Z),
         ]
     )
@@ -615,6 +622,7 @@ def main():
         boundary,
         goal_angles,
         goal_apex_z,
+        goal_aspect,
     )
     if args.evaluate_only:
         proc0_print(f"initial objective = {prob.objective():.6e}")
@@ -638,6 +646,7 @@ def main():
         boundary,
         goal_angles,
         goal_apex_z,
+        goal_aspect,
     )
     final_angles = boundary.opening_angles().copy()
     np.save(
@@ -689,18 +698,23 @@ def main():
             "Pickled optimized twins (load with sharpen_fixed_s_twin.load_twin_surface)."
         )
 
-    # Higher-resolution VMEC run on the optimized sharpened surface.
+    # Higher-resolution VMEC run on the optimized sharpened surface. A
+    # failure here only loses the check, not the (already saved) results
+    # or the plots below.
     vmec_final = Vmec.vmec_from_surf(
         nfp=low_surf.nfp, surf=final_surf, mpi=mpi, **VMEC_FINAL
     )
-    vmec_final.run()
-    qs_final = QuasisymmetryRatioResidual(
-        vmec_final, np.arange(0, 1.01, 0.1), helicity_m=1, helicity_n=0
-    )
-    proc0_print(
-        f"High-res check: QS total = {qs_final.total():.4e}, "
-        f"iota = {vmec_final.mean_iota():.5f}, aspect = {vmec_final.aspect():.5f}"
-    )
+    try:
+        vmec_final.run()
+        qs_final = QuasisymmetryRatioResidual(
+            vmec_final, np.arange(0, 1.01, 0.1), helicity_m=1, helicity_n=0
+        )
+        proc0_print(
+            f"High-res check: QS total = {qs_final.total():.4e}, "
+            f"iota = {vmec_final.mean_iota():.5f}, aspect = {vmec_final.aspect():.5f}"
+        )
+    except ObjectiveFailure as e:
+        proc0_print(f"High-res check skipped: {e}")
 
     if mpi.proc0_world and not args.no_plots:
         plot_angles(

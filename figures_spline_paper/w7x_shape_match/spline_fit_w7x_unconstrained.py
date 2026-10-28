@@ -44,7 +44,8 @@ matplotlib.use("qtagg")
 import matplotlib.pyplot as plt
 import numpy as np
 from simsopt._core import make_optimizable
-from simsopt.geo import SurfaceBSpline, SurfaceRZFourier
+from simsopt.geo import SurfaceBSpline
+from simsopt.mhd import Vmec
 from simsopt.objectives import LeastSquaresProblem
 from simsopt.objectives.shape_errors import (
     build_exact_shape_reference,
@@ -147,10 +148,11 @@ def spline_shape_residuals(spline_surf, reference):
 
 # Target boundary: read directly from the VMEC input file's Fourier
 # coefficients -- no equilibrium solve needed, just the boundary shape.
-# target_surf = SurfaceRZFourier.from_focus(TARGET_FILE)
+target_vmec = Vmec(TARGET_FILE, verbose=False)
+target_surf = target_vmec.boundary
 # target_surf.plot(rcount=200, ccount=200)
 R0_orig = abs(target_surf.get_rc(0, 0))
-a0_orig = abs(target_surf.get_rc(0, 1))
+a0_orig = abs(target_surf.get_rc(1, 0))
 proc0_print(
     f"Target original: R0={target_surf.get_rc(0, 0):.4f}, a0~{a0_orig:.4f}"
 )
@@ -175,8 +177,8 @@ proc0_print(
     f"nfp={target_surf.nfp}, mpol={target_surf.mpol}, ntor={target_surf.ntor}"
 )
 
-n_cross_sections = 2 * (2 * 12 * target_surf.nfp + 2)
-ntheta_ref = 2 * (2 * 12 + 1)
+n_cross_sections = 4 * (2 * 12 * target_surf.nfp + 2)
+ntheta_ref = 4 * (2 * 12 + 1)
 phi_1d = np.linspace(0, 2 * np.pi, n_cross_sections, endpoint=False)
 reference = build_exact_shape_reference(target_surf, phi_1d, ntheta=ntheta_ref)
 
