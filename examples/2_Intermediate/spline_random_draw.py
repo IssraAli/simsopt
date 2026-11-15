@@ -288,17 +288,21 @@ def sobol_design(n_samples, seed):
         [n for n in box if ":cs_angle" in n],
         key=lambda n: int(n.split("cs_angle")[-1]),
     )
-    prev = np.zeros(n_samples)  # cs_angle0 is fixed at 0 (stellarator symmetry)
+    # across each mirror plane (zeta = 0 and zeta = pi/nfp) a cross section
+    # with angle a meets its mirror image with angle -a, so the first and
+    # last angles must satisfy |2a| <= step
+    prev = None
     n_cs = spline_kwargs["n_cs"]
     for n in ang:
         i = col[n]
         k = int(n.split("cs_angle")[-1])
         lo, hi = box_lb[i] * np.ones(n_samples), box_ub[i] * np.ones(n_samples)
         if step is not None:
-            lo, hi = np.maximum(lo, prev - step), np.minimum(hi, prev + step)
-            # distance to the fixed last cross section (angle 0) after
-            # n_cs-1-k further steps
-            reach = step * (n_cs - 1 - k)
+            if prev is not None:
+                lo, hi = np.maximum(lo, prev - step), np.minimum(hi, prev + step)
+            # the first angle is within step/2 of zero; the last must be too,
+            # after n_cs-1-k further steps
+            reach = step * min(k + 0.5, n_cs - 1 - k + 0.5)
             lo, hi = np.maximum(lo, -reach), np.minimum(hi, reach)
         out[:, i] = lo + (hi - lo) * c[n]
         prev = out[:, i]

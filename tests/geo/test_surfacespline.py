@@ -243,15 +243,14 @@ class DofTests(unittest.TestCase):
 
     def test_default_dofs(self):
         s = SurfaceBSpline(axis_points=4, n_cs=2, points_per_cs=7)
-        # z_sym cross section: 4 radii, 3 free angles; other: 7 radii, 6 free angles;
-        # axis: 4 radii, 2 interior z, 2 interior zeta
-        self.assertEqual(len(s.x), (4 + 3) + (7 + 6) + (4 + 2 + 2))
+        # each cross section: 7 radii, 6 free angles; axis: 4 radii, 2 interior z, 2 interior zeta
+        self.assertEqual(len(s.x), 2 * (7 + 6) + (4 + 2 + 2))
 
     def test_flags_change_the_expected_dofs(self):
         base = self.local_names(SurfaceBSpline(n_cs=3))
         cases = [
-            (dict(toroidal_equispaced=False), {"cs_zeta1", "cs_zeta2"}, set()),
-            (dict(cs_global_angle_free=True), {"cs_angle1", "cs_angle2"}, set()),
+            (dict(toroidal_equispaced=False), {"cs_zeta0", "cs_zeta1", "cs_zeta2"}, set()),
+            (dict(cs_global_angle_free=True), {"cs_angle0", "cs_angle1", "cs_angle2"}, set()),
             (dict(axis_angles_fixed=True), set(), {"zeta_axis_1", "zeta_axis_2"}),
             (dict(poloidal_equispaced=True), set(), {f"theta_{i}" for i in range(1, 7)}),
             (dict(nurbs=True), {f"w_{i}" for i in range(6)}, set()),
@@ -294,7 +293,7 @@ class DofTests(unittest.TestCase):
             with self.subTest(poloidal_equispaced=equispaced):
                 s = SurfaceBSpline(nurbs=True, poloidal_equispaced=equispaced)
                 for cs in s.cs_list:
-                    w_fixed = [cs.is_fixed(f"w_{i}") for i in range(cs.n_pts)]
+                    w_fixed = [cs.is_fixed(f"w_{i}") for i in range(cs.n_ctrl_pts)]
                     self.assertEqual(sum(w_fixed), 1)
 
     def test_nurbs_weight_scale_does_not_change_shape(self):
@@ -309,17 +308,6 @@ class DofTests(unittest.TestCase):
 
 class CrossSectionTests(unittest.TestCase):
 
-    def test_z_sym_full_arrays_are_mirrored(self):
-        for n in (6, 7):
-            with self.subTest(n_ctrl_pts=n):
-                cs = CrossSectionFixedZeta(0, n_ctrl_pts=n, z_sym=True)
-                cs.x = cs.x + 0.05 * np.random.default_rng(n).normal(size=len(cs.x))
-                r, th = cs.get_r_ctrl_full(), cs.get_theta_ctrl_full()
-                self.assertEqual(len(r), n)
-                np.testing.assert_allclose(r[1:], r[1:][::-1])
-                np.testing.assert_allclose(th[1:] + th[1:][::-1], 2 * np.pi)
-                self.assertEqual(th[0], 0)
-
     def test_flipped_is_up_down_mirror(self):
         cs = CrossSectionFixedZeta(1, n_ctrl_pts=7)
         cs.x = cs.x + 0.05 * np.random.default_rng(0).normal(size=len(cs.x))
@@ -327,7 +315,7 @@ class CrossSectionTests(unittest.TestCase):
         f = cs.flipped()
 
         def points(c):
-            r, th = c.get_r_ctrl_full(), c.get_theta_ctrl_full()
+            r, th = c.r_ctrl, c.theta_ctrl
             return np.stack([r * np.cos(th), r * np.sin(th)], axis=1)
 
         p, q = points(cs), points(f)
@@ -336,8 +324,6 @@ class CrossSectionTests(unittest.TestCase):
         np.testing.assert_allclose(q[1:], (p[1:] * [1, -1])[::-1], atol=1e-14)
         self.assertEqual([cs.is_fixed(n) for n in cs.local_full_dof_names], fixed)
         self.assertEqual([f.is_fixed(n) for n in f.local_full_dof_names], fixed)
-        z = CrossSectionFixedZeta(0, n_ctrl_pts=7, z_sym=True)
-        self.assertIs(z.flipped(), z)
 
 
 class InteriorAxisTests(unittest.TestCase):
@@ -461,7 +447,7 @@ class ConstraintTests(unittest.TestCase):
         A, lb, ub, titles = self.constraints(s)
         s.axis.set("r_axis_3", 0.45)  # below every cross-section radius
         bad = violated(s, A, lb, ub, titles)
-        expected = {f"{cs.name}:r_{j} <= {ax}:r_axis_3" for cs in s.cs_list for j in range(cs.n_pts)}
+        expected = {f"{cs.name}:r_{j} <= {ax}:r_axis_3" for cs in s.cs_list for j in range(cs.n_ctrl_pts)}
         self.assertEqual(bad, expected)
         s.axis.set("r_axis_3", 1.0)
         s.cs_list[1].set("r_4", -0.01)
@@ -477,7 +463,7 @@ class ConstraintTests(unittest.TestCase):
         self.assertEqual(violated(s, A, lb, ub, titles), {f"2.0*{name} <= mean(r_axis)"})
         s.cs_list[1].set("r_2", 0.5)
         s.axis.set("r_axis_1", 0.9)  # lowers the mean below 2 * 0.5 for every cross-section radius
-        self.assertEqual(len(violated(s, A, lb, ub, titles)), sum(cs.n_pts for cs in s.cs_list))
+        self.assertEqual(len(violated(s, A, lb, ub, titles)), sum(cs.n_ctrl_pts for cs in s.cs_list))
 
     def test_fixed_dofs_are_constants(self):
         s = SurfaceBSpline(axis_points=4, default_r=0.5)
@@ -502,15 +488,20 @@ class ConstraintTests(unittest.TestCase):
         s = SurfaceBSpline(n_cs=3, cs_global_angle_free=True)
         A, lb, ub, titles = self.constraints(s, cs_angle_step_max=0.1)
         s.set("cs_angle1", 0.04)
-        s.set("cs_angle2", -0.04)  # steps 0.04 and 0.08, and 0.08 across the mirror plane
+        s.set("cs_angle2", -0.04)  # steps 0.04 and 0.08, and 0.08 across the pi/nfp mirror plane
         self.assertEqual(violated(s, A, lb, ub, titles), set())
+        s.set("cs_angle0", 0.06)  # step 0.02 to cs_angle1, but 0.12 across the zeta = 0 mirror plane
+        self.assertEqual(violated(s, A, lb, ub, titles), {
+            "|2*cs_angle0| <= 0.1 (step across the zeta = 0 mirror plane)",
+        })
+        s.set("cs_angle0", 0.0)
         s.set("cs_angle2", 0.16)  # step 0.12 from cs_angle1, and 0.32 across the mirror plane
         self.assertEqual(violated(s, A, lb, ub, titles), {
             "|cs_angle2 - cs_angle1| <= 0.1",
             "|2*cs_angle2| <= 0.1 (step across the zeta = pi/nfp mirror plane)",
         })
         s.set("cs_angle2", 0.0)
-        s.set("cs_angle1", 0.11)  # step from the fixed cs_angle0 = 0
+        s.set("cs_angle1", 0.11)  # step from cs_angle0 = 0
         self.assertIn("|cs_angle1 - cs_angle0| <= 0.1", violated(s, A, lb, ub, titles))
 
     def test_fix_axis_angles(self):
@@ -616,7 +607,7 @@ class SerializationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SurfaceBSpline(axis_points=4, axis=InteriorAxis(n_ctrl_pts=5, nfp=2))
         with self.assertRaises(ValueError):
-            SurfaceBSpline(n_cs=2, cs_list=[CrossSectionFixedZeta(0, z_sym=True)])
+            SurfaceBSpline(n_cs=2, cs_list=[CrossSectionFixedZeta(0)])
 
     def test_reusing_children(self):
         """Passing existing children reproduces the surface and shares their dofs."""

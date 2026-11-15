@@ -34,9 +34,7 @@ class CrossSectionFixedZeta(Optimizable):
     zeta_index : int
         Index of the cross section in the parent `SurfaceBSpline`.
     n_ctrl_pts : int
-        Number of control points (including endpoints if z_sym).
-    z_sym : bool
-        Whether the cross section is up-down symmetric.
+        Number of control points.
     equispaced : bool
         Whether to fix the polar-angle dofs.
     default_r : float
@@ -51,7 +49,6 @@ class CrossSectionFixedZeta(Optimizable):
         self,
         zeta_index,
         n_ctrl_pts=7,
-        z_sym=False,
         equispaced=False,
         default_r=0.3,
         nurbs=False,
@@ -59,117 +56,47 @@ class CrossSectionFixedZeta(Optimizable):
     ):
         self.zeta_index = zeta_index
         self.n_ctrl_pts = n_ctrl_pts
-        self.z_sym = z_sym
         self.equispaced = equispaced
         self.default_r = default_r
         self.nurbs = nurbs
         if dofs is not None:
-            self.n_pts = (n_ctrl_pts // 2) + 1 if z_sym else n_ctrl_pts
-            super().__init__(dofs=dofs, external_dof_setter=CrossSectionFixedZeta.set_dofs_impl)
+            super().__init__(
+                dofs=dofs,
+                external_dof_setter=CrossSectionFixedZeta.set_dofs_impl,
+            )
             return
-        if z_sym:
-            n_pts = (n_ctrl_pts // 2) + 1
-            max_angle = np.pi
-            # default behaviour: circular
-            r_ctrl = default_r * np.ones(n_pts)
-            theta_ctrl = np.arange(0, n_pts, 1) * 2 * np.pi / n_ctrl_pts
-            w_ctrl = 0.5 * np.ones(n_pts)
-            cs_dofs = np.concatenate([r_ctrl, theta_ctrl, w_ctrl])
 
-            assert len(cs_dofs) == 3 * ((n_ctrl_pts // 2) + 1)
-            if not n_ctrl_pts % 2:
-                assert theta_ctrl[-1] == np.pi, f"theta_ctrl: {theta_ctrl}"
-        else:
-            n_pts = n_ctrl_pts
-            max_angle = 2 * np.pi
-            # default behaviour: circular
-            r_ctrl = default_r * np.ones(n_pts)
-            theta_ctrl = np.linspace(0, max_angle, n_pts + 1)[:-1]
-            w_ctrl = 0.5 * np.ones(n_pts)
-            cs_dofs = np.concatenate([r_ctrl, theta_ctrl, w_ctrl])
+        n = n_ctrl_pts
+        # default behaviour: circular
+        theta_grid = np.linspace(0, 2 * np.pi, n + 1)
+        half_step = 0.5 * theta_grid[1]
+        r_ctrl = default_r * np.ones(n)
+        theta_ctrl = theta_grid[:-1]
+        w_ctrl = 0.5 * np.ones(n)
+        cs_dofs = np.concatenate([r_ctrl, theta_ctrl, w_ctrl])
 
-            assert len(cs_dofs) == 3 * n_ctrl_pts
-
-        self.r_ctrl = cs_dofs[:n_pts]
-        self.theta_ctrl = cs_dofs[n_pts : 2 * n_pts :]
-        self.w_ctrl = cs_dofs[2 * n_pts :]
-        self.n_pts = n_pts
-
-        # naming dofs
-        names = self._name_dofs(n_pts)
+        self.r_ctrl = cs_dofs[:n]
+        self.theta_ctrl = cs_dofs[n : 2 * n]
+        self.w_ctrl = cs_dofs[2 * n :]
 
         if equispaced:
-            dofs = DOFs(
-                cs_dofs,
-                names,
-                # last weight fixed: scaling all weights leaves the curve unchanged
-                [True] * (n_pts) + [False] * (n_pts) + [nurbs] * (n_pts - 1) + [False],
-                [0] * (n_pts)
-                + (
-                    np.linspace(0, max_angle, n_pts + 1)[:-1]
-                    - 0.5 * np.linspace(0, max_angle, n_pts + 1)[1]
-                ).tolist()
-                + [0] * (n_pts),
-                [1] * (n_pts)
-                + (
-                    np.linspace(0, max_angle, n_pts + 1)[1:]
-                    - 0.5 * np.linspace(0, max_angle, n_pts + 1)[1]
-                ).tolist()
-                + [1] * (n_pts),
-            )
-            super().__init__(
-                dofs=dofs,
-                external_dof_setter=CrossSectionFixedZeta.set_dofs_impl,
-            )
+            theta_free = [False] * n
         else:
-            dofs = DOFs(
-                cs_dofs,
-                names,
-                [True] * (n_pts)
-                + [False]
-                + [True] * (n_pts - 1)
-                + [nurbs] * (n_pts - 1)
-                + [
-                    False
-                ],  # fixing one of the angles, weights in the cross section
-                [0] * (n_pts)
-                + (
-                    np.linspace(0, max_angle, n_pts + 1)[:-1]
-                    - 0.5 * np.linspace(0, max_angle, n_pts + 1)[1]
-                ).tolist()
-                + [0] * (n_pts),
-                [1] * (n_pts)
-                + (
-                    np.linspace(0, max_angle, n_pts + 1)[1:]
-                    - 0.5 * np.linspace(0, max_angle, n_pts + 1)[1]
-                ).tolist()
-                + [1] * (n_pts),
-            )
-            super().__init__(
-                dofs=dofs,
-                external_dof_setter=CrossSectionFixedZeta.set_dofs_impl,
-            )
-            if z_sym:
-                assert self.get("theta_0") == 0, (
-                    f"theta_0 = {self.get('theta_0')}"
-                )
-                dofs.fix("theta_0")
-                if not n_ctrl_pts % 2:
-                    assert self.get(f"theta_{n_pts - 1}") == np.pi, (
-                        f"theta_0 = {self.get(f'theta_{n_pts - 1}')}"
-                    )
-                    dofs.fix(f"theta_{n_pts - 1}")
-                    new_bounds = np.linspace(0, max_angle, n_pts - 1)
-                    for k in range(1, n_pts - 1):
-                        dofs.update_bounds(
-                            f"theta_{k}", (new_bounds[k - 1], new_bounds[k])
-                        )
-                    lower_for_last = (
-                        new_bounds[-2] if len(new_bounds) >= 2 else 0.0
-                    )
-                    dofs.update_bounds(
-                        f"theta_{n_pts - 1}", (lower_for_last, max_angle)
-                    )
+            # one angle stays fixed in each cross section
+            theta_free = [False] + [True] * (n - 1)
+
+        dofs = DOFs(
+            cs_dofs,
+            self._name_dofs(n),
+            # last weight fixed: scaling all weights leaves the curve unchanged
+            [True] * n + theta_free + [nurbs] * (n - 1) + [False],
+            [0] * n + (theta_grid[:-1] - half_step).tolist() + [0] * n,
+            [1] * n + (theta_grid[1:] - half_step).tolist() + [1] * n,
+        )
+        super().__init__(
+            dofs=dofs,
+            external_dof_setter=CrossSectionFixedZeta.set_dofs_impl,
+        )
 
     def set_dofs_impl(self, v):
         """
@@ -180,15 +107,14 @@ class CrossSectionFixedZeta(Optimizable):
         v : ndarray
             Full dof vector [r_ctrl, theta_ctrl, w_ctrl].
         """
-        n_pts = self.n_pts
-        n = 3 * n_pts
-        if len(v) != n:
+        n = self.n_ctrl_pts
+        if len(v) != 3 * n:
             raise ValueError(
-                f"Input vector should have {n} elements but instead has {len(v)}"
+                f"Input vector should have {3 * n} elements but instead has {len(v)}"
             )
-        self.r_ctrl = v[:n_pts]
-        self.theta_ctrl = v[n_pts : 2 * n_pts]
-        self.w_ctrl = v[2 * n_pts :]
+        self.r_ctrl = v[:n]
+        self.theta_ctrl = v[n : 2 * n]
+        self.w_ctrl = v[2 * n :]
 
     def _name_dofs(self, n_pts):
         """
@@ -197,7 +123,7 @@ class CrossSectionFixedZeta(Optimizable):
         Parameters
         ----------
         n_pts : int
-            Number of stored control points.
+            Number of control points.
 
         Returns
         -------
@@ -213,64 +139,6 @@ class CrossSectionFixedZeta(Optimizable):
             namelist.append(f"w_{i}")
         return namelist
 
-    def get_r_ctrl_full(self):
-        """
-        Return control-point radii for the full cross section, mirrored if z_sym.
-
-        Returns
-        -------
-        ndarray
-            Radii of all control points.
-        """
-        if self.z_sym:
-            if self.n_ctrl_pts % 2 == 1:
-                full = np.concatenate((self.r_ctrl, self.r_ctrl[:0:-1]))
-            else:
-                full = np.concatenate((self.r_ctrl, self.r_ctrl[-2:0:-1]))
-        else:
-            full = self.r_ctrl
-        return full
-
-    def get_theta_ctrl_full(self):
-        """
-        Return control-point polar angles for the full cross section, mirrored if z_sym.
-
-        Returns
-        -------
-        ndarray
-            Polar angles of all control points.
-        """
-        if self.z_sym:
-            if self.n_ctrl_pts % 2 == 1:
-                full = np.concatenate(
-                    (self.theta_ctrl, 2 * np.pi - self.theta_ctrl[:0:-1])
-                )
-            else:
-                full = np.concatenate(
-                    (self.theta_ctrl, 2 * np.pi - self.theta_ctrl[-2:0:-1])
-                )
-        else:
-            full = self.theta_ctrl
-        return full
-
-    def get_w_ctrl_full(self):
-        """
-        Return control-point weights for the full cross section, mirrored if z_sym.
-
-        Returns
-        -------
-        ndarray
-            Weights of all control points.
-        """
-        if self.z_sym:
-            if self.n_ctrl_pts % 2 == 1:
-                full = np.concatenate((self.w_ctrl, self.w_ctrl[:0:-1]))
-            else:
-                full = np.concatenate((self.w_ctrl, self.w_ctrl[-2:0:-1]))
-        else:
-            full = self.w_ctrl
-        return full
-
     def flipped(self):
         """
         Return the up-down mirror image of this cross section.
@@ -278,37 +146,29 @@ class CrossSectionFixedZeta(Optimizable):
         Returns
         -------
         CrossSectionFixedZeta
-            self if z_sym, otherwise a new mirrored cross section with the same fixed dofs.
+            A new mirrored cross section with the same fixed dofs.
         """
-        if self.z_sym:
-            return self
-        else:
-            r_flipped = np.insert(self.r_ctrl[:0:-1], 0, self.r_ctrl[0])
-            ws_flipped = np.insert(self.w_ctrl[:0:-1], 0, self.w_ctrl[0])
-            theta_flipped = 2 * np.pi - np.insert(
-                self.theta_ctrl[:0:-1], 0, self.theta_ctrl[0]
-            )
-            dofs_flipped = np.concatenate(
-                (r_flipped, theta_flipped, ws_flipped)
-            )
-            fixed_list = [
-                self.is_fixed(key) for key in self.local_full_dof_names
-            ]
-            self.unfix_all()
-            flipped_cs = CrossSectionFixedZeta(
-                zeta_index=self.zeta_index,
-                n_ctrl_pts=self.n_ctrl_pts,
-                z_sym=False,
-                nurbs=self.nurbs,
-            )
-            flipped_cs.unfix_all()
-            flipped_cs.x = dofs_flipped
-            # fix() by name: passing a bool would be treated as a boolean mask.
-            for is_fixed, name in zip(fixed_list, self.local_full_dof_names):
-                if is_fixed:
-                    flipped_cs.fix(name)
-                    self.fix(name)
-            return flipped_cs
+        r_flipped = np.insert(self.r_ctrl[:0:-1], 0, self.r_ctrl[0])
+        ws_flipped = np.insert(self.w_ctrl[:0:-1], 0, self.w_ctrl[0])
+        theta_flipped = 2 * np.pi - np.insert(
+            self.theta_ctrl[:0:-1], 0, self.theta_ctrl[0]
+        )
+        dofs_flipped = np.concatenate((r_flipped, theta_flipped, ws_flipped))
+        fixed_list = [self.is_fixed(key) for key in self.local_full_dof_names]
+        self.unfix_all()
+        flipped_cs = CrossSectionFixedZeta(
+            zeta_index=self.zeta_index,
+            n_ctrl_pts=self.n_ctrl_pts,
+            nurbs=self.nurbs,
+        )
+        flipped_cs.unfix_all()
+        flipped_cs.x = dofs_flipped
+        # fix() by name: passing a bool would be treated as a boolean mask.
+        for is_fixed, name in zip(fixed_list, self.local_full_dof_names):
+            if is_fixed:
+                flipped_cs.fix(name)
+                self.fix(name)
+        return flipped_cs
 
 
 class InteriorAxis(sopp.Curve, Curve):
@@ -344,7 +204,9 @@ class InteriorAxis(sopp.Curve, Curve):
         dofs=None,
     ):
         if not stellsym:
-            raise NotImplementedError("InteriorAxis only supports stellsym=True")
+            raise NotImplementedError(
+                "InteriorAxis only supports stellsym=True"
+            )
         self.n_ctrl_pts = n_ctrl_pts
         self.axis_angles_fixed = axis_angles_fixed
         self.stellsym = stellsym
@@ -850,6 +712,8 @@ class SurfaceBSpline(sopp.Surface, Surface):
     Notes
     -----
     Cross sections (`CrossSectionFixedZeta`) define control points in local coordinates at fixed toroidal angle.
+    The n_cs stored cross sections lie strictly inside the half period (0, pi/nfp); the rest of the control
+    net is their up-down mirror image at -zeta, repeated nfp times, so the surface is stellarator symmetric.
     """
 
     def __init__(
@@ -917,7 +781,9 @@ class SurfaceBSpline(sopp.Surface, Surface):
             Existing cross sections to use, e.g. when loading; built from the defaults if None.
         """
         if not stellsym:
-            raise NotImplementedError("SurfaceBSpline only supports stellsym=True")
+            raise NotImplementedError(
+                "SurfaceBSpline only supports stellsym=True"
+            )
         max_angle = np.pi / nfp
 
         self.axis_points = axis_points
@@ -938,9 +804,9 @@ class SurfaceBSpline(sopp.Surface, Surface):
         self.use_bishop_frame = use_bishop_frame
 
         if dofs is None:
-            # Spacing h makes the gap across the zeta = pi/nfp mirror plane equal the neighbor gap.
-            h_zeta = max_angle / (n_cs - 0.5)
-            cs_zeta = h_zeta * np.arange(n_cs)
+            # defaults to equispaced (tokamak-like)
+            h_zeta = max_angle / n_cs
+            cs_zeta = h_zeta * (np.arange(n_cs) + 0.5)
             cs_angles = np.zeros(n_cs)
 
             dofs = np.append(cs_zeta, cs_angles)
@@ -948,10 +814,10 @@ class SurfaceBSpline(sopp.Surface, Surface):
             names = [f"cs_zeta{i}" for i in range(n_cs)] + [
                 f"cs_angle{i}" for i in range(n_cs)
             ]
-            # cs_zeta bounds: halfway to each neighbor, strictly inside the mirror plane
-            zeta_lb = [(n - 0.5) * h_zeta for n in range(n_cs)]
+            # cs_zeta bounds: halfway to each neighbor, strictly inside the mirror planes
+            zeta_lb = [max(n * h_zeta, 0.25 * h_zeta) for n in range(n_cs)]
             zeta_ub = [
-                min((n + 0.5) * h_zeta, max_angle - 0.25 * h_zeta)
+                min((n + 1) * h_zeta, max_angle - 0.25 * h_zeta)
                 for n in range(n_cs)
             ]
             dofs = DOFs(
@@ -963,10 +829,6 @@ class SurfaceBSpline(sopp.Surface, Surface):
                 zeta_ub + [2 * np.pi / points_per_cs] * n_cs,
             )
 
-        # the zeta = 0 cross section is z_sym and pinned
-        dofs.fix("cs_angle0")
-        dofs.fix("cs_zeta0")
-
         if axis is None:
             axis = InteriorAxis(
                 n_ctrl_pts=axis_points,
@@ -974,8 +836,14 @@ class SurfaceBSpline(sopp.Surface, Surface):
                 stellsym=stellsym,
                 axis_angles_fixed=axis_angles_fixed,
             )
-        elif (axis.n_ctrl_pts, axis.nfp, axis.stellsym) != (axis_points, nfp, stellsym):
-            raise ValueError("axis does not match axis_points, nfp and stellsym")
+        elif (axis.n_ctrl_pts, axis.nfp, axis.stellsym) != (
+            axis_points,
+            nfp,
+            stellsym,
+        ):
+            raise ValueError(
+                "axis does not match axis_points, nfp and stellsym"
+            )
         self.axis = axis
 
         if cs_list is None:
@@ -987,14 +855,13 @@ class SurfaceBSpline(sopp.Surface, Surface):
                         n_ctrl_pts=points_per_cs,
                         equispaced=poloidal_equispaced,
                         default_r=default_r,
-                        z_sym=(i == 0),
                         nurbs=nurbs,
                     )
                 )
         elif len(cs_list) != n_cs or any(
-            cs.n_ctrl_pts != points_per_cs or cs.z_sym != (i == 0) for i, cs in enumerate(cs_list)
+            cs.n_ctrl_pts != points_per_cs for cs in cs_list
         ):
-            raise ValueError("cs_list does not match n_cs and points_per_cs, with only the first cross section z_sym")
+            raise ValueError("cs_list does not match n_cs and points_per_cs")
         self.cs_list = list(cs_list)
 
         if quadpoints_theta is None:
@@ -1154,41 +1021,31 @@ class SurfaceBSpline(sopp.Surface, Surface):
 
         cs_zeta, cs_angles = self.get_cs_zeta_angle()
 
-        cs_zeta_1fp = np.append(
-            cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[:0:-1]
-        )
+        # one field period: the stored half period, then its mirror image in reverse order
+        cs_zeta_1fp = np.append(cs_zeta, (2 * np.pi / self.nfp) - cs_zeta[::-1])
         cs_zeta_full = np.concatenate(
             [cs_zeta_1fp + n * (2 * np.pi / self.nfp) for n in range(self.nfp)]
         )
 
         axis_pos, e1, e2 = self._axis_local_basis(cs_zeta_full)
 
-        cs_list_1fp = [
-            cs if (i // self.n_cs) == 0 else cs.flipped()
-            for i, cs in enumerate(self.cs_list + self.cs_list[:0:-1])
-        ]
+        cs_list_1fp = self.cs_list + [cs.flipped() for cs in self.cs_list[::-1]]
         cs_list_full = np.tile(cs_list_1fp, self.nfp)
 
-        cs_angle_1fp = [
-            angle if (i // self.n_cs) == 0 else -angle
-            for i, angle in enumerate(np.append(cs_angles, cs_angles[:0:-1]))
-        ]
+        cs_angle_1fp = np.append(cs_angles, -cs_angles[::-1])
         cs_angle_full = np.tile(cs_angle_1fp, self.nfp)
 
         for i, cs in enumerate(cs_list_full):
-            cs_r_ctrl_full = cs.get_r_ctrl_full()
-            cs_theta_ctrl_full = cs.get_theta_ctrl_full()
-            cs_w_ctrl_full = cs.get_w_ctrl_full()
             cs_pointlist = []
-            for j, r_cs in enumerate(cs_r_ctrl_full):
-                theta = cs_theta_ctrl_full[j]
+            for j, r_cs in enumerate(cs.r_ctrl):
+                theta = cs.theta_ctrl[j]
                 offset = r_cs * np.cos(theta + cs_angle_full[i]) * e1[i] + (
                     r_cs * np.sin(theta + cs_angle_full[i]) * e2[i]
                 )
                 new_point = axis_pos[i] + offset
                 cs_pointlist.append(new_point)
             point_list.append(np.array(cs_pointlist))
-            w_list.append(cs_w_ctrl_full)
+            w_list.append(cs.w_ctrl)
 
         if return_w:
             return point_list, w_list
@@ -1288,7 +1145,9 @@ class SurfaceBSpline(sopp.Surface, Surface):
         # midplane and the normal pointing outward. u0 is the Greville abscissa of the inboard
         # theta_0 control point (nonzero for even p_u); u0 + pi is the outboard symmetry point.
         u0 = knots_u[p_u + 1 : 2 * p_u + 1].mean()
-        theta = (u0 + np.pi - np.asarray(quadpoints_theta) * 2 * np.pi) % (2 * np.pi)
+        theta = (u0 + np.pi - np.asarray(quadpoints_theta) * 2 * np.pi) % (
+            2 * np.pi
+        )
         phi = np.asarray(quadpoints_phi) * 2 * np.pi
 
         u_basis_row = b_p(knots_u, p_u, theta)  # (N, n_u_basis)
@@ -1394,7 +1253,9 @@ class SurfaceBSpline(sopp.Surface, Surface):
         # midplane and the normal pointing outward. u0 is the Greville abscissa of the inboard
         # theta_0 control point (nonzero for even p_u); u0 + pi is the outboard symmetry point.
         u0 = knots_u[p_u + 1 : 2 * p_u + 1].mean()
-        theta = (u0 + np.pi - np.asarray(quadpoints_theta) * 2 * np.pi) % (2 * np.pi)
+        theta = (u0 + np.pi - np.asarray(quadpoints_theta) * 2 * np.pi) % (
+            2 * np.pi
+        )
         phi = np.asarray(quadpoints_phi) * 2 * np.pi
 
         wp = trimmed_weights_ji[:, :, None] * trimmed_ctrl_pts_jim
@@ -1757,11 +1618,13 @@ class SurfaceBSpline(sopp.Surface, Surface):
         assert nv % 2 == 0, "nv must be even"
 
         # theta = spline u: no interpolation error, but not a physical angle.
-        R_on_tz_grid, z_on_tz_grid, zeta_eval, theta_eval = self.exact_tz_interp(
-            nu=nu,
-            nv=nv,
-            plot=plot_intermediate,
-            ax=intermediate_ax,
+        R_on_tz_grid, z_on_tz_grid, zeta_eval, theta_eval = (
+            self.exact_tz_interp(
+                nu=nu,
+                nv=nv,
+                plot=plot_intermediate,
+                ax=intermediate_ax,
+            )
         )
 
         M, N = self.M, self.N
@@ -1936,14 +1799,18 @@ class SurfaceBSpline(sopp.Surface, Surface):
                 "verbose": False,
                 "cutoff": 1e-8,
             }
-            surf = surf.variational_spec_cond(**{**default_options, **(spec_cond_options or {})})
+            surf = surf.variational_spec_cond(
+                **{**default_options, **(spec_cond_options or {})}
+            )
         elif spec_cond == "direct":
             default_options = {
                 "verbose": False,
                 "method": "trf",
                 "Fourier_continuation": False,
             }
-            surf, _ = surf.condense_spectrum(**{**default_options, **(spec_cond_options or {})})
+            surf, _ = surf.condense_spectrum(
+                **{**default_options, **(spec_cond_options or {})}
+            )
 
         return surf
 
@@ -1975,7 +1842,8 @@ class SurfaceBSpline(sopp.Surface, Surface):
         z_axis_max : float
             Bound on |z_axis_i| for interior axis points.
         cs_angle_step_max : float or None
-            Bound on the angle step between neighboring cross sections, including across zeta = pi/nfp.
+            Bound on the angle step between neighboring cross sections, including across the mirror
+            planes zeta = 0 and zeta = pi/nfp.
         cs_axis_ratio : float or None
             If set to a, use a * r_cs_j <= mean(r_axis) instead of r_cs_j <= min(r_axis).
 
@@ -2070,7 +1938,7 @@ class SurfaceBSpline(sopp.Surface, Surface):
         axis_ms = range(1 if self.axis_points > 1 else 0, self.axis_points)
         all_axis = range(self.axis_points)
         for cs in self.cs_list:
-            for j in range(cs.n_pts):
+            for j in range(cs.n_ctrl_pts):
                 name = f"{cs.name}:r_{j}"
                 cs_free = name in indices_dict
                 if cs_free:
@@ -2148,16 +2016,18 @@ class SurfaceBSpline(sopp.Surface, Surface):
                         c1 + cs_angle_step_max,
                         title,
                     )
-            # Across zeta = pi/nfp the last cross section (angle a) meets its mirror (-a).
-            n_last = angle_name(self.n_cs - 1)
-            if n_last in indices_dict:
-                add_row(
-                    {n_last: 2},
-                    -cs_angle_step_max,
-                    cs_angle_step_max,
-                    f"|2*cs_angle{self.n_cs - 1}| <= {cs_angle_step_max} "
-                    "(step across the zeta = pi/nfp mirror plane)",
-                )
+            # Across each mirror plane a cross section (angle a) meets its mirror (-a):
+            # the first at zeta = 0, the last at zeta = pi/nfp.
+            for k, plane in ((0, "0"), (self.n_cs - 1, "pi/nfp")):
+                n_k = angle_name(k)
+                if n_k in indices_dict:
+                    add_row(
+                        {n_k: 2},
+                        -cs_angle_step_max,
+                        cs_angle_step_max,
+                        f"|2*cs_angle{k}| <= {cs_angle_step_max} "
+                        f"(step across the zeta = {plane} mirror plane)",
+                    )
 
         A = (
             np.array(constraints_list)
