@@ -11,6 +11,7 @@ from ..util.spline_helpers import (
     b_p_deriv,
     b_p_deriv2,
     double_reflection_rmf,
+    lane_riesenfeld_double,
     uniform_knots,
 )
 from .curve import Curve
@@ -169,6 +170,74 @@ class CrossSectionFixedZeta(Optimizable):
                 flipped_cs.fix(name)
                 self.fix(name)
         return flipped_cs
+
+
+    def refined(self, p):
+        """
+        Return a cross section with twice the control points and the same curve, by Lane-Riesenfeld doubling.
+
+        Parameters
+        ----------
+        p : int
+            B-spline degree of the cross section; must be odd.
+
+        Returns
+        -------
+        CrossSectionFixedZeta
+            New cross section. Point 2i inherits the fixed status and the r and w bounds of old point i;
+            the inserted points are free, except that all weights are fixed if not nurbs and all
+            angles are fixed if equispaced.
+
+        Notes
+        -----
+        Every control point moves, including the old ones. The theta bounds are reset to halfway to
+        each neighbor. For even p the new points fall between the old ones, so the doubled cross
+        section and its mirror image (`flipped`, which reverses the points about point 0) would no
+        longer line up.
+        """
+        if p % 2 == 0:
+            raise ValueError(f"Doubling a cross section needs an odd degree, got p = {p}")
+        xy = np.stack([self.r_ctrl * np.cos(self.theta_ctrl), self.r_ctrl * np.sin(self.theta_ctrl)], axis=1)
+        new_xy, new_w = lane_riesenfeld_double(xy, self.w_ctrl, p)
+        new_r = np.hypot(new_xy[:, 0], new_xy[:, 1])
+        # unwrapped so the angles keep increasing with the point index
+        new_theta = np.unwrap(np.arctan2(new_xy[:, 1], new_xy[:, 0]))
+
+        n_new = 2 * self.n_ctrl_pts
+        new_cs = CrossSectionFixedZeta(
+            zeta_index=self.zeta_index,
+            n_ctrl_pts=n_new,
+            equispaced=self.equispaced,
+            default_r=self.default_r,
+            nurbs=self.nurbs,
+        )
+        new_cs.unfix_all()
+        new_cs.x = np.concatenate([new_r, new_theta, new_w])
+
+        for i in range(self.n_ctrl_pts):
+            for prefix in ("r", "theta", "w"):
+                old_name, new_name = f"{prefix}_{i}", f"{prefix}_{2 * i}"
+                if self.is_fixed(old_name):
+                    new_cs.fix(new_name)
+                if prefix != "theta":
+                    k = self.local_full_dof_names.index(old_name)
+                    new_cs.dofs.update_bounds(
+                        new_name, (self.dofs.full_lower_bounds[k], self.dofs.full_upper_bounds[k])
+                    )
+        if not self.nurbs:
+            for i in range(n_new):
+                new_cs.fix(f"w_{i}")
+        if self.equispaced:
+            for i in range(n_new):
+                new_cs.fix(f"theta_{i}")
+
+        # theta bounds: halfway to each neighbor, so neighbors cannot cross
+        theta = new_cs.theta_ctrl
+        prev = np.concatenate([theta[-1:] - 2 * np.pi, theta[:-1]])
+        nxt = np.concatenate([theta[1:], theta[:1] + 2 * np.pi])
+        for i in range(n_new):
+            new_cs.dofs.update_bounds(f"theta_{i}", (0.5 * (prev[i] + theta[i]), 0.5 * (theta[i] + nxt[i])))
+        return new_cs
 
 
 class InteriorAxis(sopp.Curve, Curve):
@@ -946,6 +1015,30 @@ class SurfaceBSpline(sopp.Surface, Surface):
             [self.get(f"cs_angle{i}") for i in range(self.n_cs)]
         )
         return zeta_list, cs_angle_list
+
+    def refine_poloidal(self):
+        """
+        Double the number of control points in every cross section without changing the surface.
+
+        Notes
+        -----
+        Uses Lane-Riesenfeld doubling (see `CrossSectionFixedZeta.refined`), so p_u must be odd.
+        The cross sections in `cs_list` are replaced by new objects, which changes the dofs of
+        this surface: every control point moves and `points_per_cs` doubles.
+        """
+        if self.p_u % 2 == 0:
+            raise ValueError(f"refine_poloidal needs an odd p_u, got p_u = {self.p_u}")
+        for i, cs in enumerate(self.cs_list):
+            new_cs = cs.refined(self.p_u)
+            self.add_parent(self.parents.index(cs), new_cs)
+            self.remove_parent(cs)
+            self.cs_list[i] = new_cs
+        self.points_per_cs = self.cs_list[0].n_ctrl_pts
+        # the u knots depend on the number of control points
+        self._knots_u = None
+        self._control_points_jim = None
+        self._w_list_jim = None
+        self.invalidate_cache()
 
     def _axis_rz(self, zeta):
         """

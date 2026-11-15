@@ -212,6 +212,41 @@ def uniform_knots(n, p, domain=2*np.pi):
     start = (len(knots_wide) - n_needed) // 2
     return knots_wide[start:start + n_needed]
 
+def lane_riesenfeld_double(points, weights, p):
+    '''
+    Double the control points of a periodic, uniform, rational B-spline without changing the curve (Lane and Riesenfeld, 1980).
+
+    Parameters
+    ----------
+    points : ndarray, shape (m, dim)
+        Control points of the closed curve.
+    weights : ndarray, shape (m,)
+        Weights of the control points.
+    p : int
+        Degree.
+
+    Returns
+    -------
+    new_points : ndarray, shape (2m, dim)
+        Control points of the same curve on `uniform_knots(2*m - 1, p)`.
+    new_weights : ndarray, shape (2m,)
+        Matching weights.
+
+    Notes
+    -----
+    Every control point is blended. For odd p, new point 2i sits at the parameter of old point i,
+    so a polygon that is mirror symmetric about point 0 stays so.
+    '''
+    # homogeneous coordinates make the averaging exact for rational curves
+    Pw = np.concatenate([points * weights[:, None], weights[:, None]], axis=1)
+    D = np.repeat(Pw, 2, axis=0)
+    for _ in range(p):
+        D = 0.5 * (D + np.roll(D, -1, axis=0))
+    # align with the uniform_knots convention for the doubled point count
+    D = np.roll(D, p // 2, axis=0)
+    new_weights = D[:, -1]
+    return D[:, :-1] / new_weights[:, None], new_weights
+
 def double_reflection_rmf(gamma, gammadash, normal0):
     '''
     Rotation-minimizing frame along sampled points via double reflection (Wang et al., ACM TOG 27(1), 2008).

@@ -10,6 +10,7 @@ from simsopt.util.spline_helpers import (
     b_p_deriv,
     b_p_deriv2,
     double_reflection_rmf,
+    lane_riesenfeld_double,
     print_dofs_nicely,
     uniform_knots,
 )
@@ -116,6 +117,40 @@ class BasisFunctionTests(unittest.TestCase):
     def test_single_index(self):
         t = uniform_knots(5, 3)
         np.testing.assert_array_equal(b_p(t, 3, self.x, i=4), b_p(t, 3, self.x)[:, 4])
+
+
+class LaneRiesenfeldTests(unittest.TestCase):
+
+    @staticmethod
+    def curve(P, w, p, u):
+        t = uniform_knots(len(P) - 1, p)
+        B = b_p(t, p, u)
+        Pw = periodic_control_points(P * w[:, None], p)
+        return (B @ Pw) / (B @ periodic_control_points(w, p))[:, None]
+
+    def test_doubling_keeps_the_rational_curve(self):
+        rng = np.random.default_rng(0)
+        u = np.linspace(0, 2 * np.pi, 200, endpoint=False)
+        for p in (1, 2, 3, 4):
+            for m in (5, 8):
+                with self.subTest(p=p, m=m):
+                    P, w = rng.normal(size=(m, 2)), rng.uniform(0.5, 1.5, m)
+                    Q, wq = lane_riesenfeld_double(P, w, p)
+                    self.assertEqual(Q.shape, (2 * m, 2))
+                    np.testing.assert_allclose(self.curve(Q, wq, p, u), self.curve(P, w, p, u), atol=1e-13)
+
+    def test_odd_degree_keeps_mirror_symmetry_about_point_zero(self):
+        rng = np.random.default_rng(1)
+        for m in (5, 8):
+            with self.subTest(m=m):
+                P, w = rng.normal(size=(m, 2)), rng.uniform(0.5, 1.5, m)
+                P[0, 1] = 0
+                P[:0:-1], w[:0:-1] = P[1:] * [1, -1], w[1:].copy()  # point m-i mirrors point i
+                P, w = 0.5 * (P + np.roll(P[::-1], 1, axis=0) * [1, -1]), 0.5 * (w + np.roll(w[::-1], 1))
+                Q, wq = lane_riesenfeld_double(P, w, 3)
+                np.testing.assert_allclose(Q[1:], Q[:0:-1] * [1, -1], atol=1e-13)
+                np.testing.assert_allclose(wq[1:], wq[:0:-1], atol=1e-13)
+                np.testing.assert_allclose(Q[[0, m], 1], 0, atol=1e-13)
 
 
 class DoubleReflectionRMFTests(unittest.TestCase):

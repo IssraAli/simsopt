@@ -7,6 +7,7 @@ from unittest import mock
 import numpy as np
 
 from simsopt import load, save
+from simsopt._core import Optimizable
 from simsopt._core.json import GSONDecoder
 from simsopt.geo import InteriorAxis, SurfaceBSpline, SurfaceRZFourier
 from simsopt.geo.surfacespline import CrossSectionFixedZeta
@@ -572,6 +573,83 @@ class OptimizationTests(unittest.TestCase):
             self.assertTrue(np.all(s.x >= s.lower_bounds) and np.all(s.x <= s.upper_bounds))
             # VMEC's boundary is the optimized spline
             np.testing.assert_allclose(aspect1, s.to_RZFourier().aspect_ratio(), rtol=1e-6)
+
+
+class RefinementTests(unittest.TestCase):
+
+    CASES = [
+        dict(p_u=3, p_v=3),
+        dict(p_u=3, p_v=2, points_per_cs=4, n_cs=3, use_bishop_frame=True),
+        dict(p_u=3, p_v=3, n_cs=3, toroidal_equispaced=False, cs_global_angle_free=True),
+        dict(p_u=3, p_v=3, nurbs=True),
+        dict(p_u=1, p_v=2, points_per_cs=6),
+        dict(p_u=5, p_v=3, points_per_cs=8),
+    ]
+
+    def test_refine_poloidal_keeps_the_surface(self):
+        for kw in self.CASES:
+            with self.subTest(**kw):
+                s = perturbed_surface(**kw)
+                n, g0, v0 = s.points_per_cs, s.gamma().copy(), s.volume()
+                for k in (1, 2):
+                    s.refine_poloidal()
+                    self.assertEqual(s.points_per_cs, 2**k * n)
+                    self.assertTrue(all(cs.n_ctrl_pts == 2**k * n for cs in s.cs_list))
+                    np.testing.assert_allclose(s.gamma(), g0, atol=1e-12)
+                    self.assertAlmostEqual(s.volume(), v0, places=12)
+
+    def test_refined_dofs(self):
+        s = perturbed_surface(p_u=3, n_cs=2, points_per_cs=7)
+        s.cs_list[1].fix("r_2")
+        s.cs_list[1].set_upper_bound("r_3", 0.7)
+        n_axis = len(s.axis.x)
+        s.refine_poloidal()
+        # each cross section: 14 radii and 13 free angles, less the one fixed radius
+        self.assertEqual(len(s.x), 2 * (14 + 13) - 1 + n_axis)
+        cs = s.cs_list[1]
+        self.assertTrue(cs.is_fixed("theta_0") and cs.is_fixed("r_4"))
+        self.assertEqual(cs.dofs.full_upper_bounds[cs.local_full_dof_names.index("r_6")], 0.7)
+        self.assertTrue(np.all(s.lower_bounds <= s.x) and np.all(s.x <= s.upper_bounds))
+        for c in s.cs_list:
+            self.assertTrue(np.all(np.diff(c.theta_ctrl) > 0))
+
+    def test_flags_survive_refinement(self):
+        s = SurfaceBSpline(p_u=3, poloidal_equispaced=True)
+        s.refine_poloidal()
+        self.assertFalse(any("theta" in n or ":w_" in n for n in s.dof_names))
+        s = SurfaceBSpline(p_u=3, nurbs=True)
+        s.refine_poloidal()
+        for cs in s.cs_list:
+            self.assertEqual(sum(cs.is_fixed(f"w_{i}") for i in range(cs.n_ctrl_pts)), 1)
+
+    def test_refined_surface_stays_connected_and_symmetric(self):
+        """The new cross sections drive the surface and its dependents, and keep stellarator symmetry."""
+        s = perturbed_surface(p_u=3, p_v=3)
+        dependent = Optimizable(depends_on=[s])
+        old_cs = list(s.cs_list)
+        s.refine_poloidal()
+        self.assertEqual(len(dependent.x), len(s.x))
+        self.assertFalse(any(cs in s.ancestors for cs in old_cs))
+        g0 = s.gamma().copy()
+        s.x = s.x + 0.01 * np.random.default_rng(3).normal(size=len(s.x))
+        self.assertFalse(np.allclose(s.gamma(), g0))
+        rng = np.random.default_rng(4)
+        phi, theta = rng.uniform(0, 1, 30), rng.uniform(0, 1, 30)
+        np.testing.assert_allclose(
+            gamma_at(s, -phi % 1, -theta % 1), gamma_at(s, phi, theta) * [1, -1, -1], atol=1e-12
+        )
+
+    def test_refined_surface_round_trips(self):
+        s = perturbed_surface(p_u=3, p_v=3)
+        s.refine_poloidal()
+        t = json.loads(s.save(fmt="json"), cls=GSONDecoder)
+        np.testing.assert_array_equal(t.gamma(), s.gamma())
+        np.testing.assert_array_equal(t.dofs_free_status, s.dofs_free_status)
+        np.testing.assert_array_equal(t.lower_bounds, s.lower_bounds)
+
+    def test_even_degree_raises(self):
+        with self.assertRaises(ValueError):
+            SurfaceBSpline(p_u=2).refine_poloidal()
 
 
 class SerializationTests(unittest.TestCase):
