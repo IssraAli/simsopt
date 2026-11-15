@@ -25,8 +25,8 @@ def write_doflist_maxlist_minlist(
     ub = np.copy(template_surf.upper_bounds)
 
     cs_r_indices = [fnmatch.fnmatch(dof, 'CrossSectionFixedZeta*r*') for dof in template_surf.dof_names]
-    r_axis_indices = [fnmatch.fnmatch(dof, 'PseudoAxis*r_axis*') for dof in template_surf.dof_names]
-    z_axis_indices = [fnmatch.fnmatch(dof, 'PseudoAxis*z_axis*') for dof in template_surf.dof_names]
+    r_axis_indices = [fnmatch.fnmatch(dof, 'InteriorAxis*r_axis*') for dof in template_surf.dof_names]
+    z_axis_indices = [fnmatch.fnmatch(dof, 'InteriorAxis*z_axis*') for dof in template_surf.dof_names]
     
     lb[cs_r_indices] = 1e-3
     ub[cs_r_indices] = 0.8

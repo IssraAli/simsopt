@@ -1,7 +1,6 @@
 from typing import Any
 import torch
 
-from botorch import fit_fully_bayesian_model_nuts
 from botorch.models.fully_bayesian import SaasFullyBayesianSingleTaskGP
 from botorch.models.transforms import Standardize, Normalize
 from botorch.optim import optimize_acqf

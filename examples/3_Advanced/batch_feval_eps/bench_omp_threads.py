@@ -31,11 +31,10 @@ spline_kwargs = {
     "N": 4,
     "p_u": 3,
     "p_v": 3,
-    "cs_equispaced": True,
-    "rays_equispaced": False,
+    "toroidal_equispaced": True,
+    "poloidal_equispaced": False,
     "cs_global_angle_free": False,
     "axis_angles_fixed": False,
-    "cs_basis": "polar",
     "nurbs": False,
     "use_bishop_frame": True,
 }
